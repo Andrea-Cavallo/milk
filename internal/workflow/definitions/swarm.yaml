@@ -25,7 +25,9 @@ vars:
 
     For each item, describe the concrete deliverable and its acceptance criteria in enough
     detail that a worker can implement it without further clarification, and an evaluator can
-    check it in isolation from the other items.
+    check it in isolation from the other items. State the exact file path(s) the deliverable
+    must produce -- an evaluator will check for their literal existence, not just a description
+    of intent.
 
     Keep the number of items to the minimum needed -- do not split work into more items than
     there are genuinely independent (or dependency-ordered) units of work.
@@ -111,8 +113,18 @@ stages:
               {{end -}}
               Implement this item's deliverables as described above.
               Use your tools (read_file, write_file, edit_file, bash, etc.) to read, create, and modify files.
+
+              Before ending your turn, verify with a tool call that every file you claim to have created
+              or modified actually exists with the real content -- a tool call not erroring doesn't mean
+              it worked. If this item depends on another item's output and an expected input file is
+              missing, check the obvious location once and stop searching -- do not comb unrelated
+              directories or the whole filesystem; note the missing dependency and proceed with what
+              you can.
+
               After completing all tool use, write a plain-text summary of what you did: which files were
-              created or modified, what each change does, and which acceptance criteria it satisfies.
+              created or modified, what each change does, and which acceptance criteria it satisfies. If
+              you couldn't complete part of the deliverable -- including because a dependency's output
+              was missing -- say so plainly here; don't imply success for work you didn't finish.
               This written summary is mandatory -- the evaluator reads it to assess the item.
 
           - id: worker_eval
@@ -137,7 +149,10 @@ stages:
 
               {{end -}}
               Review the item's deliverables against its acceptance criteria.
-              Use your tools to read relevant source files and verify the implementation when needed.
+              Do not take the worker's summary at face value -- use your tools (read_file, bash, etc.)
+              to confirm the claimed deliverable file(s) actually exist and contain what's claimed. If
+              an expected file is missing, check the obvious location once and stop searching rather
+              than combing the whole filesystem.
 
               Write a findings section describing what is correct and what needs improvement.
 
@@ -151,6 +166,11 @@ stages:
 
               IMPORTANT: if this is the final pass (pass {{.pass}} = 3), do NOT return
               "needs_refinement" -- use "good_to_go" instead, since no further refinement will occur.
+              This only controls whether the workflow retries, not whether the work is actually
+              complete -- if a required deliverable is still missing or substantially incomplete on
+              this final pass, say so as the first line of your findings (e.g. "INCOMPLETE: <what's
+              missing>"). Other items may depend on this one and will read your findings; a false
+              "done" here sends them chasing a file that was never written.
             verdict:
               good_to_go: {action: break}
               needs_refinement: {action: retry}
@@ -170,7 +190,9 @@ stages:
 
       {{end -}}
       Use your tools to read the actual codebase and verify integration across items, not just
-      what each item's own summary claims.
+      what each item's own summary claims. Pay particular attention to any item output above
+      marked "INCOMPLETE" -- that item's deliverable is known to be missing or unfinished, which
+      is exactly the kind of gap this stage exists to catch.
 
       If everything integrates cleanly and no further changes are needed, respond with
       "NO_ISSUES" on its own line and nothing else. Otherwise, describe the integration issues

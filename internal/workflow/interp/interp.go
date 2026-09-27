@@ -434,7 +434,7 @@ func executeStage(ec *execContext, s workflow.Stage) (string, error) {
 	case workflow.StageKindAgentTurn:
 		return execAgentTurn(ec, s)
 	case workflow.StageKindLoop:
-		return "", execLoop(ec, s)
+		return execLoop(ec, s)
 	case workflow.StageKindUserCheckpoint:
 		return "", execUserCheckpoint(ec, s)
 	case workflow.StageKindParallelGroup:
@@ -647,7 +647,14 @@ func execUserCheckpoint(ec *execContext, s workflow.Stage) error {
 	}
 }
 
-func execLoop(ec *execContext, s workflow.Stage) error {
+// execLoop runs s (either an Over-bounded or iteration-bounded loop) and
+// returns the outcome of the last stage executed in its final iteration/
+// section (e.g. "break", "retry", or "" for a body with no verdict-bearing
+// stage) — the same outcome executeStages already returns for a plain
+// sequence, so a loop-kind stage composes into a parent sequence or
+// parallel_group item exactly like any other stage, rather than always
+// reporting "" regardless of what actually happened inside it.
+func execLoop(ec *execContext, s workflow.Stage) (string, error) {
 	if s.Over != "" {
 		return execOverLoop(ec, s)
 	}
@@ -660,7 +667,7 @@ func execLoop(ec *execContext, s workflow.Stage) error {
 // single empty-body iteration when no matching sections are found, mirroring
 // dev.go's "assume one sprint" fallback when the designer's plan doesn't
 // declare any.
-func execOverLoop(ec *execContext, s workflow.Stage) error {
+func execOverLoop(ec *execContext, s workflow.Stage) (string, error) {
 	doc, _ := ec.vars[s.From].(string)
 	decls := ParseDeclarations(doc)
 	sections := decls.SectionsFor(s.Over)
@@ -676,19 +683,21 @@ func execOverLoop(ec *execContext, s workflow.Stage) error {
 	ec.pushPath(s.ID)
 	ec.reportProgress("")
 	defer ec.popPath()
+	outcome := ""
 	for _, sec := range sections {
 		ec.vars[label] = sec.Index
 		ec.vars[label+"_section"] = sec.Body
 		ec.pushPath(fmt.Sprintf("%s[%d]", s.ID, sec.Index))
-		_, err := executeStages(ec, s.Body)
+		var err error
+		outcome, err = executeStages(ec, s.Body)
 		ec.completeActivePath()
 		ec.reportProgress("")
 		ec.popPath()
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+	return outcome, nil
 }
 
 // execBoundedLoop runs Body up to MaxIterations times (or the value named by
@@ -696,7 +705,7 @@ func execOverLoop(ec *execContext, s workflow.Stage) error {
 // iteration as IterationVar. Body's reported outcome after each iteration —
 // "break" (or no verdict-bearing stage at all) stops the loop successfully;
 // "retry" runs it again, subject to the bound.
-func execBoundedLoop(ec *execContext, s workflow.Stage) error {
+func execBoundedLoop(ec *execContext, s workflow.Stage) (string, error) {
 	maxIter := s.MaxIterations
 	if s.MaxIterationsFrom != "" {
 		doc, _ := ec.vars[s.From].(string)
@@ -724,20 +733,20 @@ func execBoundedLoop(ec *execContext, s workflow.Stage) error {
 		ec.reportProgress("")
 		ec.popPath()
 		if err != nil {
-			return err
+			return "", err
 		}
 		switch outcome {
 		case "break", "":
-			return nil
+			return outcome, nil
 		case "retry":
 			if iter == maxIter {
-				return &ExhaustedError{StageID: s.ID, MaxIterations: maxIter}
+				return "", &ExhaustedError{StageID: s.ID, MaxIterations: maxIter}
 			}
 		default:
-			return fmt.Errorf("workflow: stage %q: unknown loop outcome %q", s.ID, outcome)
+			return "", fmt.Errorf("workflow: stage %q: unknown loop outcome %q", s.ID, outcome)
 		}
 	}
-	return nil
+	return "", nil
 }
 
 // execParallelGroup runs Body once per declared section named by Over,
@@ -882,10 +891,24 @@ func computeWaves(sections []Section) ([][]Section, error) {
 	return waves, nil
 }
 
+// lastSaveAsOf returns the SaveAs of the last stage in body whose output
+// lands in ec.vars, walking backwards. Recurses into a loop stage's own Body
+// (e.g. a parallel_group item's body is often just [worker_pass_loop], whose
+// real content — the last agent_turn's SaveAs — is nested one level down;
+// without recursing here, ItemResult.Output in execParallelGroup would stay
+// empty for every fanned-out item shaped like that). Does not recurse into a
+// parallel_group's own Body: each of its items runs against a private copy
+// of ec.vars, so nothing an item's own body saves is ever visible in the
+// parent context that lastSaveAsOf is resolving for.
 func lastSaveAsOf(body []workflow.Stage) string {
 	for i := len(body) - 1; i >= 0; i-- {
 		if body[i].SaveAs != "" {
 			return body[i].SaveAs
+		}
+		if body[i].Kind == workflow.StageKindLoop {
+			if inner := lastSaveAsOf(body[i].Body); inner != "" {
+				return inner
+			}
 		}
 	}
 	return ""
