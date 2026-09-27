@@ -729,6 +729,11 @@ type model struct {
 	// ptyPane is non-nil while a shell command is running inside an embedded PTY.
 	ptyPane *ptyPaneState
 
+	// attached is non-nil while the TUI is showing a live-attach view over a
+	// background job's or workflow's live buffer instead of the main
+	// transcript viewport (ADR-0047; issue #154). See attach.go.
+	attached *attachState
+
 	// directBashConcurrentTurn is true when a direct-bash/bang command (via
 	// launchPTYPane or launchDirectBashFallback) was launched while an agent
 	// turn was already in progress — i.e. from handleBusyKey rather than the
@@ -1204,6 +1209,8 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if *p > 0 {
 				*p--
 			}
+		} else if m.attached != nil {
+			m.attached.vp.ScrollUp(3)
 		} else {
 			m.vp.ScrollUp(3)
 		}
@@ -1212,6 +1219,8 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if *p < m.panelMaxOffset(region, m.viewportHeight()) {
 				*p++
 			}
+		} else if m.attached != nil {
+			m.attached.vp.ScrollDown(3)
 		} else {
 			m.vp.ScrollDown(3)
 		}
@@ -1492,6 +1501,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f4":
 			return m.handlePanelCmd("workflow")
 		}
+		if m.attached != nil {
+			return m.handleAttachKey(msg)
+		}
 		if m.pendingDirectBash != nil {
 			return m.handleDirectBashKey(msg)
 		}
@@ -1735,6 +1747,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// transcript (ADR-0047) — attach via the workflow panel to watch it.
 		if m.workflowState != nil {
 			m.workflowState.LiveBuffer().Append([]byte(msg.Text))
+		}
+		if m.attached != nil && m.attached.kind == attachWorkflow {
+			m.syncAttachedContent()
 		}
 		m.lastWorkflowActivity = time.Now()
 		m.workflowTimeoutWarned = false
@@ -1988,6 +2003,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, memoryPollTick()
 		}
 		return m, nil
+
+	case attachRefreshMsg:
+		if m.attached == nil {
+			return m, nil
+		}
+		m.syncAttachedContent()
+		return m, attachRefreshTick()
 
 	case taskStoreChangedMsg:
 		m.autoOpenPanel(regionTasks)

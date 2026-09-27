@@ -9,6 +9,18 @@ import (
 	"github.com/creack/pty"
 )
 
+// activeViewport returns the viewport currently being displayed in the main
+// area: the attach view's own viewport while attached (ADR-0047), otherwise
+// the main transcript viewport. Used everywhere View()/handleResize()/
+// renderSeparator need to act on "whichever viewport is on screen" without
+// each caller re-deriving the same nil check.
+func (m *model) activeViewport() *viewport.Model {
+	if m.attached != nil {
+		return &m.attached.vp
+	}
+	return &m.vp
+}
+
 // viewportHeight is the full terminal height minus the chrome lines.
 // View() layout: headerBar + "\n" + mainArea + "\n" + statusBar; the "\n" separators don't add lines.
 // Chrome heights are measured from the rendered output so growth in either bar automatically reduces
@@ -163,6 +175,9 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		m.ptyPane.vt.Resize(vpH, newCols)
 		m.ptyPane.vtMu.Unlock()
 	}
+	if m.attached != nil {
+		m.syncAttachedContent()
+	}
 	return m, nil
 }
 
@@ -173,7 +188,8 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 //   - panel closed + scrollable: thumb at proportional position
 //   - panel closed + fits: blank column (no visual noise)
 func (m *model) renderSeparator(h int) string {
-	total := m.vp.TotalLineCount()
+	vp := m.activeViewport()
+	total := vp.TotalLineCount()
 	scrollable := total > h
 	visible := m.panelMemory || scrollable
 
@@ -187,7 +203,7 @@ func (m *model) renderSeparator(h int) string {
 
 	var thumbTop, thumbBot int
 	if scrollable {
-		thumbTop, thumbBot = scrollThumb(h, total, m.vp.YOffset)
+		thumbTop, thumbBot = scrollThumb(h, total, vp.YOffset)
 	}
 	for i := range h {
 		if scrollable && i >= thumbTop && i <= thumbBot {
@@ -214,7 +230,11 @@ func (m model) View() string {
 	}
 	vpH := m.viewportHeight()
 	sep := m.renderSeparator(vpH)
-	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, m.vp.View(), sep)
+	// Attached: show the background job's/workflow's live buffer in place of
+	// the main transcript (ADR-0047) — side panels keep rendering normally so
+	// the background/workflow panel that triggered the attach stays visible,
+	// unlike the PTY-pane branch above, which is a full-screen takeover.
+	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, m.activeViewport().View(), sep)
 	if m.panelMemory {
 		panel := m.renderMemoryPanel(vpH)
 		pbar := m.renderPanelScrollbar(vpH)

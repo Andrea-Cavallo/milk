@@ -155,11 +155,19 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev tea.MouseEv
 			break
 		}
 		if !m.panelSelDragging || (lineIdx == m.panelSelAnchorLine && col == m.panelSelAnchorCol) {
-			// A click, not a drag: clear the zero-length selection and, for the
-			// memory panel, run the existing percept/brick detail lookup.
+			// A click, not a drag: clear the zero-length selection and run
+			// the region's own click behavior — the memory panel's existing
+			// percept/brick detail lookup (prints to the transcript), or for
+			// background/workflow, attach to that job's/the workflow's live
+			// buffer (ADR-0047) instead of printing.
 			m.clearPanelSelection()
-			if region == regionMemory {
+			switch region {
+			case regionMemory:
 				m.handleMemoryPanelClick(lineIdx)
+			case regionBackground:
+				dragCmd = m.handleBackgroundPanelClick(lineIdx)
+			case regionWorkflow:
+				dragCmd = m.handleWorkflowPanelClick()
 			}
 			break
 		}
