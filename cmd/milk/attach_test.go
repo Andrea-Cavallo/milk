@@ -164,6 +164,106 @@ func TestHandleAttachKey_OtherKeysAreSwallowed(t *testing.T) {
 	}
 }
 
+// TestStatusAgent_ShowsAttachedTarget verifies the status bar names what's
+// currently attached (label truncated past 40 chars) — the persistent
+// indicator that stays visible after the attach view's own header line
+// (attach.go's "── attached: … ──") scrolls out of sight.
+func TestStatusAgent_ShowsAttachedTarget(t *testing.T) {
+	m := attachTestModel()
+	mgr := local.NewManager(context.Background(), 1)
+	job := spawnJobWithLiveContent(t, mgr, "job", "content")
+	m.attached = &attachState{kind: attachBackground, jobID: job.ID, label: "investigate the flaky test", buf: job.Live}
+
+	got := m.statusAgent()
+	if !strings.Contains(got, "investigate the flaky test") {
+		t.Errorf("statusAgent() = %q, want it to name the attached target", got)
+	}
+	if !strings.Contains(got, "Esc to detach") {
+		t.Errorf("statusAgent() = %q, want a detach hint", got)
+	}
+
+	long := strings.Repeat("x", 80)
+	m.attached.label = long
+	got = m.statusAgent()
+	if strings.Contains(got, long) {
+		t.Errorf("statusAgent() = %q, want the label truncated", got)
+	}
+}
+
+// TestStatusAgent_PendingPermTakesPriorityOverAttached verifies a pending
+// permission prompt still surfaces in the status bar even while attached —
+// the more urgent, actionable state wins.
+func TestStatusAgent_PendingPermTakesPriorityOverAttached(t *testing.T) {
+	m := attachTestModel()
+	mgr := local.NewManager(context.Background(), 1)
+	job := spawnJobWithLiveContent(t, mgr, "job", "content")
+	m.attached = &attachState{kind: attachBackground, jobID: job.ID, label: "job", buf: job.Live}
+	m.pendingPerm = &permRequestMsg{label: "[allow bash?]"}
+
+	got := m.statusAgent()
+	if !strings.Contains(got, "[allow bash?]") {
+		t.Errorf("statusAgent() = %q, want the pending permission prompt to take priority", got)
+	}
+}
+
+// TestUpdate_PendingPermReachesItsHandlerWhileAttached is the regression test
+// for the key-routing bug this fix addresses: attach's key handling used to
+// be checked before every pending prompt/wizard, so a permission prompt (or
+// any other state needing a real decision) arising while attached would be
+// unreachable — only Esc (detach) worked, every other key was swallowed by
+// handleAttachKey instead of reaching handlePermKey.
+func TestUpdate_PendingPermReachesItsHandlerWhileAttached(t *testing.T) {
+	m := attachTestModel()
+	mgr := local.NewManager(context.Background(), 1)
+	job := spawnJobWithLiveContent(t, mgr, "job", "content")
+	m.attached = &attachState{kind: attachBackground, jobID: job.ID, label: "job", buf: job.Live}
+	m.pendingPerm = &permRequestMsg{label: "[allow bash?]", respCh: make(chan string, 1)}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := updated.(model)
+
+	if mm.pendingPerm != nil {
+		t.Fatalf("expected Enter to resolve the pending permission prompt, got %+v", mm.pendingPerm)
+	}
+	if mm.attached == nil {
+		t.Error("expected attach state to survive answering an unrelated permission prompt")
+	}
+}
+
+// TestView_PendingPermShowsMainTranscriptNotAttachBuffer is the regression
+// test for a gap found live: a permission prompt is printed into the main
+// transcript, which the attach view would otherwise be covering — the user
+// would see only the attach buffer and the status bar's "[allow?]" hint,
+// with no way to read what they're actually being asked. View() must fall
+// back to the main transcript whenever a pending prompt needs the user's
+// attention, even while m.attached is still set (attach reappears
+// automatically once the prompt resolves — nothing here calls detachAttach).
+func TestView_PendingPermShowsMainTranscriptNotAttachBuffer(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	m.appendTranscript("please allow this tool call?\n")
+
+	mgr := local.NewManager(context.Background(), 1)
+	job := spawnJobWithLiveContent(t, mgr, "job", "attached buffer sentinel")
+	m.startAttach(attachBackground, job.ID, "job", job.Live)
+	m.pendingPerm = &permRequestMsg{label: "[allow?]", respCh: make(chan string, 1)}
+
+	view := m.View()
+	if !strings.Contains(view, "please allow this tool call?") {
+		t.Errorf("expected the pending permission prompt to be visible, got:\n%s", view)
+	}
+	if strings.Contains(view, "attached buffer sentinel") {
+		t.Errorf("expected the attach buffer to be hidden while a permission prompt is pending, got:\n%s", view)
+	}
+
+	// Resolve the prompt; the attach view should reappear without needing
+	// another double-click.
+	m.pendingPerm = nil
+	view = m.View()
+	if !strings.Contains(view, "attached buffer sentinel") {
+		t.Errorf("expected the attach view to reappear once the prompt resolved, got:\n%s", view)
+	}
+}
+
 func TestView_AttachedRendersLiveBufferNotMainTranscript(t *testing.T) {
 	m := layoutTestModel(t, 120, 40)
 	m.appendTranscript("main transcript sentinel\n")

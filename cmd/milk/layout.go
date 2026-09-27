@@ -10,15 +10,47 @@ import (
 )
 
 // activeViewport returns the viewport currently being displayed in the main
-// area: the attach view's own viewport while attached (ADR-0047), otherwise
-// the main transcript viewport. Used everywhere View()/handleResize()/
-// renderSeparator need to act on "whichever viewport is on screen" without
-// each caller re-deriving the same nil check.
+// area: the attach view's own viewport while attached (ADR-0047) and no
+// pending prompt needs the user's attention, otherwise the main transcript
+// viewport. Used everywhere View()/handleResize()/renderSeparator need to
+// act on "whichever viewport is on screen" without each caller re-deriving
+// the same check.
+//
+// The hasPendingPrompt() guard matters live, not just in theory: a
+// permission prompt (or any other pending wizard) is printed into the main
+// transcript, which the attach view would otherwise be covering — without
+// this, the user would see only the attach buffer and the status bar's
+// "[allow?]" hint, with no way to read what they're actually being asked.
+// Key routing already gives every pending-prompt handler priority over
+// handleAttachKey (see Update's tea.KeyMsg case); this keeps what's
+// *rendered* consistent with what keys actually do. m.attached itself is
+// left untouched — once the prompt resolves, the attach view reappears
+// exactly where it was, since nothing here ever calls detachAttach.
 func (m *model) activeViewport() *viewport.Model {
-	if m.attached != nil {
+	if m.attached != nil && !m.hasPendingPrompt() {
 		return &m.attached.vp
 	}
 	return &m.vp
+}
+
+// hasPendingPrompt reports whether some pending prompt/wizard needs the
+// user's direct attention right now — the same set of fields Update's
+// tea.KeyMsg case checks, in the same "needs a real decision" spirit, kept
+// as one place both key routing's implicit precedence (each check simply
+// sits before the attach check) and rendering (activeViewport) can agree
+// on what counts as "something more urgent than attach is going on."
+func (m *model) hasPendingPrompt() bool {
+	return m.pendingDirectBash != nil ||
+		m.pendingPerm != nil ||
+		m.pendingPathPaste != "" ||
+		m.pendingForget != nil ||
+		m.pendingAdd != nil ||
+		m.pendingMCPAdd != nil ||
+		m.pendingSwitch != nil ||
+		m.pendingTelegramSetup != nil ||
+		m.pendingInit != nil ||
+		m.pendingWorkflowWizard != nil ||
+		m.pendingGenericWorkflowExtend != nil
 }
 
 // viewportHeight is the full terminal height minus the chrome lines.

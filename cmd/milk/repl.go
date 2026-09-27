@@ -1218,7 +1218,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if *p > 0 {
 				*p--
 			}
-		} else if m.attached != nil {
+		} else if m.attached != nil && !m.hasPendingPrompt() {
 			m.attached.vp.ScrollUp(3)
 		} else {
 			m.vp.ScrollUp(3)
@@ -1228,7 +1228,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if *p < m.panelMaxOffset(region, m.viewportHeight()) {
 				*p++
 			}
-		} else if m.attached != nil {
+		} else if m.attached != nil && !m.hasPendingPrompt() {
 			m.attached.vp.ScrollDown(3)
 		} else {
 			m.vp.ScrollDown(3)
@@ -1510,9 +1510,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f4":
 			return m.handlePanelCmd("workflow")
 		}
-		if m.attached != nil {
-			return m.handleAttachKey(msg)
-		}
 		if m.pendingDirectBash != nil {
 			return m.handleDirectBashKey(msg)
 		}
@@ -1545,6 +1542,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.pendingGenericWorkflowExtend != nil {
 			return m.handleGenericWorkflowExtendKey(msg)
+		}
+		if m.attached != nil {
+			// Below every pending prompt/wizard check above — attach is a
+			// passive viewing state, not a modal one, so a permission prompt
+			// or any other decision the user actually needs to make must
+			// still reach its own handler rather than being swallowed here.
+			return m.handleAttachKey(msg)
 		}
 		if m.inputLocked() {
 			return m.handleBusyKey(msg)
