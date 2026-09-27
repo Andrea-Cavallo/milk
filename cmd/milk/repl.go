@@ -1510,6 +1510,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f4":
 			return m.handlePanelCmd("workflow")
 		}
+		// Adding a pending-state check below? Also add it to
+		// hasPendingPrompt() (layout.go) — it mirrors this list so the
+		// attach view (ADR-0047) knows to yield the screen to whichever
+		// prompt actually needs the user's attention, and nothing else
+		// keeps the two lists in sync.
 		if m.pendingDirectBash != nil {
 			return m.handleDirectBashKey(msg)
 		}
