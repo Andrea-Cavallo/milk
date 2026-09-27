@@ -21,7 +21,7 @@ ADR-0043's own "Neutral" section anticipated this tension: background jobs are d
 
 A new small package: a thread-safe, byte-capped buffer of streamed text (`New(maxBytes int) *Buffer`, `Writer() io.Writer`, `Snapshot() string`, `Len() int`), oldest bytes dropped once over cap (default 256KB). One implementation shared by both consumers below — background jobs and workflows both write the same shape of data (arbitrary, possibly-mid-ANSI-escape chunks) for the same purpose, so one tested primitive avoids two buffers with subtly different cap/trim/concurrency behavior.
 
-Content in a `livebuf.Buffer` is in-memory only: never persisted (excluded from `jobstore.go`'s `jobRecord` automatically, since that type lists its fields explicitly, not `workflow.State`'s JSON serialization — both `Job.Live` and `State.Live` are tagged `json:"-"`), and never fed into any prompt or the session transcript.
+Content in a `livebuf.Buffer` is in-memory only: never persisted, and never fed into any prompt or the session transcript. `State.Live` is tagged `json:"-"` (`workflow.State` is itself serialized directly to a checkpoint file); `Job.Live` needs no such tag — `Job` is never JSON-marshaled directly, only the separate, explicitly-fielded `jobRecord` (`jobstore.go`) is persisted, and it simply has no `Live` field to marshal.
 
 ### 2. Wiring: `workflow.State.Live` and `local.Job.Live`
 
