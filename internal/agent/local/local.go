@@ -1517,13 +1517,15 @@ func backgroundSystemPrompt(cwd string) string {
 // runBackgroundTaskWithRetry wraps RunBackgroundTask with the same transient
 // network/stream-error retry (HTTP/2 stream reset or GOAWAY) that ordinary
 // turns and tool-agent calls already get via workflow.IsRetryableTurnError —
-// without it, a background job (which streams to io.Discard, invisibly, and
-// may have been running for minutes) was permanently lost to a single
-// upstream hiccup instead of silently retrying through it like every other
-// call site of this same error class.
-func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID, cwd, task string) (string, session.TokenUsage, error) {
+// without it, a background job (which may have been running for minutes)
+// was permanently lost to a single upstream hiccup instead of silently
+// retrying through it like every other call site of this same error class.
+// A retried attempt writes into the same out as the attempt(s) before it, so
+// an attached viewer sees the retry happen rather than losing the earlier
+// output — that's intentional, not an oversight.
+func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID, cwd, task string, out io.Writer) (string, session.TokenUsage, error) {
 	return retryBackgroundTask(ctx, jobID, a.model, func() (string, session.TokenUsage, error) {
-		return a.RunBackgroundTask(ctx, jobID, cwd, task, io.Discard)
+		return a.RunBackgroundTask(ctx, jobID, cwd, task, out)
 	})
 }
 
@@ -1989,8 +1991,8 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 		}
 		role := agentRoleForMetrics(a.escalationName)
 		job := a.backgroundManager.Spawn(args.Label, args.Task, role, a.model,
-			func(jobCtx context.Context, jobID string) (string, session.TokenUsage, error) {
-				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task)
+			func(jobCtx context.Context, jobID string, jobOut io.Writer) (string, session.TokenUsage, error) {
+				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, jobOut)
 			})
 		result := toolResult{Output: fmt.Sprintf("Spawned background agent %s (%q). You will be notified when it completes.", job.ID, args.Label)}.String()
 		return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}
