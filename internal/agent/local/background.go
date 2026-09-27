@@ -466,7 +466,9 @@ func (m *Manager) activeCountLocked() int {
 // Returns values, not pointers: finish() mutates a Job's fields under m.mu
 // from whichever goroutine ran it, so handing out live pointers would let a
 // renderer on the UI goroutine race that write. A snapshot copy under the
-// same lock is race-free and cheap — Job has no fields that need a deep copy.
+// same lock is race-free and cheap — none of Job's fields need a deep copy,
+// including Live: copying the *livebuf.Buffer pointer is intentional (see
+// its doc comment) since the buffer's own lock, not this one, guards it.
 func (m *Manager) Jobs() []Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
