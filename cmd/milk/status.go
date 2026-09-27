@@ -245,7 +245,7 @@ func (m *model) statusAgent() string {
 		if len(label) > 40 {
 			label = label[:37] + "…"
 		}
-		return dim("[attached: "+label+"]") + "  " + dim("Esc to detach")
+		return dim("[attached: "+label+"]") + "  " + yellow("[Esc to detach]")
 	}
 	if m.busy {
 		frame := yellow(bold(spinnerFrames[m.spinnerFrame%len(spinnerFrames)]))

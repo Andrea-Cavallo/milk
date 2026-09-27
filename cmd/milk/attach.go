@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -117,10 +119,33 @@ func (m *model) syncAttachedContent() {
 	if vw > 0 {
 		body = ansi.Wrap(expandTabsForWrap(body), vw, "")
 	}
-	m.attached.vp.SetContent(header + "\n\n" + body)
+	content := header + "\n\n" + body
+	// Tint every row of the attach view with the same subtle background used
+	// to set an alternating side panel apart from the main transcript —
+	// applied unconditionally here (not alternating with anything) so the
+	// whole area reads as visually distinct from the live conversation
+	// underneath it while attached.
+	if bg := panelAltBackgroundCode(); bg != "" {
+		content = tintBlock(content, vw, bg)
+	}
+	m.attached.vp.SetContent(content)
 	if atBottom {
 		m.attached.vp.GotoBottom()
 	}
+}
+
+// tintBlock pads every line of content to width (so the background tint
+// spans the full row, not just the underlying text) and applies bg via
+// withPanelBackground, mirroring renderSidePanel's per-line treatment.
+func tintBlock(content string, width int, bg string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if lineW := utf8.RuneCountInString(stripANSI(line)); width > 0 && lineW < width {
+			line += strings.Repeat(" ", width-lineW)
+		}
+		lines[i] = withPanelBackground(line, bg)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // handleAttachKey handles every key while attached: Esc detaches; everything

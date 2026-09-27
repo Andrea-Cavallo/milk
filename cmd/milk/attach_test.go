@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/scoutme/milk/internal/agent/local"
@@ -261,6 +262,73 @@ func TestView_PendingPermShowsMainTranscriptNotAttachBuffer(t *testing.T) {
 	view = m.View()
 	if !strings.Contains(view, "attached buffer sentinel") {
 		t.Errorf("expected the attach view to reappear once the prompt resolved, got:\n%s", view)
+	}
+}
+
+// TestStatusAgent_DetachHintIsYellowNotDim verifies the "Esc to detach"
+// status-bar hint is highlighted (yellow, matching the busyHint/loopWarning
+// convention) rather than dimmed — it needs to stay legible since it's the
+// only persistent reminder of how to get back once the attach view's own
+// header line has scrolled out of sight.
+func TestStatusAgent_DetachHintIsYellowNotDim(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+
+	m := attachTestModel()
+	mgr := local.NewManager(context.Background(), 1)
+	job := spawnJobWithLiveContent(t, mgr, "job", "content")
+	m.attached = &attachState{kind: attachBackground, jobID: job.ID, label: "job", buf: job.Live}
+
+	got := m.statusAgent()
+	if !strings.Contains(got, yellow("[Esc to detach]")) {
+		t.Errorf("statusAgent() = %q, want the detach hint highlighted in yellow, not dim", got)
+	}
+}
+
+// TestTintBlock_PadsShortLinesAndAppliesBackground verifies every line gets
+// padded to width before the background code wraps it (so the tint spans the
+// full row, not just the underlying text) and closes with a reset.
+func TestTintBlock_PadsShortLinesAndAppliesBackground(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+
+	bg := "\033[48;2;24;24;28m"
+	got := tintBlock("short\nlonger line here", 20, bg)
+
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2: %q", len(lines), got)
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, bg) {
+			t.Errorf("line %d = %q, want it to start with the background code", i, line)
+		}
+		if !strings.HasSuffix(line, ansiReset) {
+			t.Errorf("line %d = %q, want it to end with a reset", i, line)
+		}
+		if plain := stripANSI(line); utf8.RuneCountInString(plain) != 20 {
+			t.Errorf("line %d visible width = %d, want padded to 20 (%q)", i, utf8.RuneCountInString(plain), plain)
+		}
+	}
+}
+
+// TestSyncAttachedContent_AppliesBackgroundTintWhenTTY is the integration
+// check that startAttach's real content actually carries the tint, not just
+// that the tintBlock helper works in isolation.
+func TestSyncAttachedContent_AppliesBackgroundTintWhenTTY(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+
+	m := layoutTestModel(t, 100, 30)
+	mgr := local.NewManager(context.Background(), 1)
+	job := spawnJobWithLiveContent(t, mgr, "job", "content")
+	m.startAttach(attachBackground, job.ID, "job", job.Live)
+
+	if !strings.Contains(m.attached.vp.View(), "\033[48;2;") {
+		t.Error("expected the attach viewport's rendered content to include a background-tint escape code")
 	}
 }
 
