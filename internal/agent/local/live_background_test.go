@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,9 +87,9 @@ func TestLiveBackgroundObservability(t *testing.T) {
 	mgr.SetOnDone(func(j *Job) { done <- j })
 
 	job := mgr.Spawn("live-e2e", "reply with the word OK", "primary", model,
-		func(jobCtx context.Context, jobID string) (string, session.TokenUsage, error) {
+		func(jobCtx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
 			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, tmp,
-				"Reply with exactly the word: OK. Do not use any tools.")
+				"Reply with exactly the word: OK. Do not use any tools.", out)
 		})
 
 	// While it runs, the state file must already show it — a hard-killed
@@ -131,9 +132,9 @@ func TestLiveBackgroundObservability(t *testing.T) {
 	done2 := make(chan *Job, 1)
 	mgr2.SetOnDone(func(j *Job) { done2 <- j })
 	mgr2.Spawn("live-timeout", "reply verbosely", "primary", model,
-		func(jobCtx context.Context, jobID string) (string, session.TokenUsage, error) {
+		func(jobCtx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
 			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, tmp,
-				"Write a very long, detailed essay about the history of computing. Do not use any tools.")
+				"Write a very long, detailed essay about the history of computing. Do not use any tools.", out)
 		})
 	tj := waitDone(t, done2, 2*time.Minute)
 	if tj.Status != JobFailed {
@@ -156,7 +157,7 @@ func TestLiveBackgroundObservability(t *testing.T) {
 	done3 := make(chan *Job, 1)
 	mgr3.SetOnDone(func(j *Job) { done3 <- j })
 	mgr3.Spawn("live-panic", "panic body", "primary", model,
-		func(context.Context, string) (string, session.TokenUsage, error) {
+		func(context.Context, string, io.Writer) (string, session.TokenUsage, error) {
 			panic("live-test boom")
 		})
 	pj := waitDone(t, done3, 30*time.Second)
@@ -176,7 +177,7 @@ func TestLiveBackgroundObservability(t *testing.T) {
 	done4 := make(chan *Job, 1)
 	mgr4.SetOnDone(func(j *Job) { done4 <- j })
 	mgr4.Spawn("live-heartbeat", "slow body", "primary", model,
-		func(jctx context.Context, _ string) (string, session.TokenUsage, error) {
+		func(jctx context.Context, _ string, _ io.Writer) (string, session.TokenUsage, error) {
 			select {
 			case <-time.After(800 * time.Millisecond):
 			case <-jctx.Done():

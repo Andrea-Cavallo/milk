@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/scoutme/milk/internal/livebuf"
 	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
 )
@@ -43,11 +45,26 @@ type Job struct {
 	// a last-known liveness timestamp on disk — the difference between "stuck"
 	// and "was still alive when milk died" during triage.
 	LastAliveAt time.Time
+	// Live accumulates this job's streamed tool-loop output (see
+	// internal/livebuf) for the TUI's attach view (ADR-0047), kept off the
+	// parent conversation's transcript/status bar exactly like the rest of a
+	// background job's internal activity. Set once in Spawn before the job's
+	// goroutine starts and never reassigned, so — unlike every other field —
+	// it's safe for a caller to read (via Live.Snapshot()) without Manager.mu
+	// even though Jobs() copies the rest of Job under that lock: the pointer
+	// itself never changes after construction, and livebuf.Buffer has its own
+	// internal lock guarding concurrent Append (the job's goroutine) against
+	// Snapshot (the UI goroutine). Excluded from jobstore.go's persisted
+	// jobRecord automatically, since that type lists its fields explicitly.
+	Live *livebuf.Buffer
 }
 
 // JobRun is the body of a background job. jobID is the Manager-assigned ID
-// (Job.ID), passed in so the job can tag its logs and metrics with it.
-type JobRun func(ctx context.Context, jobID string) (string, session.TokenUsage, error)
+// (Job.ID), passed in so the job can tag its logs and metrics with it. out is
+// the job's own live buffer's writer (Job.Live.Writer()) — tool-call
+// announcements and streamed text written here become visible to an attached
+// TUI viewer but never reach the parent conversation's transcript.
+type JobRun func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error)
 
 // Manager tracks background jobs spawned by an agent's spawn_background_agent
 // tool calls across however many turns a session runs. Concurrency is
@@ -213,6 +230,7 @@ func (m *Manager) Spawn(label, task, role, model string, run JobRun) *Job {
 		Model:       model,
 		StartedAt:   time.Now(),
 		LastAliveAt: time.Now(),
+		Live:        livebuf.New(0),
 	}
 	m.jobs[job.ID] = job
 	m.persistLocked()
@@ -240,7 +258,7 @@ func (m *Manager) Spawn(label, task, role, model string, run JobRun) *Job {
 		jobCtx, cancel := context.WithTimeout(m.baseCtx, timeout)
 		defer cancel()
 		hbDone := m.startHeartbeat(job)
-		result, tokens, err := safeJobRun(jobCtx, job.ID, run)
+		result, tokens, err := safeJobRun(jobCtx, job.ID, job.Live.Writer(), run)
 		close(hbDone)
 		// The job's own execution deadline firing (as opposed to the
 		// manager's baseCtx ending — i.e. milk shutting down) is this job
@@ -285,13 +303,13 @@ func (e *jobTimeoutError) Is(target error) bool { return target == context.Deadl
 // goroutine has no other panic protection, and an unguarded goroutine panic
 // crashes the process regardless of which goroutine the main TUI runs on.
 // The panic value and stack are preserved in the error text for triage.
-func safeJobRun(ctx context.Context, jobID string, run JobRun) (result string, tokens session.TokenUsage, err error) {
+func safeJobRun(ctx context.Context, jobID string, out io.Writer, run JobRun) (result string, tokens session.TokenUsage, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic in background job %s: %v\n%s", jobID, r, debug.Stack())
 		}
 	}()
-	return run(ctx, jobID)
+	return run(ctx, jobID, out)
 }
 
 // startHeartbeat bumps job.LastAliveAt (persisting it when a state file is
@@ -448,7 +466,9 @@ func (m *Manager) activeCountLocked() int {
 // Returns values, not pointers: finish() mutates a Job's fields under m.mu
 // from whichever goroutine ran it, so handing out live pointers would let a
 // renderer on the UI goroutine race that write. A snapshot copy under the
-// same lock is race-free and cheap — Job has no fields that need a deep copy.
+// same lock is race-free and cheap — none of Job's fields need a deep copy,
+// including Live: copying the *livebuf.Buffer pointer is intentional (see
+// its doc comment) since the buffer's own lock, not this one, guards it.
 func (m *Manager) Jobs() []Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()

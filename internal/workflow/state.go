@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/scoutme/milk/internal/livebuf"
 )
 
 // State is the persisted workflow checkpoint written after each role completes.
@@ -47,6 +49,23 @@ type State struct {
 	// than on StageTree's emptiness, since a top-level (not-yet-nested-in-
 	// a-loop) stage has an empty StageTree too.
 	Generic bool `json:"-"`
+	// Live accumulates this run's streamed stage output (see
+	// internal/livebuf) for the TUI's attach view (ADR-0047), kept off the
+	// main session transcript. In-memory only, like ActiveStageTree — never
+	// persisted, never fed back into a resumed run's prompt. Set once when
+	// the State is created and never reassigned, so it's safe to read
+	// concurrently with the workflow goroutine's writes without any lock
+	// beyond livebuf.Buffer's own.
+	Live *livebuf.Buffer `json:"-"`
+}
+
+// LiveBuffer returns s.Live, lazily creating it on first use so callers never
+// need a separate nil check. The buffer, once created, is never replaced.
+func (s *State) LiveBuffer() *livebuf.Buffer {
+	if s.Live == nil {
+		s.Live = livebuf.New(0)
+	}
+	return s.Live
 }
 
 // VerdictEntry records the evaluator's verdict for one sprint/pass pair.

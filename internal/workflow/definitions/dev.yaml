@@ -28,8 +28,9 @@ vars:
 
     ## Sprint Plan
     Use one section per sprint, each headed exactly as "## Sprint N" (e.g. "## Sprint 1").
-    For each sprint list the concrete deliverables: files to create or modify, tests to write,
-    testing instructions for a human reviewer.
+    For each sprint list the concrete deliverables: exact file paths to create or modify, tests
+    to write, testing instructions for a human reviewer. State file paths explicitly -- the
+    evaluator checks for their literal existence, not just a description of intent.
 
     Keep the number of sprints to the minimum needed. If the task fits in one sprint, use one.
 
@@ -121,8 +122,16 @@ stages:
               {{end -}}
               Implement all deliverables for Sprint {{.sprint}} as described in the plan.
               Use your tools (read_file, write_file, edit_file, bash, etc.) to read, create, and modify files.
+
+              Before ending your turn, verify with a tool call that every file you claim to have created
+              or modified actually exists with the real content -- a tool call not erroring doesn't mean
+              it worked. If an expected input file is missing, check the obvious location once and stop
+              searching -- do not comb unrelated directories or the whole filesystem; report what's missing.
+
               After completing all tool use, write a plain-text summary of what you did: which files were
-              created or modified, what each change does, and which acceptance criteria it satisfies.
+              created or modified, what each change does, and which acceptance criteria it satisfies. If
+              you couldn't complete part of the deliverable, say so plainly here -- don't imply success
+              for work you didn't finish.
               This written summary is mandatory -- the evaluator reads it to assess the sprint.
 
           - id: evaluator
@@ -151,7 +160,9 @@ stages:
 
               {{end -}}
               Review the sprint deliverables against the Sprint {{.sprint}} acceptance criteria.
-              Use your tools to read relevant source files and verify the implementation when needed.
+              Verify the claimed deliverables yourself with your tools (read_file, bash, etc.) -- don't
+              take the generator's summary at face value. If an expected file is missing, check the
+              obvious location once and stop searching rather than combing the whole filesystem.
 
               Write a findings section describing what is correct and what needs improvement.
 
@@ -164,7 +175,7 @@ stages:
               Use "needs_refinement" when there are fixable issues AND passes remain (you are on pass {{.pass}} of {{.max_passes}}).
               Use "sprint_done" when the sprint deliverables are substantially complete, OR when this is the last pass and remaining issues are minor or impractical to resolve in one more iteration.
 
-              IMPORTANT: if this is the final pass (pass {{.pass}} = max {{.max_passes}}), do NOT return "needs_refinement" -- use "sprint_done" instead, since no further refinement will occur.
+              IMPORTANT: if this is the final pass (pass {{.pass}} = max {{.max_passes}}), do NOT return "needs_refinement" -- use "sprint_done" instead, since no further refinement will occur. This only controls whether the workflow retries, not whether the work is actually complete -- if a required deliverable is still missing or substantially incomplete on this final pass, say so as the first line of your findings (e.g. "INCOMPLETE: <what's missing>") rather than letting the forced verdict imply success.
             verdict:
               good_to_go: {action: break}
               sprint_done: {action: break}

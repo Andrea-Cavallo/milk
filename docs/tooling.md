@@ -33,7 +33,7 @@ Self-escalation (`escalate(reason)`) is covered in [docs/workflows.md](workflows
 
 ### `spawn_background_agent` — forking yourself for background research
 
-Unlike Agent-as-Tool below (which calls a *different*, specifically configured peer agent synchronously with no tool loop), `spawn_background_agent` forks the *calling* agent's own config — same model, same built-in tools — to research a self-contained question asynchronously, with its own full tool loop, without spending the caller's own context. Only available when the calling agent is backed by an inference-server provider (not `claude-cli`, which already has an equivalent fork/Task tool natively, and not subprocess agents, which don't use milk's tool loop at all). A forked job cannot itself spawn further background agents (depth is capped at 1), and its internal tool activity never appears in the live transcript — only its final result does, once drained. Concurrency is bounded per session by `max_background_agents` (default 3; see [docs/operations.md](operations.md)).
+Unlike Agent-as-Tool below (which calls a *different*, specifically configured peer agent synchronously with no tool loop), `spawn_background_agent` forks the *calling* agent's own config — same model, same built-in tools — to research a self-contained question asynchronously, with its own full tool loop, without spending the caller's own context. Only available when the calling agent is backed by an inference-server provider (not `claude-cli`, which already has an equivalent fork/Task tool natively, and not subprocess agents, which don't use milk's tool loop at all). A forked job cannot itself spawn further background agents (depth is capped at 1), and its internal tool activity never appears in the *main* transcript — only its final result does, once drained — but is watchable live on demand by double-clicking the job in the background panel (ADR-0047; see [docs/operations.md — Background sub-agents](operations.md#background-sub-agents)). Concurrency is bounded per session by `max_background_agents` (default 3; see [docs/operations.md](operations.md)).
 
 Restrict or extend the set per agent with `limits.included_tools` / `limits.excluded_tools` — see [docs/providers.md — Per-agent limit overrides](providers.md#per-agent-limit-overrides).
 
@@ -123,6 +123,8 @@ A `claude-cli` agent can be a tool-agent too — called inline during another ag
 ```
 
 **Limitations**: no permission prompts (all tool uses auto-approved); each call is stateless (no session history); the tool-agent does not see the calling agent's session history. For testing without a live `claude` binary, point `bin` at a `milk-mock claude` wrapper — see [docs/mock-setup.md](mock-setup.md).
+
+**Known limitation, not planned to change**: when a `claude-cli` agent (in *any* role) uses Claude Code's own Agent-tool (Task-tool) subagents or background workflows internally, milk's stream-json parser sees only their aggregated token counts (`subagent_usage`/`workflow_usage` on the final `result` event) — no content field exists there to surface, so there is no live-attach view for those, unlike `spawn_background_agent` jobs and milk's native `/workflow` engine (ADR-0047). This is a `stream-json` protocol limitation, not a milk parsing gap.
 
 ---
 

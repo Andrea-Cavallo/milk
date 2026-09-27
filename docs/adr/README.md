@@ -44,3 +44,5 @@
 * [42. Preserve `reasoning_content` Across Multi-Turn Tool Calls](0042-preserve-reasoning-content.md)
 * [43. Background Sub-Agents for the Local Agent's Tool Loop](0043-background-subagents.md)
 * [44. Side-Panel Auto-Open, Shortcut Hints, and Alternating Background](0044-panel-auto-open-and-styling.md)
+* [45. Local Project-Level Config Overrides (.milk/)](0045-local-config-overrides.md)
+* [47. Live-Attach View for Background Jobs and Workflows](0047-live-background-transcript-view.md)

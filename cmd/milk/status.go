@@ -235,6 +235,18 @@ func (m *model) statusAgent() string {
 		// that styleStatusBarPerm sets.
 		return "? " + agentLabel(m.st) + " " + lbl
 	}
+	if m.attached != nil {
+		// The attach view's own "── attached: … ──" header line (attach.go)
+		// scrolls out of sight with the rest of the buffer — this status-bar
+		// copy is the one that stays visible regardless of scroll position.
+		// Below pendingPerm (above): a permission prompt is still the more
+		// urgent thing to surface if both are somehow true at once.
+		label := m.attached.label
+		if len(label) > 40 {
+			label = label[:37] + "…"
+		}
+		return dim("[attached: "+label+"]") + "  " + yellow("[Esc to detach]")
+	}
 	if m.busy {
 		frame := yellow(bold(spinnerFrames[m.spinnerFrame%len(spinnerFrames)]))
 		pulsed := pulse(agentLabel(m.st), m.spinnerFrame)

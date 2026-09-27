@@ -729,6 +729,11 @@ type model struct {
 	// ptyPane is non-nil while a shell command is running inside an embedded PTY.
 	ptyPane *ptyPaneState
 
+	// attached is non-nil while the TUI is showing a live-attach view over a
+	// background job's or workflow's live buffer instead of the main
+	// transcript viewport (ADR-0047; issue #154). See attach.go.
+	attached *attachState
+
 	// directBashConcurrentTurn is true when a direct-bash/bang command (via
 	// launchPTYPane or launchDirectBashFallback) was launched while an agent
 	// turn was already in progress — i.e. from handleBusyKey rather than the
@@ -1195,6 +1200,15 @@ func setMouseDragMode(dragging bool) {
 }
 
 func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.ptyPane != nil {
+		// The PTY pane's View() branch takes over the whole main area and
+		// renders no side panels (see layout.go), but mainWidth()/regionAt
+		// don't know that — a click at a panel's column while a PTY pane is
+		// up would otherwise silently arm/attach against a panel that isn't
+		// even on screen right now. Key routing already ignores everything
+		// but handlePTYKey while ptyPane is active; mirror that here.
+		return m, nil
+	}
 	ev := tea.MouseEvent(msg)
 	region, regionX := m.regionAt(ev.X)
 	var dragCmd tea.Cmd // set by press/motion; returned at the end
@@ -1204,6 +1218,8 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if *p > 0 {
 				*p--
 			}
+		} else if m.attached != nil && !m.hasPendingPrompt() {
+			m.attached.vp.ScrollUp(3)
 		} else {
 			m.vp.ScrollUp(3)
 		}
@@ -1212,6 +1228,8 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if *p < m.panelMaxOffset(region, m.viewportHeight()) {
 				*p++
 			}
+		} else if m.attached != nil && !m.hasPendingPrompt() {
+			m.attached.vp.ScrollDown(3)
 		} else {
 			m.vp.ScrollDown(3)
 		}
@@ -1492,6 +1510,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f4":
 			return m.handlePanelCmd("workflow")
 		}
+		// Adding a pending-state check below? Also add it to
+		// hasPendingPrompt() (layout.go) — it mirrors this list so the
+		// attach view (ADR-0047) knows to yield the screen to whichever
+		// prompt actually needs the user's attention, and nothing else
+		// keeps the two lists in sync.
 		if m.pendingDirectBash != nil {
 			return m.handleDirectBashKey(msg)
 		}
@@ -1524,6 +1547,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.pendingGenericWorkflowExtend != nil {
 			return m.handleGenericWorkflowExtendKey(msg)
+		}
+		if m.attached != nil {
+			// Below every pending prompt/wizard check above — attach is a
+			// passive viewing state, not a modal one, so a permission prompt
+			// or any other decision the user actually needs to make must
+			// still reach its own handler rather than being swallowed here.
+			return m.handleAttachKey(msg)
 		}
 		if m.inputLocked() {
 			return m.handleBusyKey(msg)
@@ -1731,7 +1761,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case workflow.WorkflowChunkMsg:
 		m.currentTurnChars += int64(len(msg.Text))
-		m.appendTranscript(msg.Text)
+		// Stage output goes to the workflow's own live buffer, not the main
+		// transcript (ADR-0047) — attach via the workflow panel to watch it.
+		if m.workflowState != nil {
+			m.workflowState.LiveBuffer().Append([]byte(msg.Text))
+		}
+		if m.attached != nil && m.attached.kind == attachWorkflow {
+			m.syncAttachedContent()
+		}
 		m.lastWorkflowActivity = time.Now()
 		m.workflowTimeoutWarned = false
 		m.syncLayout()
@@ -1984,6 +2021,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, memoryPollTick()
 		}
 		return m, nil
+
+	case attachRefreshMsg:
+		if m.attached == nil {
+			return m, nil
+		}
+		m.syncAttachedContent()
+		return m, attachRefreshTick()
 
 	case taskStoreChangedMsg:
 		m.autoOpenPanel(regionTasks)
@@ -2711,8 +2755,8 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	// Update deadlocks because the event loop goroutine is the only reader
 	// of that channel and it is blocked waiting for Update to return.
 	return m, func() tea.Msg {
-		job := mgr.Spawn(label, task, "user", modelName, func(ctx context.Context, jobID string) (string, session.TokenUsage, error) {
-			return agent.RunBackgroundTask(ctx, jobID, cwd, task, io.Discard)
+		job := mgr.Spawn(label, task, "user", modelName, func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
+			return agent.RunBackgroundTask(ctx, jobID, cwd, task, out)
 		})
 		return backgroundSpawnedMsg{jobID: job.ID, label: label}
 	}

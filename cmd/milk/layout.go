@@ -9,6 +9,50 @@ import (
 	"github.com/creack/pty"
 )
 
+// activeViewport returns the viewport currently being displayed in the main
+// area: the attach view's own viewport while attached (ADR-0047) and no
+// pending prompt needs the user's attention, otherwise the main transcript
+// viewport. Used everywhere View()/handleResize()/renderSeparator need to
+// act on "whichever viewport is on screen" without each caller re-deriving
+// the same check.
+//
+// The hasPendingPrompt() guard matters live, not just in theory: a
+// permission prompt (or any other pending wizard) is printed into the main
+// transcript, which the attach view would otherwise be covering — without
+// this, the user would see only the attach buffer and the status bar's
+// "[allow?]" hint, with no way to read what they're actually being asked.
+// Key routing already gives every pending-prompt handler priority over
+// handleAttachKey (see Update's tea.KeyMsg case); this keeps what's
+// *rendered* consistent with what keys actually do. m.attached itself is
+// left untouched — once the prompt resolves, the attach view reappears
+// exactly where it was, since nothing here ever calls detachAttach.
+func (m *model) activeViewport() *viewport.Model {
+	if m.attached != nil && !m.hasPendingPrompt() {
+		return &m.attached.vp
+	}
+	return &m.vp
+}
+
+// hasPendingPrompt reports whether some pending prompt/wizard needs the
+// user's direct attention right now — the same set of fields Update's
+// tea.KeyMsg case checks, in the same "needs a real decision" spirit, kept
+// as one place both key routing's implicit precedence (each check simply
+// sits before the attach check) and rendering (activeViewport) can agree
+// on what counts as "something more urgent than attach is going on."
+func (m *model) hasPendingPrompt() bool {
+	return m.pendingDirectBash != nil ||
+		m.pendingPerm != nil ||
+		m.pendingPathPaste != "" ||
+		m.pendingForget != nil ||
+		m.pendingAdd != nil ||
+		m.pendingMCPAdd != nil ||
+		m.pendingSwitch != nil ||
+		m.pendingTelegramSetup != nil ||
+		m.pendingInit != nil ||
+		m.pendingWorkflowWizard != nil ||
+		m.pendingGenericWorkflowExtend != nil
+}
+
 // viewportHeight is the full terminal height minus the chrome lines.
 // View() layout: headerBar + "\n" + mainArea + "\n" + statusBar; the "\n" separators don't add lines.
 // Chrome heights are measured from the rendered output so growth in either bar automatically reduces
@@ -163,6 +207,9 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		m.ptyPane.vt.Resize(vpH, newCols)
 		m.ptyPane.vtMu.Unlock()
 	}
+	if m.attached != nil {
+		m.syncAttachedContent()
+	}
 	return m, nil
 }
 
@@ -173,7 +220,8 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 //   - panel closed + scrollable: thumb at proportional position
 //   - panel closed + fits: blank column (no visual noise)
 func (m *model) renderSeparator(h int) string {
-	total := m.vp.TotalLineCount()
+	vp := m.activeViewport()
+	total := vp.TotalLineCount()
 	scrollable := total > h
 	visible := m.panelMemory || scrollable
 
@@ -187,7 +235,7 @@ func (m *model) renderSeparator(h int) string {
 
 	var thumbTop, thumbBot int
 	if scrollable {
-		thumbTop, thumbBot = scrollThumb(h, total, m.vp.YOffset)
+		thumbTop, thumbBot = scrollThumb(h, total, vp.YOffset)
 	}
 	for i := range h {
 		if scrollable && i >= thumbTop && i <= thumbBot {
@@ -214,7 +262,11 @@ func (m model) View() string {
 	}
 	vpH := m.viewportHeight()
 	sep := m.renderSeparator(vpH)
-	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, m.vp.View(), sep)
+	// Attached: show the background job's/workflow's live buffer in place of
+	// the main transcript (ADR-0047) — side panels keep rendering normally so
+	// the background/workflow panel that triggered the attach stays visible,
+	// unlike the PTY-pane branch above, which is a full-screen takeover.
+	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, m.activeViewport().View(), sep)
 	if m.panelMemory {
 		panel := m.renderMemoryPanel(vpH)
 		pbar := m.renderPanelScrollbar(vpH)

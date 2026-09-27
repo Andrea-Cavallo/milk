@@ -406,6 +406,112 @@ func TestExecParallelGroup_FanOutAndAggregate(t *testing.T) {
 	}
 }
 
+// TestExecParallelGroup_ItemResultOutputAndStatusPopulated verifies each
+// fanned-out item's ItemResult carries real Status/Output, not the zero
+// value, when its body is a single flat agent_turn stage (the simple case
+// TestExecParallelGroup_FanOutAndAggregate exercises but never actually
+// inspects). A later stage ranging over the SaveAs'd []ItemResult (exactly
+// swarm.yaml's final_evaluation does over worker_results) is the only way to
+// observe this from outside the package, so this renders that stage's
+// prompt and checks it.
+func TestExecParallelGroup_ItemResultOutputAndStatusPopulated(t *testing.T) {
+	worker := &fakeRunner{name: "w", responses: []string{"item output"}}
+	summary := &fakeRunner{name: "s", responses: []string{"noted"}}
+	def := workflow.Definition{
+		Name: "t",
+		Stages: []workflow.Stage{
+			{ID: "plan_stage", Kind: workflow.StageKindAgentTurn, Role: "planner", Prompt: "plan", SaveAs: "plan"},
+			{
+				ID: "fanout", Kind: workflow.StageKindParallelGroup, Over: "Item", From: "plan",
+				SaveAs: "results",
+				Body: []workflow.Stage{
+					{
+						ID: "work", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "do item {{.item}}",
+						SaveAs: "work_out", Verdict: map[string]workflow.VerdictRule{"good_to_go": {Action: "break"}},
+					},
+				},
+			},
+			{
+				ID: "summarize", Kind: workflow.StageKindAgentTurn, Role: "s",
+				Prompt: "{{range .results}}[{{.Index}} {{.Status}}] {{.Output}}\n{{end}}",
+			},
+		},
+	}
+	planner := &fakeRunner{name: "planner", responses: []string{"## Item 1\na\n"}}
+	worker.responses = []string{"item output\ngood_to_go"}
+	r := New(def, "task")
+	if err := r.Run(context.Background(), runCfg(map[string]workflow.TurnRunner{"planner": planner, "w": worker, "s": summary})); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := summary.lastPrompt()
+	if !strings.Contains(got, "[1 break]") {
+		t.Errorf("summarize prompt = %q, want Status %q populated as %q", got, "Status", "[1 break]")
+	}
+	if !strings.Contains(got, "item output") {
+		t.Errorf("summarize prompt = %q, want Output populated with the worker's saved text", got)
+	}
+}
+
+// TestExecParallelGroup_ItemResultPopulatedThroughNestedLoop is the
+// regression test for a real bug: when an item's body is a retry loop
+// (exactly swarm.yaml's worker_pass_loop shape — an agent_turn, then a
+// second verdict-bearing agent_turn) rather than a single flat agent_turn,
+// ItemResult.Status and .Output silently stayed "" — a loop-kind stage
+// always reported an empty outcome regardless of what happened inside it
+// (executeStage's dispatch discarded it), and lastSaveAsOf never looked
+// inside a nested loop body for the last SaveAs. In production this meant
+// swarm's final_evaluation stage reviewed cross-item integration blind to
+// every item's actual findings, for every run.
+func TestExecParallelGroup_ItemResultPopulatedThroughNestedLoop(t *testing.T) {
+	worker := &fakeRunner{name: "w", responses: []string{"did the work"}}
+	evaluator := &fakeRunner{name: "e", responses: []string{"findings: looks good\ngood_to_go"}}
+	summary := &fakeRunner{name: "s", responses: []string{"noted"}}
+	def := workflow.Definition{
+		Name: "t",
+		Stages: []workflow.Stage{
+			{ID: "plan_stage", Kind: workflow.StageKindAgentTurn, Role: "planner", Prompt: "plan", SaveAs: "plan"},
+			{
+				ID: "fanout", Kind: workflow.StageKindParallelGroup, Over: "Item", From: "plan",
+				SaveAs: "results",
+				Body: []workflow.Stage{
+					{
+						ID: "pass_loop", Kind: workflow.StageKindLoop, MaxIterations: 3, IterationVar: "pass",
+						Body: []workflow.Stage{
+							{ID: "work", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "implement", SaveAs: "work_out"},
+							{
+								ID: "eval", Kind: workflow.StageKindAgentTurn, Role: "e", Prompt: "review",
+								SaveAs: "eval_findings",
+								Verdict: map[string]workflow.VerdictRule{
+									"good_to_go":       {Action: "break"},
+									"needs_refinement": {Action: "retry"},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				ID: "summarize", Kind: workflow.StageKindAgentTurn, Role: "s",
+				Prompt: "{{range .results}}[{{.Index}} {{.Status}}] {{.Output}}\n{{end}}",
+			},
+		},
+	}
+	planner := &fakeRunner{name: "planner", responses: []string{"## Item 1\na\n"}}
+	r := New(def, "task")
+	if err := r.Run(context.Background(), runCfg(map[string]workflow.TurnRunner{
+		"planner": planner, "w": worker, "e": evaluator, "s": summary,
+	})); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := summary.lastPrompt()
+	if !strings.Contains(got, "[1 break]") {
+		t.Errorf("summarize prompt = %q, want Status %q populated as %q even though the item's body is a nested loop", got, "Status", "[1 break]")
+	}
+	if !strings.Contains(got, "looks good") {
+		t.Errorf("summarize prompt = %q, want Output populated with the evaluator's findings text (eval_findings, the last SaveAs inside the nested loop)", got)
+	}
+}
+
 func TestExecParallelGroup_MaxConcurrencyBound(t *testing.T) {
 	var mu sync.Mutex
 	current, peak := 0, 0
