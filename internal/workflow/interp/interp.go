@@ -800,9 +800,9 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 				itemVars[label+"_section"] = sec.Body
 
 				// Suppress live streaming for parallel workers: concurrent
-				// WorkflowChunkMsg writes interleave in the TUI transcript,
-				// producing garbled output. Each worker runs silently; the
-				// workflow panel still tracks progress via activePathTracker.
+				// WorkflowChunkMsg writes interleave in the workflow's live
+				// buffer, producing garbled output. Each worker runs silently;
+				// the workflow panel still tracks progress via activePathTracker.
 				workerCfg := ec.cfg
 				workerCfg.Send = nil
 				itemEC := &execContext{

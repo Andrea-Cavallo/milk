@@ -1731,7 +1731,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case workflow.WorkflowChunkMsg:
 		m.currentTurnChars += int64(len(msg.Text))
-		m.appendTranscript(msg.Text)
+		// Stage output goes to the workflow's own live buffer, not the main
+		// transcript (ADR-0047) — attach via the workflow panel to watch it.
+		if m.workflowState != nil {
+			m.workflowState.LiveBuffer().Append([]byte(msg.Text))
+		}
 		m.lastWorkflowActivity = time.Now()
 		m.workflowTimeoutWarned = false
 		m.syncLayout()
