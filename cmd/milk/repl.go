@@ -1200,6 +1200,15 @@ func setMouseDragMode(dragging bool) {
 }
 
 func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.ptyPane != nil {
+		// The PTY pane's View() branch takes over the whole main area and
+		// renders no side panels (see layout.go), but mainWidth()/regionAt
+		// don't know that — a click at a panel's column while a PTY pane is
+		// up would otherwise silently arm/attach against a panel that isn't
+		// even on screen right now. Key routing already ignores everything
+		// but handlePTYKey while ptyPane is active; mirror that here.
+		return m, nil
+	}
 	ev := tea.MouseEvent(msg)
 	region, regionX := m.regionAt(ev.X)
 	var dragCmd tea.Cmd // set by press/motion; returned at the end
