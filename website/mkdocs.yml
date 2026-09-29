@@ -42,7 +42,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Providers & Config: providers.md
-  - Workflows: workflows.md
+  - Routing & workflows: workflows.md
   - Tooling & MCP: tooling.md
   - Operations: operations.md
   - Evaluation: eval.md

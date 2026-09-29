@@ -5,13 +5,15 @@
 
 <section class="mk-hero">
   <div class="mk-hero__inner">
-    <div class="mk-hero__eyebrow">Terminal AI assistant</div>
+    <div class="mk-hero__eyebrow">Terminal agent host</div>
     <img class="mk-hero__logo" src="{{ 'images/milk.png' | url }}" alt="milk" />
     <h1 class="mk-hero__tagline">Switch models,<br>not context.</h1>
     <p class="mk-hero__sub">
-      milk routes each prompt between a fast primary agent and a deep
+      milk routes each prompt between a cheap primary agent and a deep
       escalation agent &mdash; keeping the full conversation in sync
-      across both. Start cheap. Go deep when you need it.
+      across both &mdash; then goes further: tools, MCP, multi-agent
+      workflows, persistent memory, and an eval harness.
+      Start cheap. Go deep when you need it.
     </p>
     <div class="mk-hero__cta">
       <a class="md-button md-button--primary" href="{{ 'getting-started/' | url }}">Get started</a>
@@ -56,7 +58,7 @@
       <div class="mk-feature-card">
         <span class="mk-feature-card__num">01</span>
         <h3>Automatic routing</h3>
-        <p>Each prompt is classified and sent to the right agent without you changing tools.</p>
+        <p>Each prompt is classified and sent to the right agent without you changing tools &mdash; sticky escalation keeps hard turns on the deep agent.</p>
       </div>
       <div class="mk-feature-card">
         <span class="mk-feature-card__num">02</span>
@@ -65,24 +67,24 @@
       </div>
       <div class="mk-feature-card">
         <span class="mk-feature-card__num">03</span>
-        <h3>Persistent memory</h3>
-        <p>A Percept store survives across sessions; key facts are reinforced, decay, and promote to long-term memory over time.</p>
+        <h3>Agent tools &amp; MCP</h3>
+        <p>Built-in bash/file/HTTP tools, MCP servers (stdio or HTTP, OAuth-aware), and agent-as-tool &mdash; expose any configured agent as a callable peer.</p>
       </div>
       <div class="mk-feature-card">
         <span class="mk-feature-card__num">04</span>
-        <h3>Loop detection</h3>
-        <p>Monitors agent output for repeating patterns, warns in the status bar, and auto-interrupts when an agent gets stuck.</p>
+        <h3>Multi-agent workflows</h3>
+        <p>Background sub-agents for async research, plus a native <code>/workflow</code> engine &mdash; <code>dev</code>, <code>pair</code>, <code>swarm</code>, or your own YAML &mdash; with typed verdicts and checkpoint/resume.</p>
       </div>
       <div class="mk-feature-card">
         <span class="mk-feature-card__num">05</span>
-        <h3>Evaluation harness</h3>
-        <p>Run the same scenarios against different agents and compare LLM-judged quality, tokens, cache efficiency, and latency side-by-side.</p>
+        <h3>Memory &amp; safety</h3>
+        <p>A Percept store survives across sessions; loop detection warns and can auto-interrupt when an agent gets stuck.</p>
       </div>
     </div>
     <div class="mk-features__secondary">
-      <span class="mk-pill">Built-in tools</span>
-      <span class="mk-pill">Streaming TUI</span>
       <span class="mk-pill">Any backend, either role</span>
+      <span class="mk-pill">Streaming TUI</span>
+      <span class="mk-pill">milk eval</span>
     </div>
   </div>
 </section>

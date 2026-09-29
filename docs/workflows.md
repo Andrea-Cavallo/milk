@@ -1,4 +1,4 @@
-# Workflows
+# Routing, sessions & workflows
 
 How a prompt gets routed between agents, what happens across a turn, and milk's native multi-agent pipeline engine.
 

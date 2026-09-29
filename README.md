@@ -4,7 +4,7 @@
 
 Switch models, not context.
 
-milk is a terminal AI assistant that routes each prompt between a fast primary agent and a deep escalation agent — keeping the full conversation in sync across both. Start cheap. Go deep when you need it. Switch mid-workflow.
+milk is a terminal agent host that routes each prompt between a cheap primary agent and a deep escalation agent — keeping the full conversation in sync across both — then goes further: tools, MCP, multi-agent workflows, persistent memory, and an eval harness. Start cheap. Go deep when you need it. Switch mid-workflow.
 
 ## Install
 
@@ -26,14 +26,17 @@ Requires Go 1.21+. See [docs/getting-started.md](docs/getting-started.md) for wh
 
 ## What it does
 
-- **Automatic routing** — each prompt is classified and sent to the right agent without you changing tools
-- **Context handoff** — when escalation fires, the primary conversation is reformatted as context; the escalation agent orients itself without a separate setup step
-- **Persistent memory** — a Percept store survives across sessions; key facts are reinforced, decay, and promote to long-term memory over time (NREM consolidation)
-- **Built-in tools** — the primary agent has bash, file read/write/edit, grep, find, HTTP GET, session access, and memory tools without any extra configuration
-- **Streaming TUI** — bubbletea terminal UI with a scrollable transcript, live memory panel, status bar, and input history
-- **Loop detection** — monitors agent output for repeating patterns; warns in the status bar and auto-interrupts when the agent gets stuck looping (configurable, works with all providers)
-- **Aider and smolagents** — plug in aider-chat or smolagents as either the primary or escalation agent
-- **Evaluation harness** — run the same scenarios against different agents (or against the Claude Code CLI directly) and compare LLM-judged quality, tokens, cache efficiency, and latency side-by-side (`milk eval`)
+**Route** — automatic per-prompt routing between agents, sticky escalation, and context handoff that reformats the primary conversation so the escalation agent orients itself without a separate setup step. Explicit `--escalate`/`--primary`, self-escalation via `escalate(reason)`, and a streaming bubbletea TUI (transcript, side panels, input history) on top.
+
+**Any backend, either role** — OpenAI-compatible servers, AWS Bedrock (native Converse), Claude Code CLI, aider, smolagents, or any Bearer-token HTTP provider can be primary or escalation. The only constraint milk asks you to honor: the escalation agent should be smarter (and usually pricier) than the primary.
+
+**Act** — built-in tools (bash, file I/O, grep/find, HTTP, session context, memory, tasks) with no extra configuration, plus MCP servers (stdio or HTTP, OAuth-aware) and agent-as-tool — expose any configured agent as a callable tool to any other.
+
+**Orchestrate** — `spawn_background_agent` forks the calling agent for async research with its own tool loop; the native `/workflow` engine runs multi-agent pipelines (`dev`, `pair`, `swarm`, or your own YAML) with typed verdicts, checkpoint/resume, and a live-attach view for background jobs and workflow stages.
+
+**Remember & stay safe** — a Percept store with NREM consolidation survives across sessions; loop detection watches for repeating patterns and can auto-interrupt; persistent task tracking keeps goals in front of the agent.
+
+**Measure** — token usage by role (`/usage`), OpenTelemetry file exporters (`/metrics`, `/otel`), and `milk eval` — run the same scenarios against different agents and compare LLM-judged quality, tokens, cache efficiency, and latency side-by-side.
 
 ## Backends
 

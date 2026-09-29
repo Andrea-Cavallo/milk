@@ -2,7 +2,7 @@
 
 ## Overview
 
-milk lets you switch between a primary inference agent and a configurable escalation agent mid-workflow, maintaining full session context across the switch. Any backend can serve either role — see [docs/providers.md](providers.md) for the full catalog and the one routing constraint milk expects you to honor (escalation should be smarter/pricier than primary).
+milk is a terminal agent host: it routes each prompt between a primary inference agent and a configurable escalation agent mid-workflow, maintaining full session context across the switch, and layers tools, MCP, multi-agent orchestration, memory, and evaluation on top. Six surfaces make up the product — **routing & sessions**, **providers**, **tools & MCP**, **orchestration** (background agents + the native `/workflow` engine), **memory & safety**, and **observability/eval**. Any backend can serve either role — see [docs/providers.md](providers.md) for the full catalog and the one routing constraint milk expects you to honor (escalation should be smarter/pricier than primary).
 
 The primary use case is code assistance and shell automation for a single user.
 
