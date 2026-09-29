@@ -265,16 +265,16 @@ func TestAppendSystemCachePoint_EmptySystemNoOp(t *testing.T) {
 	}
 }
 
-func TestAppendSystemCachePoint_AppendsAfterExistingText(t *testing.T) {
-	system := []bedrockSystem{{Text: "You are helpful."}, {Text: "Be concise."}}
+func TestAppendSystemCachePoint_SingleEntry_AppendsAtEnd(t *testing.T) {
+	system := []bedrockSystem{{Text: "You are helpful."}}
 	got := appendSystemCachePoint(system)
-	if len(got) != 3 {
-		t.Fatalf("want 3 entries, got %d: %+v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries, got %d: %+v", len(got), got)
 	}
-	if got[0].Text != "You are helpful." || got[1].Text != "Be concise." {
-		t.Errorf("prior system entries must be unchanged and precede the cachePoint: %+v", got)
+	if got[0].Text != "You are helpful." {
+		t.Errorf("prior system entry must be unchanged and precede the cachePoint: %+v", got)
 	}
-	last := got[2]
+	last := got[1]
 	if last.CachePoint == nil {
 		t.Fatalf("last entry must be a cachePoint block, got %+v", last)
 	}
@@ -283,6 +283,34 @@ func TestAppendSystemCachePoint_AppendsAfterExistingText(t *testing.T) {
 	}
 	if last.CachePoint.Type != "default" {
 		t.Errorf("want cachePoint type=default, got %q", last.CachePoint.Type)
+	}
+}
+
+// TestAppendSystemCachePoint_MultipleEntries_AnchorsAfterFirst verifies the
+// cache-prefix-stability fix: with more than one system entry (the stable
+// buildSystemPrompt output at index 0, plus dynamic percepts/current-need
+// entries after it — see convertMessagesToConverse and Run's message
+// assembly), the cachePoint goes right after index 0, not at the very end.
+// This keeps the large, stable prompt cacheable independently of the small,
+// turn-to-turn-varying entries that follow it.
+func TestAppendSystemCachePoint_MultipleEntries_AnchorsAfterFirst(t *testing.T) {
+	system := []bedrockSystem{
+		{Text: "You are the primary agent. <large stable system prompt>"},
+		{Text: "[Remembered facts]\n- fact 1"},
+		{Text: "[Current user goal]\nfix the bug"},
+	}
+	got := appendSystemCachePoint(system)
+	if len(got) != 4 {
+		t.Fatalf("want 4 entries, got %d: %+v", len(got), got)
+	}
+	if got[0].Text != system[0].Text {
+		t.Errorf("index 0 (stable prompt) must be unchanged, got %+v", got[0])
+	}
+	if got[1].CachePoint == nil || got[1].CachePoint.Type != "default" {
+		t.Fatalf("cachePoint must sit at index 1, right after the stable prompt, got %+v", got[1])
+	}
+	if got[2].Text != system[1].Text || got[3].Text != system[2].Text {
+		t.Errorf("dynamic entries must follow the cachePoint, unchanged and in order, got %+v", got[2:])
 	}
 }
 

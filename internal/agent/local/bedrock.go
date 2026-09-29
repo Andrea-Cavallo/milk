@@ -207,16 +207,32 @@ func convertMessagesToConverse(msgs []Message) ([]bedrockMessage, []bedrockSyste
 	return result, system
 }
 
-// appendSystemCachePoint appends an explicit cachePoint block as the last
-// element of the system array, opting the stable system-prompt prefix into
-// AWS Bedrock's explicit prompt caching (see AgentConfig.PromptCaching).
-// No-op when system is empty: a lone cachePoint block with no preceding
-// content has no prefix to mark as reusable.
+// appendSystemCachePoint inserts an explicit cachePoint block right after
+// the *first* element of the system array, not at the end, opting the
+// stable system-prompt prefix into AWS Bedrock's explicit prompt caching
+// (see AgentConfig.PromptCaching). No-op when system is empty: a lone
+// cachePoint block with no preceding content has no prefix to mark as
+// reusable.
+//
+// Position matters here: convertMessagesToConverse flattens every
+// role=="system" message into its own system[] entry, in order. system[0]
+// is always the large, mostly-static buildSystemPrompt output (see Run's
+// msgs := []Message{{Role: "system", Content: systemPrompt}}); any percepts
+// or current-need orientation are separate system-role messages prepended
+// into history *after* that (runner.go), so they land at system[1:] —
+// small and turn-to-turn-varying. Placing the cachePoint at the very end
+// (the original behavior) bundled the stable prompt and the dynamic
+// entries into one cached unit, invalidating the whole thing — including
+// the expensive-to-reprocess system prompt — on every percept/need change.
+// Anchoring it right after system[0] instead caches only the part that's
+// actually stable, independent of what comes after.
 func appendSystemCachePoint(system []bedrockSystem) []bedrockSystem {
 	if len(system) == 0 {
 		return system
 	}
-	return append(system, bedrockSystem{CachePoint: &bedrockCachePoint{Type: "default"}})
+	out := make([]bedrockSystem, 0, len(system)+1)
+	out = append(out, system[0], bedrockSystem{CachePoint: &bedrockCachePoint{Type: "default"}})
+	return append(out, system[1:]...)
 }
 
 // appendMessageCachePoints marks the last two messages as cache breakpoints
