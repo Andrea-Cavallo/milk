@@ -286,6 +286,53 @@ func TestAppendSystemCachePoint_AppendsAfterExistingText(t *testing.T) {
 	}
 }
 
+// --- appendMessageCachePoints ---
+
+func TestAppendMessageCachePoints_EmptyNoOp(t *testing.T) {
+	got := appendMessageCachePoints(nil)
+	if len(got) != 0 {
+		t.Errorf("want no-op on empty messages, got %+v", got)
+	}
+}
+
+func TestAppendMessageCachePoints_SingleMessage_MarksOnlyThatOne(t *testing.T) {
+	messages := []bedrockMessage{
+		{Role: "user", Content: []bedrockContentBlock{{Text: "hi"}}},
+	}
+	got := appendMessageCachePoints(messages)
+	if len(got) != 1 {
+		t.Fatalf("want 1 message, got %d", len(got))
+	}
+	if len(got[0].Content) != 2 || got[0].Content[1].CachePoint == nil {
+		t.Errorf("want the only message to get a trailing cachePoint block, got %+v", got[0].Content)
+	}
+}
+
+func TestAppendMessageCachePoints_MarksLastTwoOnly(t *testing.T) {
+	messages := []bedrockMessage{
+		{Role: "user", Content: []bedrockContentBlock{{Text: "first"}}},
+		{Role: "assistant", Content: []bedrockContentBlock{{Text: "second"}}},
+		{Role: "user", Content: []bedrockContentBlock{{Text: "third"}}},
+		{Role: "assistant", Content: []bedrockContentBlock{{Text: "fourth"}}},
+	}
+	got := appendMessageCachePoints(messages)
+	if len(got) != 4 {
+		t.Fatalf("want 4 messages, got %d", len(got))
+	}
+	for i, m := range got {
+		hasCachePoint := false
+		for _, c := range m.Content {
+			if c.CachePoint != nil {
+				hasCachePoint = true
+			}
+		}
+		wantCachePoint := i >= 2 // only the last two (indices 2, 3)
+		if hasCachePoint != wantCachePoint {
+			t.Errorf("message %d: hasCachePoint=%v, want %v", i, hasCachePoint, wantCachePoint)
+		}
+	}
+}
+
 // --- bedrockStreamCompletion request-side cachePoint gating ---
 
 // bedrockCapturingServer records the raw request body sent by
@@ -364,6 +411,14 @@ func TestBedrockStreamCompletion_PromptCachingTrue_AppendsCachePoint(t *testing.
 	}
 	if last.Text != "" {
 		t.Errorf("cachePoint entry must not carry text, got %q", last.Text)
+	}
+
+	if len(got.Messages) != 1 {
+		t.Fatalf("want 1 message, got %d: %+v", len(got.Messages), got.Messages)
+	}
+	msgContent := got.Messages[0].Content
+	if len(msgContent) != 2 || msgContent[0].Text != "hi" || msgContent[1].CachePoint == nil {
+		t.Errorf("want the single message to also carry a trailing cachePoint block, got %+v", msgContent)
 	}
 }
 

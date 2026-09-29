@@ -52,6 +52,7 @@ type bedrockContentBlock struct {
 	Text       string             `json:"text,omitempty"`
 	ToolUse    *bedrockToolUse    `json:"toolUse,omitempty"`
 	ToolResult *bedrockToolResult `json:"toolResult,omitempty"`
+	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
 }
 
 type bedrockToolUse struct {
@@ -218,6 +219,38 @@ func appendSystemCachePoint(system []bedrockSystem) []bedrockSystem {
 	return append(system, bedrockSystem{CachePoint: &bedrockCachePoint{Type: "default"}})
 }
 
+// appendMessageCachePoints marks the last two messages as cache breakpoints
+// (a rolling "double buffer"), in addition to the single system-prefix
+// breakpoint appendSystemCachePoint adds. The system prefix alone only
+// caches the (small, mostly-static) system prompt; the conversation/tool-
+// call history is what actually grows during a tool loop, and previously
+// had no cache breakpoint at all.
+//
+// Marking only the single last message would mean any retry, edit, or
+// removal of that message drops its marker and forces a full-prefix
+// recompute; marking the last two means the next-to-last marker survives as
+// a fallback anchor, degrading the worst case to "recompute only the
+// removed message" instead. This is the same double-buffer strategy
+// MiMo-Code and OpenCode converged on independently — see
+// docs/prompt-context-management-review.md §8 rec #11. Bedrock allows up to
+// 4 cache breakpoints total; this uses at most 3 (1 system + 2 message) to
+// leave headroom.
+//
+// EXPERIMENTAL, like the rest of this file's prompt-caching support: not
+// live-tested against a real Bedrock endpoint (no Bedrock agent was
+// available during development).
+func appendMessageCachePoints(messages []bedrockMessage) []bedrockMessage {
+	n := len(messages)
+	if n == 0 {
+		return messages
+	}
+	start := max(n-2, 0)
+	for i := start; i < n; i++ {
+		messages[i].Content = append(messages[i].Content, bedrockContentBlock{CachePoint: &bedrockCachePoint{Type: "default"}})
+	}
+	return messages
+}
+
 // convertToolsToConverse translates OpenAI tool schemas to Bedrock ToolSpec format.
 func convertToolsToConverse(tools []map[string]any) []bedrockTool {
 	var result []bedrockTool
@@ -261,6 +294,7 @@ func (a *Agent) bedrockStreamCompletion(ctx context.Context, msgs []Message, too
 	bedrockMsgs, system := convertMessagesToConverse(msgs)
 	if a.promptCaching {
 		system = appendSystemCachePoint(system)
+		bedrockMsgs = appendMessageCachePoints(bedrockMsgs)
 	}
 	bedrockTools := convertToolsToConverse(tools)
 
