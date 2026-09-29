@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/scoutme/milk/internal/escalation"
 )
 
 // TestBuildSystemPrompt_TierStandard verifies that the default ("standard") tier
@@ -147,5 +149,25 @@ func TestBuildSystemPrompt_ProjectInstructionsDisabled(t *testing.T) {
 	prompt := buildSystemPrompt(dir, "agent", "", false, "standard", true)
 	if strings.Contains(prompt, "[Project instructions]") {
 		t.Error("expected no [Project instructions] block when disableProjectInstructions is true")
+	}
+}
+
+// TestSystemPromptShared_SharesConfigWriteWarningWithEscalation verifies that
+// the local-model system prompt sources its config-write safety warning from
+// escalation.ConfigWriteWarning rather than an independently-typed copy, so
+// the two prose surfaces can't drift out of sync with each other.
+func TestSystemPromptShared_SharesConfigWriteWarningWithEscalation(t *testing.T) {
+	if !strings.Contains(systemPromptShared, escalation.ConfigWriteWarning) {
+		t.Error("expected systemPromptShared to contain escalation.ConfigWriteWarning verbatim")
+	}
+}
+
+// TestSystemPromptShared_MentionsConsumerScoping verifies that the local
+// system prompt tells the model about record_memory's consumer field for
+// scoping a fact to one agent — previously only documented on the escalation
+// (tag-based) path, not the local (tool-call) path.
+func TestSystemPromptShared_MentionsConsumerScoping(t *testing.T) {
+	if !strings.Contains(systemPromptShared, "consumer") {
+		t.Error("expected systemPromptShared to mention record_memory's consumer field")
 	}
 }

@@ -73,6 +73,15 @@ func BuildStaticContext(nonce string, percepts []string, mode ContextMode, injec
 	return b.String()
 }
 
+// ConfigWriteWarning is the shared "how to write config changes safely"
+// guidance — reused by both SelfConfigInstruction (Claude CLI escalation
+// path) and internal/agent/local's systemPromptShared (local-model path) so
+// the two prose copies of this warning can't drift independently. Each
+// caller supplies its own lead-in sentence naming how it invokes the
+// underlying "milk config ..." commands (bash directly, vs. a subprocess
+// tool call), since that part is mechanism-specific.
+const ConfigWriteWarning = `never hand-edit config.json directly, even for a small removal: a malformed edit breaks the file for every agent reading it, and there is a command for every operation, including removal. A running milk session picks up the change without a restart.`
+
 // SelfConfigInstruction points an agent at milk's own config-management
 // surface instead of leaving it to guess config.json's schema. It's cheap by
 // design: a one-line pointer, not the docs themselves — the doc content is
@@ -80,8 +89,7 @@ func BuildStaticContext(nonce string, percepts []string, mode ContextMode, injec
 func SelfConfigInstruction() string {
 	return "[Milk self-configuration]\n" +
 		`Run "milk config docs <topic>" (e.g. "milk config docs mcp add") to look up how milk's own config.json is structured — agents, MCP servers, memory, routing, etc. — instead of guessing. ` +
-		`To write changes, use "milk config mcp add|remove|assign|unassign ..." or "milk config agent add|remove ..." — never hand-edit config.json directly, even for a small removal: a malformed edit breaks the file for every agent reading it, and there is a command for every operation, including removal. ` +
-		`A running milk session picks up the change without a restart.` +
+		`To write changes, use "milk config mcp add|remove|assign|unassign ..." or "milk config agent add|remove ..." — ` + ConfigWriteWarning +
 		"\n\n"
 }
 

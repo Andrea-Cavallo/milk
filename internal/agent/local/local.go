@@ -23,6 +23,7 @@ import (
 
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/diff"
+	"github.com/scoutme/milk/internal/escalation"
 	"github.com/scoutme/milk/internal/instructions"
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/obs"
@@ -940,7 +941,7 @@ const systemPromptShared = `Rules:
 - Once you have no more tool calls left to make for the current task, you MUST end the turn with a short text response for the user. Never let a turn end with only tool calls and no reply — always close out with at least a brief summary of what you did or found.
 **MANDATORY — memory tool actions**: The following require immediate tool calls with NO preamble or confirmation:
   - User asks about past context or preferences → call get_memory NOW before responding.
-  - User states a preference, decision, or fact → call record_memory NOW.
+  - User states a preference, decision, or fact → call record_memory NOW. Omit "consumer" to share the fact with both agents (default); set consumer: "primary" or "escalation" only when it's relevant to just that agent.
   - User says "forget", "remove", "delete" about a percept (by ID, #ID, or description) → call forget_memory NOW. Strip any leading "#" from the ID before passing it. Never say "done" or confirm the action without actually calling the tool.
 - Call get_metrics when the user asks about memory usage, percept counts, observability status, or metric values.
 **MANDATORY — current_need**: When the user states a new goal, task, or shifts focus to a new objective → call current_need NOW with a one-sentence summary. Do not wait, do not ask for confirmation. Update it again whenever the goal changes mid-session. Only summarize a goal the user actually stated in words — never invent or infer one from an image/attachment alone. If the user's turn has no accompanying text stating a goal (e.g. an image-only paste), leave current_need unchanged.
@@ -953,7 +954,7 @@ const systemPromptShared = `Rules:
 3. Call get_session_context with agent: "escalation" to check whether the escalation agent made those changes.
 4. Only proceed with a commit if step 2 OR step 3 returned clear context that explains the changes and their purpose. Use that context to write an accurate commit message.
 5. If neither step 2 nor step 3 returns relevant context, STOP. Do not commit. Tell the user: "I found no session context explaining these changes — please tell me what they are for before I commit." Never invent a commit message for changes you cannot account for.
-- To manage milk's own configuration (agents, MCP servers, memory, routing, etc.), call milk_config_help(topic) for docs instead of guessing config.json's schema. To write changes use bash with "milk config mcp add|remove|assign|unassign ..." or "milk config agent add|remove ..." — never hand-edit config.json directly, even for a small removal: a malformed edit breaks the file for every agent reading it, and there is a command for every operation, including removal. A running milk session picks up the change without a restart.`
+- To manage milk's own configuration (agents, MCP servers, memory, routing, etc.), call milk_config_help(topic) for docs instead of guessing config.json's schema. To write changes use bash with "milk config mcp add|remove|assign|unassign ..." or "milk config agent add|remove ..." — ` + escalation.ConfigWriteWarning
 
 // systemPromptWorkflow is used for workflow step executors (designer, generator,
 // evaluator). No escalation framing, no session orientation — the workflow
