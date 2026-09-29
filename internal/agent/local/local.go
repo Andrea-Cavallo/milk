@@ -1648,9 +1648,9 @@ func ParseBackgroundResult(raw string) (text, status, filesTouched string) {
 // A retried attempt writes into the same out as the attempt(s) before it, so
 // an attached viewer sees the retry happen rather than losing the earlier
 // output — that's intentional, not an oversight.
-func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID, cwd, task string, out io.Writer) (string, session.TokenUsage, error) {
+func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer) (string, session.TokenUsage, error) {
 	return retryBackgroundTask(ctx, jobID, a.model, func() (string, session.TokenUsage, error) {
-		return a.RunBackgroundTask(ctx, jobID, cwd, task, out)
+		return a.RunBackgroundTask(ctx, jobID, cwd, task, contextSummary, out)
 	})
 }
 
@@ -1686,7 +1686,18 @@ func retryBackgroundTask(ctx context.Context, jobID, model string, fn func() (st
 // own "primary"/"escalation" session totals — the caller (the job manager,
 // via dispatch.go) is responsible for recording the returned usage under
 // the "<role>:subagent" convention once the job completes.
-func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task string, out io.Writer) (string, session.TokenUsage, error) {
+//
+// contextSummary is non-empty only when the model opted in via
+// spawn_background_agent's full_context parameter — the spawning agent's
+// own sess.LastLocalSummary (already sanitized and budget-capped for
+// exactly this kind of hand-off, see session.Session's doc comment),
+// injected as extra orientation. Deliberately reuses that existing capped
+// summary rather than snapshotting the raw, unbounded conversation array
+// the way a full-context fork otherwise might — see
+// docs/prompt-context-management-review.md §9's OpenCode ForkContext note
+// for the idea this borrows from, scoped down to fit milk's existing
+// isolation-by-default safety posture.
+func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer) (string, session.TokenUsage, error) {
 	// Operate on an isolated clone, not a directly. A background job is
 	// spawned into its own goroutine (see Manager.Spawn) and can easily
 	// still be running when the parent agent starts its very next turn on
@@ -1728,10 +1739,14 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task string, 
 		tools = append(tools, bg.mcpToolSet.Schemas(ctx)...)
 	}
 
-	msgs := []Message{
-		{Role: "system", Content: backgroundSystemPrompt(cwd)},
-		{Role: "user", Content: task},
+	msgs := []Message{{Role: "system", Content: backgroundSystemPrompt(cwd)}}
+	if contextSummary != "" {
+		msgs = append(msgs, Message{
+			Role:    "system",
+			Content: "[Context from the agent that spawned you — its own recent activity, for extra background beyond the task below]\n" + contextSummary,
+		})
 	}
+	msgs = append(msgs, Message{Role: "user", Content: task})
 	userMsgIdx := len(msgs) - 1
 
 	resultMsgs, err := bg.runToolLoop(ctx, msgs, tools, out, bgSess, nil, task, userMsgIdx, nil)
@@ -2164,18 +2179,23 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 	// so it survives past this turn ending. See Manager's doc comment.
 	if tc.Function.Name == "spawn_background_agent" && a.backgroundManager != nil {
 		var args struct {
-			Task  string `json:"task"`
-			Label string `json:"label"`
+			Task        string `json:"task"`
+			Label       string `json:"label"`
+			FullContext bool   `json:"full_context"`
 		}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args) //nolint:errcheck
 		cwd := ""
+		var contextSummary string
 		if sess != nil {
 			cwd = sess.CWD
+			if args.FullContext {
+				contextSummary = sess.LastLocalSummary
+			}
 		}
 		role := agentRoleForMetrics(a.escalationName)
 		job := a.backgroundManager.Spawn(args.Label, args.Task, role, a.model,
 			func(jobCtx context.Context, jobID string, jobOut io.Writer) (string, session.TokenUsage, error) {
-				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, jobOut)
+				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, contextSummary, jobOut)
 			})
 		result := toolResult{Output: fmt.Sprintf("Spawned background agent %s (%q). You will be notified when it completes.", job.ID, args.Label)}.String()
 		return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}

@@ -89,7 +89,7 @@ func TestLiveBackgroundObservability(t *testing.T) {
 	job := mgr.Spawn("live-e2e", "reply with the word OK", "primary", model,
 		func(jobCtx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
 			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, tmp,
-				"Reply with exactly the word: OK. Do not use any tools.", out)
+				"Reply with exactly the word: OK. Do not use any tools.", "", out)
 		})
 
 	// While it runs, the state file must already show it — a hard-killed
@@ -134,7 +134,7 @@ func TestLiveBackgroundObservability(t *testing.T) {
 	mgr2.Spawn("live-timeout", "reply verbosely", "primary", model,
 		func(jobCtx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
 			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, tmp,
-				"Write a very long, detailed essay about the history of computing. Do not use any tools.", out)
+				"Write a very long, detailed essay about the history of computing. Do not use any tools.", "", out)
 		})
 	tj := waitDone(t, done2, 2*time.Minute)
 	if tj.Status != JobFailed {

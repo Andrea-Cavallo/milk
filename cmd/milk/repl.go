@@ -2787,7 +2787,7 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	// of that channel and it is blocked waiting for Update to return.
 	return m, func() tea.Msg {
 		job := mgr.Spawn(label, task, "user", modelName, func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
-			return agent.RunBackgroundTask(ctx, jobID, cwd, task, out)
+			return agent.RunBackgroundTask(ctx, jobID, cwd, task, "", out)
 		})
 		return backgroundSpawnedMsg{jobID: job.ID, label: label}
 	}

@@ -563,8 +563,9 @@ func spawnBackgroundAgentSchema() map[string]any {
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task":  map[string]any{"type": "string", "description": "The self-contained question or task for the background agent. Include everything it needs — it does not see your conversation."},
-					"label": map[string]any{"type": "string", "description": `Short human-readable label for status display, e.g. "analyze level-gen code".`},
+					"task":         map[string]any{"type": "string", "description": "The self-contained question or task for the background agent. Include everything it needs — it does not see your conversation."},
+					"label":        map[string]any{"type": "string", "description": `Short human-readable label for status display, e.g. "analyze level-gen code".`},
+					"full_context": map[string]any{"type": "boolean", "description": "Rarely needed — default false. When true, the job also receives a summary of your own recent activity in this conversation, for a task that genuinely depends on what you've been doing (not just a self-contained question). This makes the job more expensive and defeats most of the point of forking (keeping your context small doesn't help if the fork re-pays that cost) — prefer putting everything the task needs directly in the task text instead."},
 				},
 				"required": []string{"task", "label"},
 			},
