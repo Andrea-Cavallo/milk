@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -1799,8 +1800,7 @@ func isSessionContextTool(name string) bool {
 const sessionContextResultMaxBytes = 8000 // ~2000 tokens, enough for recent context summary
 
 // capMemToolResult truncates the output field of a toolResult JSON string so
-// that the total content size stays within maxBytes. A truncation notice is
-// appended so the model knows not all results were returned.
+// that the total content size stays within maxBytes.
 // When maxBytes is 0 the result is returned unchanged.
 func capMemToolResult(result string, maxBytes int) string {
 	if maxBytes <= 0 {
@@ -1813,17 +1813,62 @@ func capMemToolResult(result string, maxBytes int) string {
 	if len(r.Output) <= maxBytes {
 		return result
 	}
-	const notice = "\n... (truncated)"
-	cut := maxBytes - len(notice)
-	if cut < 0 {
-		cut = 0
-	}
-	r.Output = r.Output[:cut] + notice
+	r.Output = truncateHeadAndTail(r.Output, maxBytes)
 	b, err := json.Marshal(r)
 	if err != nil {
 		return result
 	}
 	return string(b)
+}
+
+// truncateHeadAndTail keeps both the start and the end of s within maxBytes,
+// with an omission marker in between, instead of a head-only cut. Shell,
+// build, and test output typically carries its most important signal (an
+// error, a failing assertion, an exit status) at the end — a head-only
+// truncation silently drops exactly that.
+func truncateHeadAndTail(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	marker := fmt.Sprintf("\n... (%d bytes omitted) ...\n", len(s)-maxBytes)
+	budget := maxBytes - len(marker)
+	if budget <= 0 {
+		return runeSafeHead(s, max(maxBytes, 0))
+	}
+	headLen := runeSafeLen(s, (budget+1)/2)
+	tailLen := runeSafeTailLen(s, budget-headLen)
+	return s[:headLen] + marker + s[len(s)-tailLen:]
+}
+
+// runeSafeHead returns the first n bytes of s, pulled back to the nearest
+// preceding UTF-8 rune boundary so a multi-byte character is never split.
+func runeSafeHead(s string, n int) string {
+	return s[:runeSafeLen(s, n)]
+}
+
+// runeSafeLen pulls a candidate byte length back to the nearest preceding
+// UTF-8 rune boundary within s.
+func runeSafeLen(s string, n int) int {
+	if n >= len(s) {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
+}
+
+// runeSafeTailLen pulls a candidate tail length back (i.e. shrinks it) so
+// that the resulting tail slice s[len(s)-n:] starts on a UTF-8 rune boundary.
+func runeSafeTailLen(s string, n int) int {
+	if n >= len(s) {
+		return len(s)
+	}
+	start := len(s) - n
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return len(s) - start
 }
 
 // toolCallOutcome holds the result of executing one tool call.

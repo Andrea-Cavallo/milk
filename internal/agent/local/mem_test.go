@@ -3,6 +3,7 @@ package local
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/scoutme/milk/internal/session"
 )
@@ -32,8 +33,24 @@ func TestCapMemToolResult_Truncated(t *testing.T) {
 	if len(got) == len(result) {
 		t.Error("expected result to be truncated")
 	}
-	if !strings.Contains(got, "truncated") {
-		t.Error("expected truncation notice in output")
+	if !strings.Contains(got, "omitted") {
+		t.Error("expected an omission notice in output")
+	}
+}
+
+// TestCapMemToolResult_PreservesTail verifies that truncation keeps both the
+// head and the tail of a long output — a build/test failure signal near the
+// end must survive, unlike the previous head-only truncation.
+func TestCapMemToolResult_PreservesTail(t *testing.T) {
+	body := "BEGIN-MARKER" + strings.Repeat("filler ", 500) + "FAIL: TestSomething END-MARKER"
+	result := `{"output":"` + body + `"}`
+	got := capMemToolResult(result, 200)
+
+	if !strings.Contains(got, "BEGIN-MARKER") {
+		t.Error("expected the head marker to survive truncation")
+	}
+	if !strings.Contains(got, "FAIL: TestSomething END-MARKER") {
+		t.Error("expected the tail marker (the actual failure signal) to survive truncation")
 	}
 }
 
@@ -50,6 +67,34 @@ func TestCapMemToolResult_EmptyOutput(t *testing.T) {
 	got := capMemToolResult(result, 10)
 	if got != result {
 		t.Errorf("expected unchanged when output field is empty, got %q", got)
+	}
+}
+
+// --- truncateHeadAndTail ---
+
+func TestTruncateHeadAndTail_WithinLimit(t *testing.T) {
+	s := "short string"
+	if got := truncateHeadAndTail(s, 100); got != s {
+		t.Errorf("expected unchanged when within limit, got %q", got)
+	}
+}
+
+func TestTruncateHeadAndTail_RuneSafe(t *testing.T) {
+	// Multi-byte runes throughout so any naive byte-index cut would split one.
+	s := strings.Repeat("日本語テスト", 200)
+	got := truncateHeadAndTail(s, 100)
+	if !utf8.ValidString(got) {
+		t.Errorf("expected valid UTF-8 output, got invalid string of length %d", len(got))
+	}
+}
+
+func TestTruncateHeadAndTail_TinyBudget(t *testing.T) {
+	s := strings.Repeat("x", 1000)
+	// Budget too small to fit head + marker + tail — must not panic and must
+	// still return a bounded, valid result.
+	got := truncateHeadAndTail(s, 5)
+	if len(got) > 5 {
+		t.Errorf("expected result to stay within the byte budget, got %d bytes", len(got))
 	}
 }
 
