@@ -16,8 +16,17 @@ import (
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
+	"github.com/scoutme/milk/internal/textbudget"
 	"github.com/scoutme/milk/internal/workflow"
 )
+
+// backgroundJobResultMaxChars bounds how much of a completed background
+// job's result is spliced into the next turn's prompt. Without this, a job
+// whose whole point is protecting the caller's context budget could blow
+// that budget right back open on delivery — see
+// docs/prompt-context-management-review.md §8 rec #3. Matches the workflow
+// engine's own sectionCharBudget (internal/workflow/interp/template.go).
+const backgroundJobResultMaxChars = 12000
 
 // drainBackgroundJobs collects results from any spawn_background_agent jobs
 // (ADR-0043) that completed since the last turn, records their token usage
@@ -51,7 +60,7 @@ func drainBackgroundJobs(ctx context.Context, mgr *local.Manager, sess *session.
 			}
 			continue
 		}
-		fmt.Fprintf(&b, "[background agent %q completed: %s]\n", j.Label, j.Result)
+		fmt.Fprintf(&b, "[background agent %q completed: %s]\n", j.Label, textbudget.SummarizeLong(j.Result, backgroundJobResultMaxChars))
 	}
 	if b.Len() > 0 {
 		b.WriteString("\n")

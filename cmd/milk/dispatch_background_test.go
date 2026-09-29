@@ -62,3 +62,33 @@ func TestDrainBackgroundJobs_FormatsCompletedAndFailed_RecordsTokens(t *testing.
 		t.Errorf("expected empty string on second drain, got %q", second)
 	}
 }
+
+// TestDrainBackgroundJobs_BoundsLargeResult verifies that a background job's
+// result is capped before being spliced into the next turn's prompt — a job
+// whose whole point is protecting the caller's context budget must not blow
+// that budget back open on delivery.
+func TestDrainBackgroundJobs_BoundsLargeResult(t *testing.T) {
+	mgr := local.NewManager(context.Background(), 3)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	mgr.SetOnDone(func(j *local.Job) { wg.Done() })
+
+	huge := "HEAD-MARKER" + strings.Repeat("x", backgroundJobResultMaxChars*3) + "TAIL-MARKER"
+	mgr.Spawn("summarize huge file", "task1", "primary", "test-model", func(ctx context.Context, _ string, _ io.Writer) (string, session.TokenUsage, error) {
+		return huge, session.TokenUsage{}, nil
+	})
+	wg.Wait()
+
+	sess := &session.Session{}
+	got := drainBackgroundJobs(context.Background(), mgr, sess)
+
+	if len(got) >= len(huge) {
+		t.Errorf("expected bounded output, got %d chars (input was %d)", len(got), len(huge))
+	}
+	if !strings.Contains(got, "HEAD-MARKER") {
+		t.Error("expected the head of the result to survive truncation")
+	}
+	if !strings.Contains(got, "TAIL-MARKER") {
+		t.Error("expected the tail of the result to survive truncation")
+	}
+}

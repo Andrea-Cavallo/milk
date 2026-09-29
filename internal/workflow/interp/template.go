@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"text/template"
+
+	"github.com/scoutme/milk/internal/textbudget"
 )
 
 // renderTemplate renders body as a Go text/template against vars. Missing
@@ -101,14 +103,9 @@ func truncateLargeVarsWithBudget(vars map[string]any) map[string]any {
 // summarizeLongOutput produces a condensed version of a long agent output
 // for use in subsequent prompt injections (e.g. {{.sprint_output}} in the
 // evaluator prompt). Keeps the first and last portions which typically
-// contain the summary and verdict.
+// contain the summary and verdict. Shared with cmd/milk/dispatch.go's
+// background-job result hand-off via internal/textbudget, rather than each
+// caller reimplementing the same head/tail truncation.
 func summarizeLongOutput(output string, maxChars int) string {
-	if len(output) <= maxChars {
-		return output
-	}
-	keepHead := maxChars * 2 / 3
-	keepTail := maxChars / 3
-	return output[:keepHead] +
-		fmt.Sprintf("\n\n[... %d chars omitted ...]\n\n", len(output)-keepHead-keepTail) +
-		output[len(output)-keepTail:]
+	return textbudget.SummarizeLong(output, maxChars)
 }
