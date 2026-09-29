@@ -196,7 +196,7 @@ Note: consecutive reasoning chunk repetition was removed from TUI signals — no
 
 1. **Streaming n-gram**: During reasoning streaming, every `reasoning_content` delta feeds a sliding 1000-token window. Two independent checks run: a block of 4+ tokens repeating 5+ times **consecutively** (verbatim back-to-back loop — an unambiguous signal, so the threshold is low), or any 4+ token block recurring 20+ times **within a 200-token span** anywhere in the window (a weaker, "thinking in circles" signal — a phrase can legitimately recur many times across a long analysis, so it needs more repetitions bounded by distance before it counts as a loop). Either check cuts the stream immediately and injects a recovery nudge.
 2. **Streak tracker**: After each tool-calling iteration, the reasoning text (truncated to 500 chars, normalised) is hashed. Three consecutive identical hashes trigger crop + nudge.
-3. **Duplicate tool calls**: After each iteration, tool calls are checked against previously executed calls. Exact matches trigger a nudge (not termination), matching MiMo-Code's approach.
+3. **Duplicate tool calls**: After each iteration, tool calls are checked against previously executed calls. Exact matches trigger a nudge (not termination), similarly to MiMo-Code's approach (an independent implementation compared during a 2026-09-29 review, not a port — see docs/prompt-context-management-review.md).
 4. **TUI-level**: `FeedChunk()` is called for every streaming chunk. A ring buffer tracks the last 50 chunks. Cross-turn signals fire after each turn completes.
 5. **Status bar**: Shows `⚠ loop — auto-interrupted` or `⚠ <signal>` when a signal fires.
 6. **Transcript**: Shows `[⚠ loop detected: <signal> (confidence N%)]` for high-confidence signals.

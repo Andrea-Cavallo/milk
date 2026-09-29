@@ -18,7 +18,10 @@ var numRe = regexp.MustCompile(`\b\d+(?:\.\d+)?\b`)
 // loop that reasoning models like mimo-v2.5-pro fall into, even when each
 // cycle has slightly different wording.
 //
-// Ported from MiMo-Code's TextNgramMonitor (text-ngram-detection.ts).
+// Inspired by MiMo-Code's TextNgramMonitor (text-ngram-detection.ts) — an
+// independent implementation of the same sliding-window n-gram detection
+// idea, not a port of its code. Compared directly during a
+// prompt/context-management review: see docs/prompt-context-management-review.md.
 type reasoningNgramMonitor struct {
 	tokens               []string
 	windowSize           int
@@ -36,7 +39,7 @@ const (
 	// unambiguous signal (no legitimate reason for the same block to repeat
 	// immediately), so it should fire fast to bound wasted tokens.
 	defaultNgramConsecutiveThreshold = 5
-	// defaultNgramSpacedThreshold is high, matching MiMo-Code's
+	// defaultNgramSpacedThreshold is high, similarly to MiMo-Code's
 	// Flag.MIMOCODE_TEXT_REPEAT_THRESHOLD: occurrences spread across the
 	// window are a weaker signal (a phrase can legitimately recur many
 	// times while the model makes real progress), so it needs more

@@ -11,6 +11,13 @@ import (
 	"github.com/scoutme/milk/internal/obs"
 )
 
+// Several of the thresholds and detectors in this file are similarly scoped
+// to loop-detection mechanisms in MiMo-Code, compared directly during a
+// 2026-09-29 prompt/context-management review — see
+// docs/prompt-context-management-review.md for the full comparison and the
+// reasoning behind each value. These are independent implementations that
+// converged on comparable numbers/structure, not ports of MiMo-Code's code.
+
 // loopStreakTracker detects when the model repeats the same reasoning or
 // tool-call pattern across consecutive assistant steps. mimo-v2.5 and other
 // reasoning models can get stuck producing near-identical reasoning that
@@ -34,7 +41,7 @@ type loopStreakTracker struct {
 const (
 	streakTriggerCount = 3
 	// streakMaxSpan bounds how much of the message tail cropLoopingMessages
-	// will delete when a streak is detected. Matches MiMo-Code's
+	// will delete when a streak is detected. Sized similarly to MiMo-Code's
 	// LOOP_STREAK_MAX_SPAN (64) — large enough to cover a real looping run,
 	// small enough that non-looping progress from earlier in a long turn
 	// survives the crop.
@@ -61,7 +68,7 @@ If you repeat the same action again the session will be terminated.
 </system-reminder>`
 
 // recoveryDuplicateToolMild is injected when the model repeats a tool call
-// it already executed with the same arguments.  Matching MiMo-Code's
+// it already executed with the same arguments — similarly to MiMo-Code's
 // repeated-step nudge approach: nudge first, don't terminate.
 const recoveryDuplicateToolMild = `<system-reminder>
 Your last step repeated a tool call you already executed with the same arguments.
@@ -98,8 +105,8 @@ Do NOT output the same phrases again.
 // allowed tool-loop iteration, with tools disabled for that call. It forces
 // the model to produce a real closing summary in its own words instead of
 // silently exhausting the iteration budget and falling through to a
-// mechanically-assembled tool-trail dump — matching MiMo-Code's max-steps
-// behavior (force a text-only wrap-up rather than a bare cutoff).
+// mechanically-assembled tool-trail dump — similarly to MiMo-Code's
+// max-steps behavior (force a text-only wrap-up rather than a bare cutoff).
 const maxIterSummaryReminder = `<system-reminder>
 MAXIMUM TOOL ITERATIONS REACHED for this turn. Tools are disabled for this
 response — you cannot call any more tools. Respond now with text only:
@@ -219,8 +226,8 @@ func (a *Agent) loopRecoveryAction(msgs []Message, userMsgIdx int, recoveryCount
 // contiguous assistant/tool tail can span far more than the actual looping
 // streak (everything since the last recovery nudge), and deleting all of it
 // wipes real, non-looping progress — forcing the model to rediscover work it
-// already did instead of just breaking the loop. Matches MiMo-Code's
-// LOOP_STREAK_MAX_SPAN bound on the equivalent crop.
+// already did instead of just breaking the loop. Sized similarly to
+// MiMo-Code's LOOP_STREAK_MAX_SPAN bound on the equivalent crop.
 func cropLoopingMessages(msgs []Message, startIdx int) []Message {
 	// Walk backwards from the end, removing assistant messages and their
 	// trailing tool results as long as they belong to the looping streak.
@@ -307,19 +314,20 @@ const (
 // batches allowed before terminating the turn. Separate from textLoopMaxRecovery
 // because duplicate tool calls are a weaker signal — re-reading a file after
 // an edit (read-edit-verify pattern) is legitimate and should not terminate
-// after just 3 repetitions. MiMo-Code uses a similar distinction between
-// text-loop (strong signal, low threshold) and tool-duplicate (weaker signal,
-// higher threshold).
+// after just 3 repetitions. MiMo-Code draws a similar distinction between
+// text-loop (strong signal, low threshold) and tool-duplicate (weaker
+// signal, higher threshold).
 const duplicateToolMaxRecovery = 5
 
 // ngramMaxRecovery is the number of n-gram repetition detections allowed
-// before terminating the turn. Matches MiMo-Code's TEXT_NGRAM_MAX_RECOVERY.
+// before terminating the turn. Sized similarly to MiMo-Code's
+// TEXT_NGRAM_MAX_RECOVERY.
 const ngramMaxRecovery = 2
 
 // doomLoopThreshold is the number of *consecutive* iterations issuing the
 // exact same tool-call batch before the hard doom-loop gate fires (see
-// runToolLoop's use of toolCallBatchSignature). Matches MiMo-Code's
-// DOOM_LOOP_THRESHOLD. Deliberately separate from duplicateToolMaxRecovery
+// runToolLoop's use of toolCallBatchSignature). Similarly named and scoped
+// to MiMo-Code's DOOM_LOOP_THRESHOLD. Deliberately separate from duplicateToolMaxRecovery
 // above: that detector nudges on any repeat of a call seen anywhere earlier
 // in the turn (a soft, self-recovery signal); this one requires the calls to
 // be back-to-back and, once reached, treats it as a safety event needing
@@ -346,7 +354,7 @@ func toolCallBatchSignature(toolCalls []toolCall) string {
 }
 
 // normalizeForTextLoop lowercases, collapses whitespace, strips leading
-// phrases, and truncates — matching MiMo-Code's normalizeForLoopDetection.
+// phrases, and truncates — similarly to MiMo-Code's normalizeForLoopDetection.
 func normalizeForTextLoop(text string) string {
 	text = strings.TrimSpace(text)
 	text = strings.ToLower(text)

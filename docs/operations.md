@@ -86,7 +86,7 @@ Operate inside the local agent's tool iteration loop. All share the same recover
 | **Streak tracker** | `loop_streak.go` | Same reasoning hash or tool-call signature across consecutive iterations | SHA-256 of normalised reasoning (truncated to 500 chars, leading phrases stripped) |
 | **Streaming n-gram** | `reasoning_ngram.go` | Periodic reasoning repetition during streaming ("I'm done → let me check → I'm done") | Sliding 500-token window, detects blocks of 4+ tokens repeating 10+ times consecutively. **Cuts the stream immediately** to save tokens. |
 | **Text-loop tracker** | `loop_streak.go` | Same output text across consecutive steps | Normalised text (200 chars, leading phrases stripped) compared across steps |
-| **Duplicate tool calls** | `local.go` | Model re-issues a tool call already executed with identical arguments | Exact match on tool name + arguments. Nudges first (matching MiMo-Code's approach); terminates after max recovery. |
+| **Duplicate tool calls** | `local.go` | Model re-issues a tool call already executed with identical arguments | Exact match on tool name + arguments. Nudges first (similarly to MiMo-Code's approach); terminates after max recovery. |
 
 ### TUI-level detector (`internal/loop/detector.go`)
 

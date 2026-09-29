@@ -1411,7 +1411,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		// seen anywhere earlier in the turn) is treated as a safety event
 		// needing confirmation, not another self-recovery nudge. Applies to
 		// every tool, not just write/mutate ones — 3 identical calls in a
-		// row has no legitimate read-only explanation either. Modeled on
+		// row has no legitimate read-only explanation either. Similarly to
 		// MiMo-Code's doom_loop mechanism: ask for interactive confirmation,
 		// or fail closed immediately when there is no one to ask (a
 		// background job or workflow-role turn) rather than risking an
@@ -1446,7 +1446,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 
 		// Deduplicate: if every tool call in this turn was already executed with
 		// the same arguments, the model is stuck in a loop.  Nudge it to change
-		// approach (matching MiMo-Code's repeated-step nudge) instead of
+		// approach (similarly to MiMo-Code's repeated-step nudge) instead of
 		// terminating immediately.  Only terminate after max recovery attempts.
 		//
 		// Applies to workflow executors too: a literal repeat of a write-tool
@@ -1693,10 +1693,10 @@ func retryBackgroundTask(ctx context.Context, jobID, model string, fn func() (st
 // exactly this kind of hand-off, see session.Session's doc comment),
 // injected as extra orientation. Deliberately reuses that existing capped
 // summary rather than snapshotting the raw, unbounded conversation array
-// the way a full-context fork otherwise might — see
-// docs/prompt-context-management-review.md §9's OpenCode ForkContext note
-// for the idea this borrows from, scoped down to fit milk's existing
-// isolation-by-default safety posture.
+// the way OpenCode/MiMo-Code's ForkContext otherwise does — see
+// docs/prompt-context-management-review.md §9.3: this is inspired by that
+// mechanism, scoped down to fit milk's existing isolation-by-default safety
+// posture rather than a port of it.
 func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer) (string, session.TokenUsage, error) {
 	// Operate on an isolated clone, not a directly. A background job is
 	// spawned into its own goroutine (see Manager.Spawn) and can easily

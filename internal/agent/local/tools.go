@@ -30,9 +30,10 @@ const errMemUnavailable = "memory store not available"
 const errTaskUnavailable = "task store not available"
 
 // maxReadLines is the default cap for read_file when no limit is given.
-// Matches MiMo-Code's DEFAULT_READ_LIMIT (2000) — large enough that a model
-// reads a whole file (or a substantial window of one) in a single call
-// instead of paging through it in small, iteration-burning slices.
+// Sized similarly to MiMo-Code's DEFAULT_READ_LIMIT (2000) — large enough
+// that a model reads a whole file (or a substantial window of one) in a
+// single call instead of paging through it in small, iteration-burning
+// slices.
 const maxReadLines = 2000
 
 // TaskStore is the subset of the tasks.Store interface used by the local agent.
