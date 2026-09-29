@@ -545,6 +545,19 @@ type AgentConfig struct {
 	// attempting the call).
 	DisableCompaction bool `json:"disable_compaction,omitempty"`
 
+	// BashAllowedPatterns is a static, admin-configured allow-list of bash
+	// command prefixes that never require a permission ask/grant for this
+	// agent — a finer-grained alternative to a blanket "bash" grant (see
+	// docs/prompt-context-management-review.md §8 rec #8). Each entry is
+	// matched against the tool call's actual "command" argument: an entry
+	// ending in "*" matches by prefix (e.g. "git diff*" matches "git diff
+	// --stat HEAD"); an entry with no "*" must match the whole command
+	// exactly. A command that doesn't match any pattern here falls through
+	// to the normal PermStore grant/ask flow unchanged — this only adds a
+	// fast, safe pre-approval path, it never narrows what a plain "bash"
+	// grant already allows.
+	BashAllowedPatterns []string `json:"bash_allowed_patterns,omitempty"`
+
 	// ContextWindowTokens is the context window size of this agent's model in
 	// tokens. When set and no explicit limits.message_budget_chars or
 	// limits.max_tool_iterations override is configured, milk auto-derives

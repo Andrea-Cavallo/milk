@@ -324,8 +324,12 @@ type Agent struct {
 	skipPerms        bool   // true when dangerously_skip_permissions is on: bypass all tool prompts
 	permStore        *PermStore
 	permAsk          func(tool, summary string) bool // returns true if user allows; nil = deny all (non-TUI)
-	onOpenFile       func(path string) error         // opens a file in the editor; nil = deny (non-TUI)
-	client           *http.Client
+	// bashAllowedPatterns is AgentConfig.BashAllowedPatterns: bash command
+	// prefixes pre-approved without a grant/ask, checked in checkPermission
+	// before the PermStore/permAsk flow (permissions.go's matchesBashPattern).
+	bashAllowedPatterns []string
+	onOpenFile          func(path string) error // opens a file in the editor; nil = deny (non-TUI)
+	client              *http.Client
 	// backgroundClient is a separate *http.Client — its own connection pool,
 	// its own auth-wrapper state (token cache, sigv4 credentials) — used for
 	// spawn_background_agent jobs instead of client. Background jobs run
@@ -692,6 +696,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 			limits:                     ac.Limits,
 			systemPromptTier:           ac.SystemPromptTier,
 			disableProjectInstructions: ac.DisableProjectInstructions,
+			bashAllowedPatterns:        ac.BashAllowedPatterns,
 			promptCaching:              ac.PromptCaching,
 			supportsVision:             ac.Vision,
 			maxPayloadBytes:            config.DefaultMaxPayloadBytes,
@@ -716,6 +721,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 		limits:                     ac.Limits,
 		systemPromptTier:           ac.SystemPromptTier,
 		disableProjectInstructions: ac.DisableProjectInstructions,
+		bashAllowedPatterns:        ac.BashAllowedPatterns,
 		supportsVision:             ac.Vision,
 		maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 	}
@@ -1742,9 +1748,22 @@ func toolNeedsPermission(name string) bool {
 }
 
 // checkPermission returns true if the tool may proceed. It checks skipPerms,
-// then the persistent store, then (if needed) asks the user interactively and
-// persists the answer. denied is returned as a toolResult string when false.
-func (a *Agent) checkPermission(tool, summary string) (allowed bool, denied string) {
+// then bashAllowedPatterns (bash only, commandArg is its "command" argument —
+// empty for every other tool), then the persistent store, then (if needed)
+// asks the user interactively and persists the answer. denied is returned as
+// a toolResult string when false.
+func (a *Agent) checkPermission(tool, summary, commandArg string) (allowed bool, denied string) {
+	if tool == "bash" && len(a.bashAllowedPatterns) > 0 && matchesBashPattern(commandArg, a.bashAllowedPatterns) {
+		obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_grants",
+			attribute.String("name", tool),
+			attribute.String("source", "bash_allowed_pattern"),
+		)
+		obs.Inc(context.Background(), inferenceScope, "milk.tools.outcomes",
+			attribute.String("name", tool),
+			attribute.String("outcome", "granted"),
+		)
+		return true, ""
+	}
 	if a.skipPerms {
 		obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_grants",
 			attribute.String("name", tool),
@@ -1926,7 +1945,8 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 			var argMap map[string]any
 			json.Unmarshal([]byte(tc.Function.Arguments), &argMap) //nolint:errcheck
 			summary := toolArgSummary(argMap)
-			if ok, d := a.checkPermission(tc.Function.Name, summary); !ok {
+			commandArg, _ := argMap["command"].(string)
+			if ok, d := a.checkPermission(tc.Function.Name, summary, commandArg); !ok {
 				denied[i] = d
 			}
 		}

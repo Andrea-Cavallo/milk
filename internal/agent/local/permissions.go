@@ -94,3 +94,28 @@ func (p *PermStore) save(pf permFile) error {
 	}
 	return os.WriteFile(p.path, data, 0o600)
 }
+
+// matchesBashPattern reports whether command matches any of patterns. A
+// pattern ending in "*" matches by prefix (the "*" itself is stripped before
+// comparing); a pattern with no "*" must match the whole command exactly.
+// Both sides are compared after TrimSpace so incidental leading/trailing
+// whitespace in the model's own command string doesn't cause a false miss.
+func matchesBashPattern(command string, patterns []string) bool {
+	command = strings.TrimSpace(command)
+	for _, pat := range patterns {
+		pat = strings.TrimSpace(pat)
+		if pat == "" {
+			continue
+		}
+		if prefix, ok := strings.CutSuffix(pat, "*"); ok {
+			if strings.HasPrefix(command, prefix) {
+				return true
+			}
+			continue
+		}
+		if command == pat {
+			return true
+		}
+	}
+	return false
+}
