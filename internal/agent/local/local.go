@@ -21,6 +21,7 @@ import (
 
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/diff"
+	"github.com/scoutme/milk/internal/instructions"
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
@@ -401,6 +402,9 @@ type Agent struct {
 	// systemPromptTier selects the verbosity level of the system prompt.
 	// Valid values: "minimal", "standard" (default), "full". Empty = "standard".
 	systemPromptTier string
+	// disableProjectInstructions turns off loading the target repo's
+	// AGENTS.md/CLAUDE.md into the system prompt (AgentConfig.DisableProjectInstructions).
+	disableProjectInstructions bool
 	// promptCaching enables AWS Bedrock's explicit cachePoint prompt caching
 	// (AgentConfig.PromptCaching). Only meaningful when useBedrockNative is
 	// true; ignored otherwise. EXPERIMENTAL — see AgentConfig.PromptCaching.
@@ -604,7 +608,7 @@ func (a *Agent) SystemOverheadChars(sess *session.Session) int {
 	if sess != nil {
 		cwd = sess.CWD
 	}
-	n := len(buildSystemPrompt(cwd, a.selfName, a.escalationName, a.workflowRole, a.systemPromptTier))
+	n := len(buildSystemPrompt(cwd, a.selfName, a.escalationName, a.workflowRole, a.systemPromptTier, a.disableProjectInstructions))
 	// No tag instruction overhead for local HTTP agents — they use injected tools.
 	return n
 }
@@ -663,19 +667,20 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 
 	if strings.ToLower(strings.TrimSpace(ac.Provider)) == "bedrock" {
 		return &Agent{
-			baseURL:          strings.TrimRight(ac.URL, "/"),
-			model:            ac.Model,
-			chatPath:         ac.ChatPath,
-			skipHealthCheck:  true,
-			useBedrockNative: true,
-			client:           &http.Client{Transport: transport},
-			backgroundClient: &http.Client{Transport: bgTransport},
-			sigv4:            sv4,
-			limits:           ac.Limits,
-			systemPromptTier: ac.SystemPromptTier,
-			promptCaching:    ac.PromptCaching,
-			supportsVision:   ac.Vision,
-			maxPayloadBytes:  config.DefaultMaxPayloadBytes,
+			baseURL:                    strings.TrimRight(ac.URL, "/"),
+			model:                      ac.Model,
+			chatPath:                   ac.ChatPath,
+			skipHealthCheck:            true,
+			useBedrockNative:           true,
+			client:                     &http.Client{Transport: transport},
+			backgroundClient:           &http.Client{Transport: bgTransport},
+			sigv4:                      sv4,
+			limits:                     ac.Limits,
+			systemPromptTier:           ac.SystemPromptTier,
+			disableProjectInstructions: ac.DisableProjectInstructions,
+			promptCaching:              ac.PromptCaching,
+			supportsVision:             ac.Vision,
+			maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 		}
 	}
 
@@ -685,19 +690,20 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 		chatPath = "/v1/responses"
 	}
 	return &Agent{
-		baseURL:          strings.TrimRight(ac.URL, "/"),
-		model:            ac.Model,
-		selfName:         ac.Name,
-		chatPath:         chatPath,
-		tokenCmd:         tct,
-		useResponsesAPI:  useResponses,
-		skipHealthCheck:  useResponses, // remote API providers typically have no /health
-		client:           &http.Client{Transport: transport},
-		backgroundClient: &http.Client{Transport: bgTransport},
-		limits:           ac.Limits,
-		systemPromptTier: ac.SystemPromptTier,
-		supportsVision:   ac.Vision,
-		maxPayloadBytes:  config.DefaultMaxPayloadBytes,
+		baseURL:                    strings.TrimRight(ac.URL, "/"),
+		model:                      ac.Model,
+		selfName:                   ac.Name,
+		chatPath:                   chatPath,
+		tokenCmd:                   tct,
+		useResponsesAPI:            useResponses,
+		skipHealthCheck:            useResponses, // remote API providers typically have no /health
+		client:                     &http.Client{Transport: transport},
+		backgroundClient:           &http.Client{Transport: bgTransport},
+		limits:                     ac.Limits,
+		systemPromptTier:           ac.SystemPromptTier,
+		disableProjectInstructions: ac.DisableProjectInstructions,
+		supportsVision:             ac.Vision,
+		maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 	}
 }
 
@@ -976,7 +982,9 @@ const taskToolGuidance = `create_task/update_task/list_tasks/complete_task track
 // tier controls prompt verbosity: "minimal" omits tool-use instructions and
 // reasoning guidance; "standard" is the default; "full" adds extra guidance.
 // Empty tier is treated as "standard".
-func buildSystemPrompt(cwd, selfName, escalationName string, workflowRole bool, tier string) string {
+// disableProjectInstructions turns off appending the target repo's
+// AGENTS.md/CLAUDE.md content (see internal/instructions).
+func buildSystemPrompt(cwd, selfName, escalationName string, workflowRole bool, tier string, disableProjectInstructions bool) string {
 	// Normalise tier.
 	switch tier {
 	case "minimal", "full":
@@ -1043,7 +1051,13 @@ func buildSystemPrompt(cwd, selfName, escalationName string, workflowRole bool, 
 	if cwd == "" {
 		return base
 	}
-	return base + "\n\nWorking directory: " + cwd
+	base += "\n\nWorking directory: " + cwd
+	if !disableProjectInstructions {
+		if block := instructions.Block(cwd, true); block != "" {
+			base += "\n\n" + block
+		}
+	}
+	return base
 }
 
 // normalizePrompt lowercases and collapses whitespace for repetition comparison.
@@ -1197,7 +1211,7 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		return history, &EscalationSignal{Reason: "user repeated the same question without expressing satisfaction"}
 	}
 
-	systemPrompt := buildSystemPrompt(sess.CWD, a.selfName, a.escalationName, a.workflowRole, a.systemPromptTier)
+	systemPrompt := buildSystemPrompt(sess.CWD, a.selfName, a.escalationName, a.workflowRole, a.systemPromptTier, a.disableProjectInstructions)
 	if a.backgroundManager != nil {
 		systemPrompt += "\n\n" + backgroundAgentGuidance
 	}

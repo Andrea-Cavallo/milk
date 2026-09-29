@@ -528,6 +528,12 @@ type AgentConfig struct {
 	// Empty string is treated as "standard".
 	SystemPromptTier string `json:"system_prompt_tier,omitempty"`
 
+	// DisableProjectInstructions turns off loading the target repo's
+	// AGENTS.md/CLAUDE.md into this agent's system/static context. Default:
+	// false (enabled) — set true if a repo's instructions file is irrelevant
+	// or wrong for this particular agent.
+	DisableProjectInstructions bool `json:"disable_project_instructions,omitempty"`
+
 	// ContextWindowTokens is the context window size of this agent's model in
 	// tokens. When set and no explicit limits.message_budget_chars or
 	// limits.max_tool_iterations override is configured, milk auto-derives

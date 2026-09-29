@@ -20,6 +20,7 @@ import (
 	"github.com/scoutme/milk/internal/agentprompt"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/escalation"
+	"github.com/scoutme/milk/internal/instructions"
 	"github.com/scoutme/milk/internal/mcp"
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/session"
@@ -488,6 +489,12 @@ func (r *cliRunner) Execute(
 		default: // RoleEscalation
 			s = escalation.BuildStaticContext(nonce, percepts, mode, inject, primaryName, escalationName)
 		}
+		if role != RoleWorkflow && !roleAC.DisableProjectInstructions {
+			// AGENTS.md only, no CLAUDE.md fallback: the Claude CLI already loads
+			// the repo's own CLAUDE.md natively, so injecting it again here would
+			// only duplicate tokens milk doesn't need to send.
+			s += instructions.Block(sess.CWD, false)
+		}
 		if cfg.ExperimentalPermissionManagement {
 			s += permissionManagementInstruction
 		}
@@ -804,6 +811,11 @@ func (r *subprocessRunner) Execute(
 	default: // RoleEscalation
 		staticCtx = escalation.BuildStaticContext(nonce, percepts, ctxMode, injectInstructions, primaryName, escalationName)
 		dynamicCtx = escalation.BuildDynamicContext(sess, ctxMode)
+	}
+	if role != RoleWorkflow && !agentConfigForRole(cfg, role).DisableProjectInstructions {
+		// AGENTS.md only — see the identical comment in cliRunner.Execute's
+		// buildStatic for why no CLAUDE.md fallback here.
+		staticCtx += instructions.Block(sess.CWD, false)
 	}
 	if r.mcpToolSet != nil {
 		mcpBlock := escalation.BuildMCPContextBlock(r.mcpServers, r.mcpToolSet.Schemas(ctx))
