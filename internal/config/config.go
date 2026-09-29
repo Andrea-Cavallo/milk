@@ -534,6 +534,17 @@ type AgentConfig struct {
 	// or wrong for this particular agent.
 	DisableProjectInstructions bool `json:"disable_project_instructions,omitempty"`
 
+	// DisableCompaction turns off the one-extra-inference-call summarization
+	// step that runs when this agent's message history would otherwise be
+	// hard-dropped for exceeding message_budget_chars/local_context_budget_chars
+	// (see cmd/milk/main.go's trimLocalMessagesWithCompaction). Default: false
+	// (enabled) — set true to skip the extra call's latency/cost and fall back
+	// to a plain drop-oldest-first trim, e.g. for a model that summarizes
+	// poorly or a provider Summarize doesn't support (Bedrock, Responses API —
+	// those already fall back automatically, but the flag avoids even
+	// attempting the call).
+	DisableCompaction bool `json:"disable_compaction,omitempty"`
+
 	// ContextWindowTokens is the context window size of this agent's model in
 	// tokens. When set and no explicit limits.message_budget_chars or
 	// limits.max_tool_iterations override is configured, milk auto-derives

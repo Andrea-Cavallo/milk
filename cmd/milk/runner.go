@@ -257,7 +257,11 @@ func (r *localRunner) Execute(
 			overhead := agent.SystemOverheadChars(sess) + len(orientationText)
 			msgBudget = max(1, msgBudget-overhead)
 		}
-		if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+		if ac.DisableCompaction {
+			if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+				history = trimmed
+			}
+		} else if trimmed, ok := trimLocalMessagesWithCompaction(ctx, agent, sess, history, msgBudget); ok {
 			history = trimmed
 		}
 
@@ -285,7 +289,11 @@ func (r *localRunner) Execute(
 			overhead := agent.SystemOverheadChars(sess)
 			msgBudget = max(1, msgBudget-overhead)
 		}
-		if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+		if ac.DisableCompaction {
+			if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+				history = trimmed
+			}
+		} else if trimmed, ok := trimLocalMessagesWithCompaction(ctx, agent, sess, history, msgBudget); ok {
 			history = trimmed
 		}
 	}

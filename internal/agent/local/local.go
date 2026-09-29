@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -257,6 +258,17 @@ func (a *Agent) logRole() string {
 	}
 	return agentRoleForMetrics(a.escalationName)
 }
+
+// ModelName returns this agent's configured model identifier, for callers
+// outside the package that need to attribute token usage (e.g. a compaction
+// summarization call made from cmd/milk/main.go).
+func (a *Agent) ModelName() string { return a.model }
+
+// LogRole returns the same role string logRole uses internally for
+// token-usage attribution, exported so an external caller recording usage
+// for a call it made via an exported method (e.g. Summarize) can tag it
+// consistently with how the agent tags its own turns.
+func (a *Agent) LogRole() string { return a.logRole() }
 
 // jobAttrs returns obs key/value attributes tagging the originating
 // background job ID — spliced into log calls via logWarn/logDebug/logInfo
@@ -2936,6 +2948,78 @@ Task: ` + prompt
 	}
 	answer := strings.TrimSpace(strings.ToLower(result.Choices[0].Message.Content))
 	return strings.HasPrefix(answer, "escalate"), nil
+}
+
+// ErrCompactionUnsupported is returned by Summarize for providers that don't
+// go through the plain OpenAI-compatible chat_completions path (Bedrock, the
+// Responses API). Callers should fall back to a plain hard-drop of history
+// rather than blocking a turn on an unimplemented request shape.
+var ErrCompactionUnsupported = errors.New("compaction summarization not supported for this provider")
+
+// Summarize asks the model for a concise summary of text — used to compact
+// conversation history that would otherwise be hard-dropped once it exceeds
+// the message budget (see cmd/milk/main.go's trimLocalMessagesWithCompaction
+// and docs/prompt-context-management-review.md §8 rec #4). It is a plain,
+// single-shot, non-streaming, tool-free completion call — deliberately not
+// routed through Run/runToolLoop, which carry tool-calling, memory, and
+// percept side effects that have no place in a one-off summarization call.
+func (a *Agent) Summarize(ctx context.Context, text string) (string, session.TokenUsage, error) {
+	if a.useBedrockNative || a.useResponsesAPI {
+		return "", session.TokenUsage{}, ErrCompactionUnsupported
+	}
+	prompt := "Summarize the following conversation history concisely, in prose, preserving " +
+		"any facts, decisions, file paths, or constraints a continuing conversation would need. " +
+		"Do not add commentary about the summarization itself — respond with only the summary.\n\n" + text
+
+	req := chatRequest{
+		Model:       a.model,
+		Messages:    []Message{{Role: "user", Content: prompt}},
+		Stream:      false,
+		Temperature: 0,
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", session.TokenUsage{}, err
+	}
+	if a.logContext {
+		obs.LogPayload(a.inferenceURL()+" [compaction]", body, a.jobAttrs()...)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.inferenceURL(), bytes.NewReader(body))
+	if err != nil {
+		return "", session.TokenUsage{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := a.client.Do(httpReq)
+	if err != nil {
+		return "", session.TokenUsage{}, fmt.Errorf("inference server unreachable: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage,omitempty"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&result); err != nil {
+		return "", session.TokenUsage{}, err
+	}
+	var usage session.TokenUsage
+	if result.Usage != nil {
+		usage = session.TokenUsage{Prompt: result.Usage.PromptTokens, Completion: result.Usage.CompletionTokens}
+		obs.RecordTokens(ctx, a.model, a.logRole()+":compaction", usage.Prompt, usage.Completion)
+	}
+	if len(result.Choices) == 0 {
+		return "", usage, errors.New("compaction: no choices in response")
+	}
+	return strings.TrimSpace(result.Choices[0].Message.Content), usage, nil
 }
 
 // Ping checks whether the inference server is reachable and pre-seeds the
