@@ -114,15 +114,32 @@ func BuildPrimaryStaticContext(nonce string, percepts []string, mode ContextMode
 // is part of the cached prefix on every turn.
 //
 // ContextModeFirst:        brief · need · primary summary
-// ContextModeResume:       primary summary only (if changed since last injection)
+// ContextModeResume:       new-percepts diff · primary summary only (if changed since last injection)
 // ContextModeReturning:    brief · need · primary summary
-// ContextModeContinuation: primary summary only (if changed since last injection)
+// ContextModeContinuation: new-percepts diff · primary summary only (if changed since last injection)
+//
+// percepts is the same list passed to BuildStaticContext for this turn — on
+// First/Returning it is fully (re-)delivered there, so this function's job
+// is only to catch what BuildStaticContext does NOT re-send: a percept
+// recorded after the static block was last sent, surfaced here as a small
+// diff against sess.EscalationPerceptsInjected instead of staying invisible
+// until the session naturally re-enters First/Returning mode.
 //
 // (No escalation summary — --resume already gives Claude its full prior history.)
-func BuildDynamicContext(sess *session.Session, mode ContextMode) string {
+func BuildDynamicContext(sess *session.Session, mode ContextMode, percepts []string) string {
 	var b strings.Builder
+	defer func() { sess.EscalationPerceptsInjected = append([]string(nil), percepts...) }()
 
 	if mode == ContextModeResume || mode == ContextModeContinuation {
+		if fresh := newPercepts(percepts, sess.EscalationPerceptsInjected); len(fresh) > 0 {
+			b.WriteString("[New remembered facts]\n")
+			for _, p := range fresh {
+				b.WriteString("- ")
+				b.WriteString(p)
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
 		if sess.LastLocalSummary != "" && sess.LastLocalSummary != sess.LastLocalSummaryInjected {
 			b.WriteString("[Recent primary agent activity]\n")
 			b.WriteString(sess.LastLocalSummary)
@@ -214,10 +231,12 @@ func BuildPrimaryDynamicContext(sess *session.Session, mode ContextMode) string 
 
 // BuildContext is the legacy single-string builder kept for callers that have not
 // yet been migrated to the split BuildStaticContext/BuildDynamicContext API.
-// Deprecated: prefer BuildStaticContext + BuildDynamicContext to enable per-part
-// caching via two --append-system-prompt-file flags.
+// Deprecated: prefer BuildStaticContext + BuildDynamicContext, which keep the
+// stable static prefix and the per-turn dynamic content as separate strings
+// (see ADR-0004's 2026-09-30 update for why that's not the same as two
+// separate CLI flags).
 func BuildContext(sess *session.Session, nonce string, percepts []string, mode ContextMode, injectInstructions bool, primaryName, escalationName string) string {
-	dynamic := BuildDynamicContext(sess, mode)
+	dynamic := BuildDynamicContext(sess, mode, percepts)
 	static := BuildStaticContext(nonce, percepts, mode, injectInstructions, primaryName, escalationName)
 	if mode == ContextModeResume || mode == ContextModeContinuation {
 		// Resume/Continuation: dynamic summary only (static already in Claude's cached context).
@@ -225,6 +244,27 @@ func BuildContext(sess *session.Session, nonce string, percepts []string, mode C
 	}
 	// First/Returning: dynamic orientation first, then static instructions.
 	return dynamic + static
+}
+
+// newPercepts returns the entries of current not present in previous
+// (by exact content match), preserving current's order. Used by
+// BuildDynamicContext to find percepts recorded since the last turn that
+// delivered the full percept list.
+func newPercepts(current, previous []string) []string {
+	if len(current) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(previous))
+	for _, p := range previous {
+		seen[p] = true
+	}
+	var out []string
+	for _, p := range current {
+		if !seen[p] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // FormatPercepts renders a [Remembered facts] block when percepts is non-empty.

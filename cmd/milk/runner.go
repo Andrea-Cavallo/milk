@@ -235,7 +235,7 @@ func (r *localRunner) Execute(
 
 	case RoleEscalation:
 		// Inject orientation as a system message, build appropriately-scoped history.
-		orientationText := escalation.BuildDynamicContext(sess, ctxMode)
+		orientationText := escalation.BuildDynamicContext(sess, ctxMode, percepts)
 		perceptsText := escalation.FormatPercepts(percepts)
 		skipOther := cfg.ExperimentalLazyHistoryManagement
 
@@ -518,7 +518,7 @@ func (r *cliRunner) Execute(
 		case RolePrimary:
 			return escalation.BuildPrimaryDynamicContext(sess, mode)
 		default: // RoleEscalation
-			return escalation.BuildDynamicContext(sess, mode)
+			return escalation.BuildDynamicContext(sess, mode, percepts)
 		}
 	}
 
@@ -818,7 +818,7 @@ func (r *subprocessRunner) Execute(
 		dynamicCtx = escalation.BuildPrimaryDynamicContext(sess, ctxMode)
 	default: // RoleEscalation
 		staticCtx = escalation.BuildStaticContext(nonce, percepts, ctxMode, injectInstructions, primaryName, escalationName)
-		dynamicCtx = escalation.BuildDynamicContext(sess, ctxMode)
+		dynamicCtx = escalation.BuildDynamicContext(sess, ctxMode, percepts)
 	}
 	if role != RoleWorkflow && !agentConfigForRole(cfg, role).DisableProjectInstructions {
 		// AGENTS.md only — see the identical comment in cliRunner.Execute's
