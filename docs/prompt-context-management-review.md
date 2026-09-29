@@ -297,18 +297,83 @@ Ranked roughly by impact ÷ effort, highest first.
 
 ## 9. Distinctive techniques worth studying further (not immediate recommendations)
 
-- **MiMo-Code's checkpoint/distillation memory** (`dream`/`distill` subagents writing
-  `MEMORY.md`-style files, FTS-indexed) is architecturally close to milk's own Percept/NREM
-  consolidation system — worth a direct side-by-side design comparison in its own pass.
-- **MiMo-Code's "max mode"** — 5 parallel candidate generations judged by a separate pass — a
-  self-consistency/ensemble technique with no current milk analog; likely too expensive for the
-  local-model use case but potentially interesting for high-stakes escalation turns.
-- **OpenCode's frozen `ForkContext` snapshot** for full-context peer forks (exact system prompt +
-  message history frozen at spawn time, explicitly to preserve cache-prefix parity between parent
-  and fork) — relevant if milk ever wants a "full context" background-agent mode beyond today's
-  fully-isolated one.
-- **Cache-prefix stability as an explicit, tested invariant** in both reference projects (system
-  array always collapsed to a fixed number of messages specifically so cache breakpoints land in
-  the same place every turn) — milk's system-prompt tiering/role-awareness should be checked for
-  whether it ever changes the *shape* of the system array turn-to-turn in a way that would defeat
-  caching even where caching is implemented.
+Follow-up (2026-09-30): all four items below were revisited. Two were implemented (scaled down
+to fit milk's existing safety posture); two were researched and are written up here as decisions
+for you to make, not implemented — both are genuinely new product features/capabilities, not
+bug fixes, and exceed a "low-risk" bar on their own.
+
+### 9.1 MiMo-Code's checkpoint/distillation memory vs. milk's Percept/NREM — researched, not implemented
+
+Read `agent/prompt/dream.txt` and `session/checkpoint.ts` directly (`~/altworkspace/MiMo-Code`).
+These are fundamentally different in kind from milk's memory system, not just in degree:
+
+| | milk's Percept/NREM | MiMo-Code's `dream` |
+|---|---|---|
+| Trigger | Automatic, every session end | Manual, user-invoked slash command ("the user intentionally started it and is watching") |
+| Mechanism | Arithmetic decay/promote/prune over percept weights — no LLM call | A full LLM agent turn with bash/SQLite access |
+| Source material | Only facts the model proactively tagged (`<milk:percept:>`/`record_memory`) *during* the session | Retroactively mines raw trajectory (SQL over the full conversation + subagent history) for facts the model never flagged |
+| Verification | None — a percept is whatever string was tagged | Checks candidate facts against actual code (`glob`/`grep` for mentioned paths/functions), marks unverifiable claims `[unverified]` |
+| Output shape | Atomic fact strings with weight/producer/consumer metadata | Structured narrative Markdown (`MEMORY.md` with `## Rules`/`## Architecture decisions`/`## Patterns`/`## Gotchas` sections, size-capped, deduplicated, source-session-cited) |
+
+The practical gap this exposes: if the model *forgets* to call `record_memory` for something
+genuinely important, milk has no fallback — that fact is simply never captured, no matter how
+consequential. MiMo-Code's `dream` exists specifically to catch what a real-time tagging
+discipline misses, by reviewing raw history after the fact.
+
+**Why not implemented now:** a real equivalent means a new, fairly substantial capability — a
+dedicated review pass over raw session history (turns the model never flagged), likely its own
+prompt/subagent, a decision on whether it writes new percepts through the existing
+`record_memory` pipeline or a separate narrative file, and a decision on trigger (automatic at
+session end alongside `Consolidate()`, or a manual `/memory review`-style command). None of that
+is a small, additive tweak the way the four items below turned out to be — it's a new feature
+that changes what "memory" means for milk. Recommendation if you want to pursue it: start with
+manual/opt-in (mirrors `dream`'s own "user is watching" design), reusing `record_memory`'s
+existing consumer/producer/weight fields rather than inventing a parallel narrative-file system,
+so it plugs into the memory panel and NREM consolidation that already exist instead of running
+alongside them as a second, disconnected memory store.
+
+### 9.2 MiMo-Code's "max mode" ensemble — researched, not implemented
+
+Confirmed via `session/max-mode.ts`: the built-in `max` agent runs `DEFAULT_CANDIDATES = 5`
+parallel "propose-only" candidate streams for a turn, then a separate judge pass picks the best.
+A genuine self-consistency/ensemble technique, with no milk analog.
+
+**Why not implemented:** this is a cost/latency multiplier (5x the inference calls for one
+turn, plus a judge call) with real product implications — when does it trigger, who pays for it,
+how is the judge selected, does it apply to local models (where 5x calls to a small/cheap model
+might still be worth it) or only high-stakes escalation turns (where 5x calls to Claude is real
+money). None of that is answerable from the code alone; it's a scope decision for you. Flagging
+it here rather than guessing at a default. If it's interesting, the natural entry point would be
+scoped narrowly — e.g. an explicit `/escalate --ensemble` or a config flag on the escalation agent
+only, never the default path.
+
+### 9.3 OpenCode/MiMo-Code's frozen `ForkContext` — implemented (scaled down)
+
+Read `actor/spawn.ts` directly. `ForkContext` snapshots the parent's exact system prompt, full
+message history, permission ruleset, and tool schema at spawn time, for "full context" peer
+forks (used narrowly — checkpoint-writer and peer-agent replace, not ordinary subagents) — this
+preserves prompt-cache parity between parent and fork on infrastructure where that's affordable
+(the same provider/model reusing its own cache).
+
+Implemented as `spawn_background_agent`'s new `full_context` parameter
+(`feat(local): optional full_context for spawn_background_agent`), scaled down deliberately: a
+job requesting it gets the spawning agent's already-capped `sess.LastLocalSummary`, not a raw
+message-array snapshot. A raw snapshot doesn't get the same cache-parity benefit in milk's
+world (a fresh background job is frequently a different model/process with no shared cache to
+preserve) and would reintroduce exactly the unbounded-cost risk the rest of this review flagged
+elsewhere (§8 rec #3). Default behavior (parameter omitted) is unchanged — still fully isolated.
+
+### 9.4 Cache-prefix stability as an explicit invariant — implemented
+
+Checked whether milk's system-prompt tiering/role-awareness ever changes the *shape* of the
+system-message array turn-to-turn in a way that would defeat Bedrock's explicit caching. It did:
+`convertMessagesToConverse` flattens every system-role message into its own `system[]` entry, in
+order — `system[0]` is always the large, stable `buildSystemPrompt` output, and any
+percepts/current-need orientation land at `system[1:]`, small and turn-to-turn-varying. The
+original `appendSystemCachePoint` placed the single cachePoint at the *end* of that array,
+bundling the stable prompt and the volatile entries into one cached unit — invalidating the
+whole thing, including the expensive-to-reprocess system prompt, on every percept/need change.
+
+Fixed (`fix(bedrock): anchor the system cachePoint after the stable prefix, not the end`):
+the cachePoint now sits right after `system[0]`, so the actually-stable part caches independently
+of whatever dynamic content follows it. No change in breakpoint budget.
