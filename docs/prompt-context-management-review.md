@@ -2,6 +2,32 @@
 
 Date: 2026-09-29
 
+## Implementation status (2026-09-30)
+
+All 12 recommendations in §8 have been implemented, tested (unit + integration; live-verified
+against real backends where the fix's correctness depended on model behavior — project
+instructions, compaction summarization, the bash permission-pattern gate), and merged to `main`
+locally, one commit per step:
+
+| # | Recommendation | Commit |
+|---|---|---|
+| 1 | Project-instruction file loading (AGENTS.md/CLAUDE.md) | `feat(prompt): load project instructions...` |
+| 2 | Tail-aware tool-result truncation | `fix(local): keep both head and tail...` |
+| 3 | Bound background-agent result hand-off | `fix(dispatch): bound background-agent result size...` |
+| 4 | LLM-driven context compaction fallback | `feat(local): summarize dropped history...` |
+| 5 | ADR-0004 doc correction + caching measurement | `docs(adr-0004): correct the "two separate flags" claim...` |
+| 6 | Consolidate duplicated instruction prose | `refactor(prompt): share the config-write warning...` |
+| 7 | Percept re-injection on resumed escalation turns | `feat(escalation): re-inject new percepts...` |
+| 8 | Pattern-scoped bash permission pre-approval | `feat(local): pattern-scoped bash permission pre-approval` |
+| 9 | Hard doom-loop gate for identical repeated tool calls | `feat(local): hard doom-loop gate...` |
+| 10 | Distinguish budget-exhausted from stuck-loop in workflows | `fix(workflow): distinguish budget-exhausted steps...` |
+| 11 | Multi-breakpoint Bedrock prompt caching | `feat(bedrock): rolling double-buffer cache breakpoints...` — **unverified**, no Bedrock agent available |
+| 12 | Structured bg-job results, cancellation tool, per-workflow memory opt-in | `feat: structured background-job results...` |
+
+Not yet pushed to `origin/main` or opened as PRs — still local-only pending review. See the
+implementation plan this executed: `~/.claude/plans/moonlit-questing-puffin.md` (session-local,
+not in the repo).
+
 ## Method
 
 Code-level analysis of milk's four prompt/context surfaces (primary agent, escalation agent,
