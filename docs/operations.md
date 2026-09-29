@@ -168,7 +168,17 @@ The panel also opens itself the first time a task is created in the session (see
 | `max_background_agents` | `3` | Maximum number of background jobs allowed to actually execute concurrently per session; further calls queue rather than block the spawning turn. Non-positive values fall back to the default. |
 | `background_agent_timeout_minutes` | `20` | Per-job hard timeout once a job starts executing (queue time doesn't count); a job still running past this is terminated as failed, not retried. Deliberately generous: loop detection (streak tracker, streaming n-gram monitor, duplicate-tool-call detection — all run unmodified on a background job) is the actual defense against a job that's *stuck*; this timeout only needs to catch one that's genuinely still working but never finishing. Non-positive values fall back to the default. |
 
-Completed/failed jobs surface three ways: immediately in the TUI transcript and status bar (`⚙ N background agent(s) running`) as each one finishes; a live list in the background-agents panel (`/panel background` or **F3** — label, status, elapsed time; mirrors the tasks/memory panels; opens itself the moment a job is spawned, not just once one finishes — see [Keyboard shortcuts](#keyboard-shortcuts)); and, once the model is next free, an actual follow-up turn the agent produces automatically — no further input needed. Agent-initiated waves (the `spawn_background_agent` tool call) wait for every job in the wave to finish before that follow-up fires, so a multi-part research plan gets one consolidated report; a job the *user* spawns directly (pressing Enter again while the model is busy — same 3s window as the existing busy hint) delivers as soon as the model is free instead, since there's no wave to consolidate it with.
+Completed/failed jobs surface three ways: immediately in the TUI transcript and status bar (`⚙ N background agent(s) running`) as each one finishes; a live list in the background-agents panel (`/panel background` or **F3** — label, status, elapsed time; mirrors the tasks/memory panels; opens itself the moment a job is spawned, not just once one finishes — see [Keyboard shortcuts](#keyboard-shortcuts)); and, once the model is next free, an actual follow-up turn the agent produces automatically — no further input needed. Agent-initiated waves (the `spawn_background_agent` tool call) wait for every job in the wave to finish before that follow-up fires, so a multi-part research plan gets one consolidated report; a job the *user* spawns directly (**Ctrl+Enter** while the model is busy — requires terminal support for extended key protocols, or **Ctrl+J** as a universal fallback) delivers as soon as the model is free instead, since there's no wave to consolidate it with.
+
+The `/bg` slash command manages background agents interactively:
+
+| Command | Action |
+|---|---|
+| `/bg` or `/bg list` | List all background agents (ID, status, label, elapsed time) |
+| `/bg start <task>` | Spawn a background agent to research `<task>` (same as Ctrl+Enter while busy) |
+| `/bg stop <id>` | Terminate a running background agent by its ID |
+
+`/bg` is safe to use while an agent turn is in progress (it never dispatches a new turn). Use `/bg list` to see job IDs, then `/bg stop job_N` to cancel one that's no longer needed.
 
 **Watching a job (or workflow) live** (ADR-0047): double-click a job's row in the background panel (**F3**), or the workflow panel (**F4**) while a `/workflow` is running, to swap the main transcript for that job's/workflow's own live output — its tool calls and streamed text, kept off the main transcript the whole time, not just summarized after the fact. Esc detaches back to the main transcript, which keeps accumulating underneath the whole time. The buffer keeps growing after the job/workflow finishes, so re-attaching (or never detaching) still shows the full output; nothing auto-detaches on completion. `obs.Debug` logs `attach.start`/`attach.stop` with the job/workflow ID and label, so this is checkable from `milk.log` even without watching the terminal live.
 
@@ -247,6 +257,7 @@ When an agent calls `edit_file`/`write_file` (primary) or `Edit`/`Write` (Claude
 | Shortcut | Action |
 |---|---|
 | **Enter** | Submit prompt / accept tab completion |
+| **Ctrl+Enter** | Spawn a background agent from the current input (while an agent turn is in progress). **Ctrl+J** works as a universal fallback in terminals without extended key protocols. |
 | **Tab** | Cycle slash-command and @-path completions |
 | **Shift-Tab** | Reverse cycle completions |
 | **Ctrl-C** | Copy selection → clear input → cancel workflow/turn → quit (double press) |

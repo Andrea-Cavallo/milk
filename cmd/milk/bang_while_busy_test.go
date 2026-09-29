@@ -11,7 +11,7 @@ import (
 
 // TestHandleBusyKey_BangExecutesImmediately guards issue #128's core fix:
 // a "!"-prefixed command must run directly via launchPTYPane even while an
-// agent turn is in progress, not get funneled into the "press Enter again to
+// agent turn is in progress, not get funneled into the "Ctrl+Enter to
 // spawn a background agent" flow (which would hand the raw "!..." string to
 // an LLM agent that has no special handling for milk's own bang syntax).
 func TestHandleBusyKey_BangExecutesImmediately(t *testing.T) {
@@ -33,9 +33,6 @@ func TestHandleBusyKey_BangExecutesImmediately(t *testing.T) {
 	}
 	if !nm.directBashConcurrentTurn {
 		t.Error("expected directBashConcurrentTurn true: busy was already true when the bang ran")
-	}
-	if nm.busySpawnArmed {
-		t.Error("bang command must not arm the background-agent-spawn flow")
 	}
 }
 
