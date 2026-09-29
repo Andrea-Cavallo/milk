@@ -84,6 +84,7 @@ type Manager struct {
 	baseCtx       context.Context
 	sem           chan struct{}
 	jobs          map[string]*Job
+	cancels       map[string]context.CancelFunc
 	pending       []*Job
 	onStart       func(*Job)
 	onDone        func(*Job)
@@ -139,6 +140,7 @@ func NewManager(baseCtx context.Context, maxConcurrent int) *Manager {
 		baseCtx:           baseCtx,
 		sem:               make(chan struct{}, maxConcurrent),
 		jobs:              make(map[string]*Job),
+		cancels:           make(map[string]context.CancelFunc),
 		jobTimeout:        defaultJobTimeout,
 		heartbeatInterval: defaultHeartbeatInterval,
 	}
@@ -236,6 +238,10 @@ func (m *Manager) Spawn(label, task, role, model string, run JobRun) *Job {
 	m.persistLocked()
 	timeout := m.jobTimeout
 	onStart := m.onStart
+	// Create the job's cancelable context here (not in the goroutine) so
+	// Cancel() works even before the job acquires a concurrency slot.
+	jobCtx, jobCancel := context.WithCancel(m.baseCtx)
+	m.cancels[job.ID] = jobCancel
 	m.mu.Unlock()
 
 	obs.Event("background.spawned",
@@ -247,18 +253,22 @@ func (m *Manager) Spawn(label, task, role, model string, run JobRun) *Job {
 	}
 
 	go func() {
+		defer jobCancel() // clean up context if not already cancelled
 		select {
 		case m.sem <- struct{}{}:
-		case <-m.baseCtx.Done():
-			m.finish(job, "", session.TokenUsage{}, m.baseCtx.Err())
+		case <-jobCtx.Done():
+			m.finish(job, "", session.TokenUsage{}, jobCtx.Err())
+			m.mu.Lock()
+			delete(m.cancels, job.ID)
+			m.mu.Unlock()
 			return
 		}
 		defer func() { <-m.sem }()
 
-		jobCtx, cancel := context.WithTimeout(m.baseCtx, timeout)
-		defer cancel()
+		execCtx, execCancel := context.WithTimeout(jobCtx, timeout)
+		defer execCancel()
 		hbDone := m.startHeartbeat(job)
-		result, tokens, err := safeJobRun(jobCtx, job.ID, job.Live.Writer(), run)
+		result, tokens, err := safeJobRun(execCtx, job.ID, job.Live.Writer(), run)
 		close(hbDone)
 		// The job's own execution deadline firing (as opposed to the
 		// manager's baseCtx ending — i.e. milk shutting down) is this job
@@ -268,11 +278,14 @@ func (m *Manager) Spawn(label, task, role, model string, run JobRun) *Job {
 		// errors.Is(err, context.DeadlineExceeded) via jobTimeoutError.Is)
 		// is set even when the job body returned its own opaque error at
 		// the deadline instead of a wrapped context error.
-		if err != nil && m.baseCtx.Err() == nil &&
-			(errors.Is(err, context.DeadlineExceeded) || jobCtx.Err() == context.DeadlineExceeded) {
+		if err != nil && m.baseCtx.Err() == nil && jobCtx.Err() == nil &&
+			(errors.Is(err, context.DeadlineExceeded) || execCtx.Err() == context.DeadlineExceeded) {
 			err = &jobTimeoutError{timeout: timeout, err: err}
 		}
 		m.finish(job, result, tokens, err)
+		m.mu.Lock()
+		delete(m.cancels, job.ID)
+		m.mu.Unlock()
 	}()
 
 	return job
@@ -478,4 +491,19 @@ func (m *Manager) Jobs() []Job {
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].StartedAt.Before(out[k].StartedAt) })
 	return out
+}
+
+// Cancel terminates a running job by ID. Returns true if the job was found
+// and its context cancelled; false if the ID is unknown or the job already
+// finished. The job's goroutine will wind down asynchronously — its final
+// status will be JobFailed with a context.Canceled error.
+func (m *Manager) Cancel(id string) bool {
+	m.mu.Lock()
+	cancel, ok := m.cancels[id]
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
 }

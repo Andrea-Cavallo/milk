@@ -358,3 +358,66 @@ func waitGroupDone(wg *sync.WaitGroup) <-chan struct{} {
 	}()
 	return ch
 }
+
+// TestManager_Cancel_TerminatesRunningJob verifies Cancel() stops a running
+// job and the job finishes with a context.Canceled error.
+func TestManager_Cancel_TerminatesRunningJob(t *testing.T) {
+	mgr := NewManager(context.Background(), 2)
+	release := make(chan struct{})
+	defer close(release)
+
+	job := mgr.Spawn("cancellable", "t", "primary", "m", func(ctx context.Context, _ string, _ io.Writer) (string, session.TokenUsage, error) {
+		<-ctx.Done()
+		return "", session.TokenUsage{}, ctx.Err()
+	})
+
+	// Wait for the job to start executing.
+	for i := 0; i < 100; i++ {
+		if mgr.ActiveCount() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !mgr.Cancel(job.ID) {
+		t.Fatal("expected Cancel to return true for a running job")
+	}
+
+	// Wait for the job to wind down.
+	for i := 0; i < 100; i++ {
+		if mgr.ActiveCount() == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	jobs := mgr.Drain()
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 drained job, got %d", len(jobs))
+	}
+	if jobs[0].Status != JobFailed {
+		t.Errorf("expected cancelled job status=failed, got %s", jobs[0].Status)
+	}
+}
+
+// TestManager_Cancel_UnknownID_ReturnsFalse verifies Cancel on an unknown or
+// already-finished job returns false without panicking.
+func TestManager_Cancel_UnknownID_ReturnsFalse(t *testing.T) {
+	mgr := NewManager(context.Background(), 2)
+	if mgr.Cancel("job_999") {
+		t.Error("expected Cancel of unknown ID to return false")
+	}
+
+	// Also verify after a job completes.
+	done := make(chan struct{})
+	job := mgr.Spawn("quick", "t", "primary", "m", func(_ context.Context, _ string, _ io.Writer) (string, session.TokenUsage, error) {
+		close(done)
+		return "ok", session.TokenUsage{}, nil
+	})
+	<-done
+	time.Sleep(50 * time.Millisecond) // let finish() run
+
+	if mgr.Cancel(job.ID) {
+		t.Error("expected Cancel of finished job to return false")
+	}
+}

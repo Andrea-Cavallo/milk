@@ -269,14 +269,11 @@ func (m *model) statusTokens() string {
 	}
 
 	var prompt, completion int64
-	var cacheRead, cacheCreation int64
 	switch role {
 	case "escalation":
 		prompt, completion = m.escalationPrompt, m.escalationComp
-		cacheRead, cacheCreation = m.escalationCacheRead, m.escalationCacheCreation
 	default:
 		prompt, completion = m.primaryPrompt, m.primaryCompletion
-		cacheRead, cacheCreation = m.primaryCacheRead, m.primaryCacheCreation
 	}
 
 	lastPrompt := m.lastTurnPrompt[role]
@@ -308,7 +305,13 @@ func (m *model) statusTokens() string {
 			}
 		}
 	}
-	if ctxFragment := m.statusContextPressure(role, prompt+cacheRead+cacheCreation); ctxFragment != "" {
+	// ctx:x/y should reflect the actual conversation size (what the model
+	// sees in a single request), not the cumulative session total which grows
+	// without bound across turns. When idle, use the last turn's input tokens
+	// (prompt + cache) as the best available estimate; when busy,
+	// statusContextPressure already switches to the live char-based estimate.
+	perTurnInput := lastPrompt + m.lastTurnCacheRead[role] + m.lastTurnCacheCreate[role]
+	if ctxFragment := m.statusContextPressure(role, perTurnInput); ctxFragment != "" {
 		// Appended last and deliberately NOT run through the outer dim() below:
 		// dim/yellow/red all end with the same ANSI reset, so a colored fragment
 		// nested inside dim's string would have its own reset kill the dim state
@@ -335,8 +338,8 @@ const (
 
 // statusContextPressure returns a "ctx:x/y" fragment (or bare "ctx:x" when no
 // context window is configured) showing how much of the active agent's
-// context window the current prompt is using — live-estimated while busy
-// (mirrors the ↑~/↓~ estimate above it), the cumulative session prompt total
+// context window the current conversation is using — live-estimated while busy
+// (mirrors the ↑~/↓~ estimate above it), the last turn's real input tokens
 // while idle. The numerator includes cached tokens (cacheRead +
 // cacheCreation) since they occupy context window space.
 //

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/scoutme/milk/internal/agent/local"
@@ -172,12 +173,11 @@ func TestMaybeAutoFollowup_ActiveJobsRemain_DoesNotDispatch(t *testing.T) {
 	}
 }
 
-// TestHandleBusyKey_SecondEnterSpawnsBackgroundAgent verifies the new
-// busy-key flow: the first Enter while busy just arms a hint (does not
-// touch the textarea), and a second Enter while still armed spawns a
-// background job from whatever is currently in the textarea instead of
-// just re-showing the hint.
-func TestHandleBusyKey_SecondEnterSpawnsBackgroundAgent(t *testing.T) {
+// TestHandleBusyKey_CtrlJSpawnsBackgroundAgent verifies the busy-key flow:
+// Enter while busy just shows a hint (does not touch the textarea), and
+// Ctrl+J (the universal fallback for Ctrl+Enter) spawns a background job
+// from whatever is currently in the textarea.
+func TestHandleBusyKey_CtrlJSpawnsBackgroundAgent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sess, err := session.New("/repo", "")
 	if err != nil {
@@ -190,24 +190,21 @@ func TestHandleBusyKey_SecondEnterSpawnsBackgroundAgent(t *testing.T) {
 	m.busy = true
 	m.ta.SetValue("dig into the physics module")
 
-	// First Enter: arms the hint, leaves the textarea untouched.
+	// Enter: shows the hint, leaves the textarea untouched.
 	updated, _ := m.handleBusyKey(teaKeyEnter())
 	m2 := updated.(model)
-	if !m2.busySpawnArmed {
-		t.Fatal("expected the first Enter to arm the spawn hint")
-	}
 	if m2.ta.Value() != "dig into the physics module" {
-		t.Errorf("expected the textarea to survive the first Enter, got %q", m2.ta.Value())
+		t.Errorf("expected the textarea to survive Enter, got %q", m2.ta.Value())
+	}
+	if !strings.Contains(m2.busyHint, "Ctrl+Enter") {
+		t.Errorf("expected the hint to mention Ctrl+Enter, got %q", m2.busyHint)
 	}
 
-	// Second Enter: spawns — but the actual Spawn call is deferred into a
+	// Ctrl+J: spawns — the actual Spawn call is deferred into a
 	// tea.Cmd to avoid deadlocking bubbletea's unbuffered msgs channel
 	// (p.Send inside onStart would block if called from within Update).
-	updated2, cmd := m2.handleBusyKey(teaKeyEnter())
+	updated2, cmd := m2.handleBusyKey(tea.KeyMsg{Type: tea.KeyCtrlJ})
 	m3 := updated2.(model)
-	if m3.busySpawnArmed {
-		t.Error("expected busySpawnArmed to be cleared after spawning")
-	}
 	if m3.ta.Value() != "" {
 		t.Errorf("expected the textarea to be cleared after spawning, got %q", m3.ta.Value())
 	}
@@ -226,10 +223,46 @@ func TestHandleBusyKey_SecondEnterSpawnsBackgroundAgent(t *testing.T) {
 	}
 }
 
-// TestHandleBusyKey_EmptyInputDoesNotArm verifies pressing Enter with
-// nothing typed falls back to the plain "interrupt" hint rather than
-// arming a spawn that has nothing to spawn from.
-func TestHandleBusyKey_EmptyInputDoesNotArm(t *testing.T) {
+// TestHandleBusyKey_EnterDoesNotSpawn verifies Enter while busy only shows
+// the hint — it never spawns a background agent (the old double-Enter
+// trigger was too easy to fire accidentally).
+func TestHandleBusyKey_EnterDoesNotSpawn(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sess, err := session.New("/repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &interactiveState{sess: sess, cwd: "/repo", notifier: oversight.Noop{}}
+	mgr := local.NewManager(context.Background(), 3)
+	escAgent := local.New("http://127.0.0.1:1", "esc-model")
+	m := newModel(context.Background(), st, nil, dispatchAgents{backgroundMgr: mgr, escalationLocal: escAgent}, nil)
+	m.busy = true
+	m.ta.SetValue("dig into the physics module")
+
+	// First Enter: shows hint.
+	updated, _ := m.handleBusyKey(teaKeyEnter())
+	m2 := updated.(model)
+	if !strings.Contains(m2.busyHint, "Ctrl+Enter") {
+		t.Errorf("expected the hint to mention Ctrl+Enter, got %q", m2.busyHint)
+	}
+	if m2.ta.Value() != "dig into the physics module" {
+		t.Errorf("expected the textarea to survive Enter, got %q", m2.ta.Value())
+	}
+
+	// Second Enter: just shows the hint again — must NOT spawn.
+	updated2, _ := m2.handleBusyKey(teaKeyEnter())
+	m3 := updated2.(model)
+	if m3.ta.Value() != "dig into the physics module" {
+		t.Errorf("expected the textarea to survive a second Enter, got %q", m3.ta.Value())
+	}
+	if got := mgr.ActiveCount(); got != 0 {
+		t.Errorf("expected 0 active jobs after double-Enter, got %d", got)
+	}
+}
+
+// TestHandleBusyKey_EmptyInputShowsInterruptHint verifies pressing Enter with
+// nothing typed falls back to the plain "interrupt" hint.
+func TestHandleBusyKey_EmptyInputShowsInterruptHint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sess, err := session.New("/repo", "")
 	if err != nil {
@@ -241,9 +274,6 @@ func TestHandleBusyKey_EmptyInputDoesNotArm(t *testing.T) {
 
 	updated, _ := m.handleBusyKey(teaKeyEnter())
 	m2 := updated.(model)
-	if m2.busySpawnArmed {
-		t.Error("expected empty input not to arm the spawn hint")
-	}
 	if !strings.Contains(m2.busyHint, "Ctrl+C") {
 		t.Errorf("expected the plain interrupt hint, got %q", m2.busyHint)
 	}
@@ -360,5 +390,123 @@ func TestPanelCommand_Background(t *testing.T) {
 	m2 := updated.(model)
 	if !m2.panelBackground {
 		t.Fatal("expected /panel background to open the panel")
+	}
+}
+
+// TestBgCmd_List verifies /bg list renders the background-agents table.
+func TestBgCmd_List(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sess, err := session.New("/repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &interactiveState{sess: sess, cwd: "/repo", notifier: oversight.Noop{}}
+	mgr := local.NewManager(context.Background(), 3)
+	m := newModel(context.Background(), st, nil, dispatchAgents{backgroundMgr: mgr}, nil)
+
+	updated, _ := m.handleSlashInput("/bg", "list")
+	m2 := updated.(model)
+	transcript := m2.transcript.String()
+	if !strings.Contains(transcript, "background agents:") {
+		t.Errorf("expected background agents header, got %q", transcript)
+	}
+	if !strings.Contains(transcript, "(none)") {
+		t.Errorf("expected (none) for empty list, got %q", transcript)
+	}
+}
+
+// TestBgCmd_ListWithJobs verifies /bg list shows job ID, status, and label.
+func TestBgCmd_ListWithJobs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sess, err := session.New("/repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &interactiveState{sess: sess, cwd: "/repo", notifier: oversight.Noop{}}
+	mgr := local.NewManager(context.Background(), 3)
+	m := newModel(context.Background(), st, nil, dispatchAgents{backgroundMgr: mgr}, nil)
+
+	release := make(chan struct{})
+	defer close(release)
+	mgr.Spawn("investigate X", "do something", "user", "test-model", func(ctx context.Context, _ string, _ io.Writer) (string, session.TokenUsage, error) {
+		<-release
+		return "ok", session.TokenUsage{}, nil
+	})
+
+	updated, _ := m.handleSlashInput("/bg", "list")
+	m2 := updated.(model)
+	transcript := m2.transcript.String()
+	if !strings.Contains(transcript, "running") {
+		t.Errorf("expected running status, got %q", transcript)
+	}
+	if !strings.Contains(transcript, "investigate X") {
+		t.Errorf("expected job label, got %q", transcript)
+	}
+}
+
+// TestBgCmd_Stop verifies /bg stop cancels a running job.
+func TestBgCmd_Stop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sess, err := session.New("/repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &interactiveState{sess: sess, cwd: "/repo", notifier: oversight.Noop{}}
+	mgr := local.NewManager(context.Background(), 3)
+	m := newModel(context.Background(), st, nil, dispatchAgents{backgroundMgr: mgr}, nil)
+
+	job := mgr.Spawn("cancel me", "t", "user", "test-model", func(ctx context.Context, _ string, _ io.Writer) (string, session.TokenUsage, error) {
+		<-ctx.Done()
+		return "", session.TokenUsage{}, ctx.Err()
+	})
+
+	updated, _ := m.handleSlashInput("/bg", "stop "+job.ID)
+	m2 := updated.(model)
+	if !strings.Contains(m2.transcript.String(), "cancelling") {
+		t.Errorf("expected cancelling message, got %q", m2.transcript.String())
+	}
+
+	// Wait for the job to wind down.
+	for i := 0; i < 100; i++ {
+		if mgr.ActiveCount() == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestBgCmd_StopUnknownID verifies /bg stop with an unknown ID reports the miss.
+func TestBgCmd_StopUnknownID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sess, err := session.New("/repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &interactiveState{sess: sess, cwd: "/repo", notifier: oversight.Noop{}}
+	mgr := local.NewManager(context.Background(), 3)
+	m := newModel(context.Background(), st, nil, dispatchAgents{backgroundMgr: mgr}, nil)
+
+	updated, _ := m.handleSlashInput("/bg", "stop job_999")
+	m2 := updated.(model)
+	if !strings.Contains(m2.transcript.String(), "not found") {
+		t.Errorf("expected not-found message, got %q", m2.transcript.String())
+	}
+}
+
+// TestBgCmd_Usage verifies /bg with an unknown subcommand shows usage.
+func TestBgCmd_Usage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sess, err := session.New("/repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &interactiveState{sess: sess, cwd: "/repo", notifier: oversight.Noop{}}
+	mgr := local.NewManager(context.Background(), 3)
+	m := newModel(context.Background(), st, nil, dispatchAgents{backgroundMgr: mgr}, nil)
+
+	updated, _ := m.handleSlashInput("/bg", "frobnicate")
+	m2 := updated.(model)
+	if !strings.Contains(m2.transcript.String(), "usage:") {
+		t.Errorf("expected usage message, got %q", m2.transcript.String())
 	}
 }

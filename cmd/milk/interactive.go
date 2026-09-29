@@ -48,9 +48,10 @@ const cmdMCP = "/mcp"
 const cmdUpdate = "/update"
 const cmdServer = "/server"
 const cmdBash = "/bash"
+const cmdBg = "/bg"
 
 var slashCommands = []string{
-	cmdEscalate, cmdPrimary, cmdPaste, cmdLearn, cmdOtel, cmdMetrics, cmdUsage, cmdMemory, cmdExport, cmdHistory, cmdPanel, cmdForget, cmdSkipPerms, cmdAgent, cmdColorize, cmdThink, cmdSetup, cmdConfig, cmdOpen, cmdMCP, cmdUpdate, cmdWorkflow, cmdServer, cmdReload, cmdTasks, cmdTask, cmdAttach, cmdBash,
+	cmdEscalate, cmdPrimary, cmdPaste, cmdLearn, cmdOtel, cmdMetrics, cmdUsage, cmdMemory, cmdExport, cmdHistory, cmdPanel, cmdForget, cmdSkipPerms, cmdAgent, cmdColorize, cmdThink, cmdSetup, cmdConfig, cmdOpen, cmdMCP, cmdUpdate, cmdWorkflow, cmdServer, cmdReload, cmdTasks, cmdTask, cmdAttach, cmdBash, cmdBg,
 	"/new", "/drop", "/list", "/help", "/exit", "/quit",
 }
 
@@ -153,6 +154,12 @@ const interactiveHelp = `
   /panel workflow        toggle the workflow panel (right side) — also F4
   /tasks                 list current session and global tasks
   /task done <id>        mark a task done
+
+── Background agents ───────────────────────────────────────────────────
+  /bg                    list background agents (ID, status, label, elapsed)
+  /bg list               same as bare /bg
+  /bg start <task>       spawn a background agent to research <task>
+  /bg stop <id>          terminate a running background agent
 
 ── Display ──────────────────────────────────────────────────────────────
   /colorize              show current colorization mode
@@ -455,7 +462,9 @@ var promptFriendly = map[string]bool{
 }
 
 // busySafeCommands are slash commands that can run while an agent turn is in progress.
-// All are read-only or display-only and never dispatch a new agent turn.
+// All are read-only or display-only and never dispatch a new agent turn
+// (except /bg start, which spawns a background job — the same thing Ctrl+Enter
+// already does while busy — and /bg stop, which is an interrupt-style action).
 var busySafeCommands = map[string]bool{
 	"/help":     true,
 	cmdThink:    true,
@@ -468,6 +477,7 @@ var busySafeCommands = map[string]bool{
 	cmdExport:   true,
 	cmdPaste:    true,
 	cmdMCP:      true,
+	cmdBg:       true,
 }
 
 // handleSlashCommand processes a slash command with optional surrounding prompt text.

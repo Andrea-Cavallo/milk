@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/mcpauth"
 	"github.com/scoutme/milk/internal/memory"
@@ -75,6 +76,9 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	}
 	if cmd == cmdTask {
 		return m.handleTaskCmd(strings.TrimSpace(rest))
+	}
+	if cmd == cmdBg {
+		return m.handleBgCmd(strings.TrimSpace(rest))
 	}
 	if cmd == "/help" {
 		output := renderHelp(interactiveHelp, m.vpWidth())
@@ -218,6 +222,69 @@ func (m model) handleTaskCmd(arg string) (tea.Model, tea.Cmd) {
 	}
 	m.appendTranscript(fmt.Sprintf("%s task %s marked done\n", milkTag(), id))
 	return m, nil
+}
+
+// handleBgCmd handles /bg — list, start, and stop background agents.
+func (m model) handleBgCmd(arg string) (tea.Model, tea.Cmd) {
+	mgr := m.agents.backgroundMgr
+	if mgr == nil {
+		m.appendTranscript(milkTag() + " background agents unavailable — no inference-server-backed agent configured\n")
+		return m, nil
+	}
+	parts := strings.Fields(arg)
+	switch {
+	case len(parts) == 0 || parts[0] == "list":
+		return m.handleBgList(mgr), nil
+	case parts[0] == "start":
+		task := strings.TrimSpace(strings.TrimPrefix(arg, "start"))
+		if task == "" {
+			m.appendTranscript(milkTag() + " usage: /bg start <task>\n")
+			return m, nil
+		}
+		return m.spawnUserBackgroundAgent(task)
+	case parts[0] == "stop":
+		id := strings.TrimSpace(strings.TrimPrefix(arg, "stop"))
+		if id == "" {
+			m.appendTranscript(milkTag() + " usage: /bg stop <id>\n")
+			return m, nil
+		}
+		if mgr.Cancel(id) {
+			m.appendTranscript(fmt.Sprintf("%s background agent %s — cancelling\n", milkTag(), id))
+		} else {
+			m.appendTranscript(fmt.Sprintf("%s background agent %s not found or already finished\n", milkTag(), id))
+		}
+		return m, nil
+	default:
+		m.appendTranscript(milkTag() + " usage: /bg [list | start <task> | stop <id>]\n")
+		return m, nil
+	}
+}
+
+// handleBgList renders the background-agents table into the transcript.
+func (m model) handleBgList(mgr *local.Manager) model {
+	jobs := mgr.Jobs()
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s background agents:\n", milkTag())
+	if len(jobs) == 0 {
+		fmt.Fprintf(&sb, "  (none)\n")
+		m.appendTranscript(sb.String())
+		return m
+	}
+	for _, j := range jobs {
+		elapsed := ""
+		if !j.EndedAt.IsZero() {
+			elapsed = j.EndedAt.Sub(j.StartedAt).Round(time.Second).String()
+		} else {
+			elapsed = time.Since(j.StartedAt).Round(time.Second).String() + "…"
+		}
+		status := string(j.Status)
+		if j.TimedOut {
+			status = "timed-out"
+		}
+		fmt.Fprintf(&sb, "  %-8s  %-10s  %8s  %s\n", j.ID, status, elapsed, j.Label)
+	}
+	m.appendTranscript(sb.String())
+	return m
 }
 
 // handleReloadCmd re-parses config.json immediately and sends a configReloadMsg.

@@ -245,7 +245,7 @@ type backgroundSpawnedMsg struct {
 }
 
 // backgroundUserJobDoneMsg is sent when a user-initiated background job
-// (spawned via the busy-key "press Enter again" flow, not a tool call)
+// (spawned via the busy-key "Ctrl+Enter" flow, not a tool call)
 // finishes. Unlike backgroundBatchDoneMsg, this fires per job rather than
 // waiting for a whole wave — there's nothing to consolidate; the user forked
 // off one specific side-question and the result should reach the main agent
@@ -583,7 +583,7 @@ type model struct {
 	// together.
 	pendingBackgroundFollowup bool
 	// pendingUserBackgroundFollowup is the equivalent for a user-initiated
-	// spawn (armed via the busy-key "press Enter again" flow below, not a
+	// spawn (via the busy-key "Ctrl+Enter" flow below, not a
 	// tool call): there is no "wave" to consolidate, so this fires as soon
 	// as the model goes idle regardless of whether other jobs — agent- or
 	// user-initiated — are still running. Deliver what's ready rather than
@@ -668,16 +668,8 @@ type model struct {
 	panelSelDragging   bool
 	panelSelText       string
 
-	copyFeedback string // transient "[copied N chars]" shown in status bar
-	busyHint     string // transient "agent is responding" shown in status bar
-	// busySpawnArmed is true while busyHint is specifically the "press
-	// Enter again to spawn a background agent" prompt (as opposed to e.g.
-	// the slash-command-unavailable variant) — the next plain Enter while
-	// still armed spawns a background agent from the current textarea
-	// content instead of just re-showing the hint. Cleared by
-	// busyHintClearMsg (the same 3s timer as busyHint), by actually
-	// spawning, or by any other busyHint being set instead.
-	busySpawnArmed bool
+	copyFeedback   string // transient "[copied N chars]" shown in status bar
+	busyHint       string // transient "agent is responding" shown in status bar
 	credRefreshing bool   // true while any background credential refresh is running
 	credLabel      string // which credential is being refreshed (e.g. "AWS", "token")
 	credStatus     string // non-empty after refresh completes: last result message
@@ -774,9 +766,13 @@ type model struct {
 	// call within a multi-step tool-calling turn.
 	currentTurnInputChars int64
 	// lastTurnPrompt/Completion are per-role deltas from the last completed turn
-	// for each agent, captured at agentDoneMsg.
-	lastTurnPrompt     map[string]int64
-	lastTurnCompletion map[string]int64
+	// for each agent, captured at agentDoneMsg. lastTurnCacheRead/Creation track
+	// the cache-token deltas for the same turn — needed by ctx:x/y to estimate
+	// the actual conversation size sent to the model (per-turn, not cumulative).
+	lastTurnPrompt      map[string]int64
+	lastTurnCompletion  map[string]int64
+	lastTurnCacheRead   map[string]int64
+	lastTurnCacheCreate map[string]int64
 	// lastTokenRole tracks which role's counters were last displayed; used to detect
 	// role changes and clear stale last-turn counters between turns.
 	lastTokenRole string
@@ -879,6 +875,8 @@ func newModel(ctx context.Context, st *interactiveState, rtr *router.Router, age
 		lastUndoValue:       "\x00", // sentinel: never equals real textarea value, so first push always succeeds
 		lastTurnPrompt:      map[string]int64{"primary": 0, "escalation": 0},
 		lastTurnCompletion:  map[string]int64{"primary": 0, "escalation": 0},
+		lastTurnCacheRead:   map[string]int64{"primary": 0, "escalation": 0},
+		lastTurnCacheCreate: map[string]int64{"primary": 0, "escalation": 0},
 		loopDetector:        loop.New(st.cfg.LoopDetectionCfg()),
 	}
 }
@@ -917,6 +915,20 @@ func (m *model) refreshPrompt() {
 // inputLocked returns true when agent is running.
 func (m *model) inputLocked() bool { return m.busy }
 
+// isCtrlEnterCSI detects Ctrl+Enter from bubbletea's unknownCSISequenceMsg
+// String() representation ("?CSI[<decimal byte codes>]?"). Three known
+// terminal encodings: kitty CSI-u (13;5u), xterm modifyOtherKeys (27;5;13~),
+// and urxvt-style (13;5~). Ctrl modifier is always parameter 5.
+func isCtrlEnterCSI(s string) bool {
+	switch s {
+	case "?CSI[49 51 59 53 117]?", // ESC [ 13;5 u  (kitty CSI-u)
+		"?CSI[50 55 59 53 59 49 51 126]?", // ESC [ 27;5;13 ~  (xterm modifyOtherKeys)
+		"?CSI[49 51 59 53 126]?":          // ESC [ 13;5 ~  (urxvt)
+		return true
+	}
+	return false
+}
+
 // handleBusyKey handles key events while an agent turn is running.
 // It intercepts the three busy-specific cases, then delegates to handleKey
 // for all navigation, editing, history, undo/redo, and viewport scroll.
@@ -942,7 +954,7 @@ func (m model) handleBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// "!" is always available regardless of busy state (issue #128): it's
 		// an explicit, agent-bypassing request, so it must not be silently
-		// funneled into the "press Enter again to spawn a background agent"
+		// funneled into the "Ctrl+Enter to spawn a background agent"
 		// flow below, which would hand an LLM agent the raw "!..." string —
 		// the agent has no special handling for milk's own bang syntax.
 		if shellCmd, ok := stripBangPrefix(input); ok && !m.leadingPasted {
@@ -953,7 +965,6 @@ func (m model) handleBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.tabHints = nil
 			m.tabHintsBase = nil
 			m.busyHint = ""
-			m.busySpawnArmed = false
 			m.syncLayout()
 			m.appendTranscript(promptLabel(m.st) + colorizeTokens(input) + "\n")
 			if shellCmd == "" {
@@ -975,20 +986,24 @@ func (m model) handleBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.handleSlashInput(cmd, rest)
 			}
 			m.busyHint = cmd + " unavailable while agent is responding"
-			m.busySpawnArmed = false
 			return m, busyHintClearCmd()
-		}
-		if m.busySpawnArmed && input != "" {
-			return m.spawnUserBackgroundAgent(input)
 		}
 		if input == "" {
 			m.busyHint = "agent is responding — Ctrl+C to interrupt"
-			m.busySpawnArmed = false
 			return m, busyHintClearCmd()
 		}
-		m.busyHint = "agent is working — press Enter again to spawn a background agent with this"
-		m.busySpawnArmed = true
+		m.busyHint = "agent is working — Ctrl+Enter to spawn a background agent with this"
 		return m, busyHintClearCmd()
+	case "ctrl+j":
+		// Ctrl+Enter fallback: terminals without extended key protocols send
+		// \n (Ctrl+J) for Ctrl+Enter, which bubbletea reports as KeyCtrlJ —
+		// distinct from Enter (\r / KeyEnter). Primary Ctrl+Enter CSI
+		// handling lives in the main Update switch (unknownCSISequenceMsg).
+		input := strings.TrimSpace(stripCompletionPlaceholders(m.ta.Value()))
+		if input == "" {
+			return m, nil
+		}
+		return m.spawnUserBackgroundAgent(input)
 	case "tab":
 		// Tab completion not available while busy — ignore silently.
 		return m, nil
@@ -1104,6 +1119,10 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.lastTurnCompletion["escalation"] = newEscComp - m.escalationComp
 	m.lastTurnPrompt["primary"] = newPrimaryPrompt - m.primaryPrompt
 	m.lastTurnCompletion["primary"] = newPrimaryCompletion - m.primaryCompletion
+	m.lastTurnCacheRead["escalation"] = newEscCacheRead - m.escalationCacheRead
+	m.lastTurnCacheCreate["escalation"] = newEscCacheCreation - m.escalationCacheCreation
+	m.lastTurnCacheRead["primary"] = newPrimaryCacheRead - m.primaryCacheRead
+	m.lastTurnCacheCreate["primary"] = newPrimaryCacheCreation - m.primaryCacheCreation
 	m.primaryPrompt, m.primaryCompletion = newPrimaryPrompt, newPrimaryCompletion
 	m.escalationPrompt, m.escalationComp = newEscPrompt, newEscComp
 	m.primaryCacheRead, m.primaryCacheCreation = newPrimaryCacheRead, newPrimaryCacheCreation
@@ -1485,6 +1504,20 @@ func (m model) Init() tea.Cmd {
 // --- Update ---
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Ctrl+Enter arrives as bubbletea's unexported unknownCSISequenceMsg
+	// ([]byte) in terminals with extended key protocols — detect via its
+	// String() representation before the main type switch, which cannot
+	// match on the unexported type. The universal fallback (Ctrl+J, which
+	// some terminals send for Ctrl+Enter) is handled as tea.KeyCtrlJ inside
+	// handleBusyKey.
+	if s, ok := msg.(fmt.Stringer); ok && m.inputLocked() && isCtrlEnterCSI(s.String()) {
+		input := strings.TrimSpace(stripCompletionPlaceholders(m.ta.Value()))
+		if input != "" {
+			return m.spawnUserBackgroundAgent(input)
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleResize(msg)
@@ -1929,7 +1962,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case busyHintClearMsg:
 		m.busyHint = ""
-		m.busySpawnArmed = false
 		return m, nil
 
 	case dragResetMsg:
@@ -2711,8 +2743,8 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 const backgroundFollowupPrompt = local.BackgroundFollowupPrompt
 
 // spawnUserBackgroundAgent spawns a background research job (ADR-0043) from
-// text the user typed while the model was busy — the confirming second
-// Enter press while busySpawnArmed (see handleBusyKey). Unlike an
+// text the user typed while the model was busy — Ctrl+Enter (or Ctrl+J) while
+// busy with text in the input (see handleBusyKey). Unlike an
 // agent-initiated spawn_background_agent tool call, there is no
 // requirement that the currently-busy role itself be local-backed (the
 // in-flight turn could be running on claude-cli, which has no Manager at
@@ -2723,7 +2755,6 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	m.ta.Reset()
 	m.leadingPasted = false
 	m.busyHint = ""
-	m.busySpawnArmed = false
 	m.syncLayout()
 
 	mgr := m.agents.backgroundMgr
@@ -2773,7 +2804,7 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 //     backgroundBatchDoneMsg): the calling agent designed a consolidated,
 //     multi-part wave meant to be reported together, so this only fires
 //     once every currently-outstanding job has finished (ActiveCount == 0).
-//   - false (user-initiated, via the busy-key "press Enter again to spawn"
+//   - false (user-initiated, via the busy-key "Ctrl+Enter to spawn"
 //     flow and backgroundUserJobDoneMsg): there is no "wave" to
 //     consolidate — the user forked off one specific side-question while
 //     waiting on something else, so this fires as soon as the model is
