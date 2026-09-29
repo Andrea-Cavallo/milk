@@ -92,3 +92,35 @@ func TestDrainBackgroundJobs_BoundsLargeResult(t *testing.T) {
 		t.Error("expected the tail of the result to survive truncation")
 	}
 }
+
+// TestDrainBackgroundJobs_SurfacesStructuredResultTag verifies that a job
+// result ending with the optional structured tag (local.backgroundSystemPrompt)
+// has its status/files_touched surfaced in the formatted line, with the tag
+// itself stripped from the displayed text.
+func TestDrainBackgroundJobs_SurfacesStructuredResultTag(t *testing.T) {
+	mgr := local.NewManager(context.Background(), 3)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	mgr.SetOnDone(func(j *local.Job) { wg.Done() })
+
+	mgr.Spawn("find the bug", "task1", "primary", "test-model", func(ctx context.Context, _ string, _ io.Writer) (string, session.TokenUsage, error) {
+		return "found it in foo.go.\n" + `<result status="ok" files_touched="foo.go"/>`, session.TokenUsage{}, nil
+	})
+	wg.Wait()
+
+	sess := &session.Session{}
+	got := drainBackgroundJobs(context.Background(), mgr, sess)
+
+	if !strings.Contains(got, "status=ok") {
+		t.Errorf("expected status=ok surfaced, got %q", got)
+	}
+	if !strings.Contains(got, "files_touched=foo.go") {
+		t.Errorf("expected files_touched=foo.go surfaced, got %q", got)
+	}
+	if strings.Contains(got, "<result") {
+		t.Errorf("expected the raw tag stripped from the displayed text, got %q", got)
+	}
+	if !strings.Contains(got, "found it in foo.go.") {
+		t.Errorf("expected the free-form text preserved, got %q", got)
+	}
+}

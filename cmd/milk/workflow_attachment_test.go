@@ -110,8 +110,9 @@ func TestLaunchGenericWorkflow_ConsumesPendingAttachments(t *testing.T) {
 // Set isCLI to select the CLI branch (@path injection) or the local branch
 // (vision content parts via the imagePartReceiver interface below).
 type fakeTurnRunner struct {
-	isCLI   bool
-	prompts []string
+	isCLI         bool
+	prompts       []string
+	perceptsCalls [][]string
 }
 
 func (f *fakeTurnRunner) Name() string { return "fake" }
@@ -125,13 +126,14 @@ func (f *fakeTurnRunner) Execute(
 	_ AgentRole,
 	_ escalation.ContextMode,
 	_, _ string,
-	_ []string,
+	percepts []string,
 	_ bool,
 	prompt string,
 	_ TurnCallbacks,
 	_ io.Writer,
 ) (TurnResult, error) {
 	f.prompts = append(f.prompts, prompt)
+	f.perceptsCalls = append(f.perceptsCalls, percepts)
 	return TurnResult{Text: "ok"}, nil
 }
 

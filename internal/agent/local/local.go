@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -1301,7 +1302,7 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		tools = append(tools, a.mcpToolSet.Schemas(ctx)...)
 	}
 	if a.backgroundManager != nil {
-		tools = append(tools, spawnBackgroundAgentSchema())
+		tools = append(tools, spawnBackgroundAgentSchema(), cancelBackgroundAgentSchema())
 	}
 
 	if a.tagNonce != "" {
@@ -1599,11 +1600,43 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 func backgroundSystemPrompt(cwd string) string {
 	base := "You are a background research agent forked to answer one self-contained question. " +
 		"You have no knowledge of any parent conversation beyond the task given to you. " +
-		"Investigate using your tools and produce a concise, complete written answer — this is the only thing that will be reported back."
+		"Investigate using your tools and produce a concise, complete written answer — this is the only thing that will be reported back. " +
+		"Optionally, if it's useful for the caller to know at a glance, end your answer with a machine-readable tag on its own final line: " +
+		`<result status="ok|error|partial" files_touched="path1,path2"/> — omit it entirely when it doesn't add anything (e.g. a pure research/lookup task that touched no files).`
 	if cwd == "" {
 		return base
 	}
 	return base + "\n\nWorking directory: " + cwd
+}
+
+// backgroundResultTagRE matches the optional trailing structured-result tag
+// a background job's answer may end with (see backgroundSystemPrompt).
+// Attributes are optional and may appear in any order.
+var backgroundResultTagRE = regexp.MustCompile(`(?is)\s*<result\s+([^>]*?)/?>\s*$`)
+var backgroundResultAttrRE = regexp.MustCompile(`(\w+)="([^"]*)"`)
+
+// ParseBackgroundResult splits a background job's raw answer into its
+// display text and the optional structured tag's fields (see
+// backgroundSystemPrompt), for cmd/milk's drainBackgroundJobs to surface
+// alongside the free-form text instead of requiring the caller to parse
+// prose. status and filesTouched are "" when the tag is absent or a field
+// wasn't set — never an error condition, since the tag is opt-in.
+func ParseBackgroundResult(raw string) (text, status, filesTouched string) {
+	m := backgroundResultTagRE.FindStringSubmatchIndex(raw)
+	if m == nil {
+		return raw, "", ""
+	}
+	text = strings.TrimSpace(raw[:m[0]])
+	attrs := raw[m[2]:m[3]]
+	for _, am := range backgroundResultAttrRE.FindAllStringSubmatch(attrs, -1) {
+		switch am[1] {
+		case "status":
+			status = am[2]
+		case "files_touched":
+			filesTouched = am[2]
+		}
+	}
+	return text, status, filesTouched
 }
 
 // runBackgroundTaskWithRetry wraps RunBackgroundTask with the same transient
@@ -2145,6 +2178,22 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, jobOut)
 			})
 		result := toolResult{Output: fmt.Sprintf("Spawned background agent %s (%q). You will be notified when it completes.", job.ID, args.Label)}.String()
+		return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}
+	}
+
+	// cancel_background_agent: the model-facing counterpart to the human-only
+	// /bg stop command (see cancelBackgroundAgentSchema's doc comment).
+	if tc.Function.Name == "cancel_background_agent" && a.backgroundManager != nil {
+		var args struct {
+			JobID string `json:"job_id"`
+		}
+		json.Unmarshal([]byte(tc.Function.Arguments), &args) //nolint:errcheck
+		var result string
+		if a.backgroundManager.Cancel(args.JobID) {
+			result = toolResult{Output: fmt.Sprintf("Cancelled background agent %s.", args.JobID)}.String()
+		} else {
+			result = toolResult{Error: fmt.Sprintf("no running background agent with ID %q (already finished, or never existed)", args.JobID)}.String()
+		}
 		return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}
 	}
 

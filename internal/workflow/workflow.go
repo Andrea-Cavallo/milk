@@ -21,6 +21,17 @@ type TurnRunner interface {
 	Run(ctx context.Context, prompt string, out io.Writer) (string, error)
 }
 
+// MemoryAwareTurnRunner is an optional capability a TurnRunner may implement
+// to receive a per-call hint (set by the interpreter right before Run, from
+// the current Stage.UseMemory) about whether this specific call should have
+// memory percepts injected. Checked via a type assertion in
+// internal/workflow/interp's executeStage — an optional-capability pattern
+// (mirroring cmd/milk's own imagePartReceiver) rather than widening the base
+// TurnRunner interface for a capability only one adapter needs.
+type MemoryAwareTurnRunner interface {
+	SetUseMemoryForNextCall(bool)
+}
+
 // Workflow is a named multi-agent pipeline.
 type Workflow interface {
 	Name() string

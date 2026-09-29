@@ -572,6 +572,30 @@ func spawnBackgroundAgentSchema() map[string]any {
 	}
 }
 
+// cancelBackgroundAgentSchema is the schema for the cancel_background_agent
+// tool (docs/prompt-context-management-review.md §8 rec #12) — the
+// model-facing counterpart to the human-only `/bg stop` command, letting the
+// spawning agent itself cancel a job it decided is no longer needed. Gated
+// identically to spawnBackgroundAgentSchema (only appended when
+// a.backgroundManager is set), and for the same reason: never offered to a
+// background job's own tool list.
+func cancelBackgroundAgentSchema() map[string]any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "cancel_background_agent",
+			"description": "Cancel a background agent job you previously spawned via spawn_background_agent, by its job ID. Use this if you decide the answer is no longer needed (e.g. the user's request changed) — otherwise let it run to completion.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id": map[string]any{"type": "string", "description": "The job ID returned by spawn_background_agent."},
+				},
+				"required": []string{"job_id"},
+			},
+		},
+	}
+}
+
 func currentNeedSchema() map[string]any {
 	return map[string]any{
 		"type": "function",

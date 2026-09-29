@@ -73,6 +73,13 @@ type Stage struct {
 	// when the final evaluation reports no issues.
 	RunUnlessMarkerIn string `yaml:"run_unless_marker_in,omitempty" json:"run_unless_marker_in,omitempty"`
 	RunUnlessContains string `yaml:"run_unless_contains,omitempty" json:"run_unless_contains,omitempty"`
+	// UseMemory opts this agent_turn stage into the same percept injection
+	// primary/escalation turns get (see cmd/milk's perceptsForAgent). Default
+	// false: workflow roles are isolated from memory by design (a fresh
+	// scratch session per role, no session-orientation context) — this is a
+	// deliberate per-stage escape hatch, not a change to that default. See
+	// docs/prompt-context-management-review.md §8 rec #12.
+	UseMemory bool `yaml:"use_memory,omitempty" json:"use_memory,omitempty"`
 
 	// loop / parallel_group
 	// Over names the declared section label (e.g. "Sprint", parsed out of

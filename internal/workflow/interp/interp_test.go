@@ -762,6 +762,60 @@ func TestIsBudgetExhaustedTurn(t *testing.T) {
 	}
 }
 
+// memoryAwareFakeRunner additionally records SetUseMemoryForNextCall calls,
+// satisfying workflow.MemoryAwareTurnRunner like cmd/milk's workflowTurnRunner.
+type memoryAwareFakeRunner struct {
+	*fakeRunner
+	useMemoryCalls []bool
+}
+
+func (m *memoryAwareFakeRunner) SetUseMemoryForNextCall(v bool) {
+	m.useMemoryCalls = append(m.useMemoryCalls, v)
+}
+
+// TestExecAgentTurn_SetsUseMemoryFromStage verifies that Stage.UseMemory is
+// threaded down to a MemoryAwareTurnRunner via SetUseMemoryForNextCall
+// before each call, and that a plain (non-memory-aware) runner is left
+// alone — the type assertion must not panic on a runner that doesn't
+// implement the optional interface.
+func TestExecAgentTurn_SetsUseMemoryFromStage(t *testing.T) {
+	inner := &memoryAwareFakeRunner{fakeRunner: &fakeRunner{name: "w", responses: []string{"ok", "ok"}}}
+	def := workflow.Definition{
+		Name: "t",
+		Stages: []workflow.Stage{
+			{ID: "no_memory", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "go"},
+			{ID: "with_memory", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "go again", UseMemory: true},
+		},
+	}
+	r := New(def, "task")
+	if err := r.Run(context.Background(), runCfg(map[string]workflow.TurnRunner{"w": inner})); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(inner.useMemoryCalls) != 2 {
+		t.Fatalf("expected 2 SetUseMemoryForNextCall calls, got %d: %v", len(inner.useMemoryCalls), inner.useMemoryCalls)
+	}
+	if inner.useMemoryCalls[0] != false {
+		t.Errorf("expected first stage (no UseMemory) to set false, got %v", inner.useMemoryCalls[0])
+	}
+	if inner.useMemoryCalls[1] != true {
+		t.Errorf("expected second stage (UseMemory: true) to set true, got %v", inner.useMemoryCalls[1])
+	}
+}
+
+// TestExecAgentTurn_PlainRunner_NoMemoryAwareInterface verifies a runner
+// that doesn't implement MemoryAwareTurnRunner is simply skipped, not an error.
+func TestExecAgentTurn_PlainRunner_NoMemoryAwareInterface(t *testing.T) {
+	inner := &fakeRunner{name: "w", responses: []string{"ok"}}
+	def := workflow.Definition{
+		Name:   "t",
+		Stages: []workflow.Stage{{ID: "s", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "go", UseMemory: true}},
+	}
+	r := New(def, "task")
+	if err := r.Run(context.Background(), runCfg(map[string]workflow.TurnRunner{"w": inner})); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
 // blockingRunner sleeps for delay before returning, calling before/after
 // around the sleep so tests can measure concurrency.
 type blockingRunner struct {

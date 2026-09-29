@@ -51,9 +51,17 @@ type workflowTurnRunner struct {
 	// see them via the role's persisted history.
 	attachments         []PendingAttachment
 	attachmentsInjected bool
+	// useMemoryNextCall is set by the interpreter (via SetUseMemoryForNextCall,
+	// workflow.MemoryAwareTurnRunner) from the current Stage.UseMemory right
+	// before each Run call — the per-stage memory opt-in (see Stage.UseMemory's
+	// doc comment; docs/prompt-context-management-review.md §8 rec #12).
+	useMemoryNextCall bool
 }
 
 func (r *workflowTurnRunner) Name() string { return r.inner.Name() }
+
+// SetUseMemoryForNextCall implements workflow.MemoryAwareTurnRunner.
+func (r *workflowTurnRunner) SetUseMemoryForNextCall(v bool) { r.useMemoryNextCall = v }
 
 func (r *workflowTurnRunner) Run(ctx context.Context, prompt string, out io.Writer) (string, error) {
 	var ctxMode escalation.ContextMode
@@ -111,6 +119,13 @@ func (r *workflowTurnRunner) Run(ctx context.Context, prompt string, out io.Writ
 	// segmentsFired tracks whether OnResponseSegment already forwarded this
 	// turn's text piecemeal (interleaved with tool calls); when it did, the
 	// final NotifyResponse below is skipped to avoid resending the same text.
+	var percepts []string
+	if r.useMemoryNextCall {
+		// forEscalation=false: workflow roles have no primary/escalation
+		// concept of their own (workflowTurnRunner.role is always
+		// RoleWorkflow) — use the same percept filter a primary turn gets.
+		percepts = perceptsForAgent(r.cfg, r.mem, runPrompt, false)
+	}
 	var segmentsFired bool
 	res, err := r.inner.Execute(
 		ctx,
@@ -121,8 +136,8 @@ func (r *workflowTurnRunner) Run(ctx context.Context, prompt string, out io.Writ
 		ctxMode,
 		r.sessionID,
 		r.nonce,
-		nil,   // percepts: not injected for workflow turns
-		false, // injectInstructions: not needed for workflow turns
+		percepts, // only non-nil when this stage opted in via Stage.UseMemory
+		false,    // injectInstructions: not needed for workflow turns
 		runPrompt,
 		TurnCallbacks{OnResponseSegment: func(text string) {
 			segmentsFired = true

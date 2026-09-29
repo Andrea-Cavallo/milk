@@ -445,3 +445,55 @@ func TestRunBackgroundTask_PermissionGatedToolDeniesInsteadOfHanging(t *testing.
 		t.Errorf("expected the model to react to the denial and finish normally with %q, got %q", "done", resp)
 	}
 }
+
+// TestDispatchOneTool_CancelBackgroundAgent_CancelsRunningJob verifies the
+// model-facing cancel_background_agent tool actually cancels a running job
+// via the same Manager.Cancel path /bg stop uses.
+func TestDispatchOneTool_CancelBackgroundAgent_CancelsRunningJob(t *testing.T) {
+	agent := New("http://unused", "test-model")
+	mgr := NewManager(context.Background(), 3)
+	agent.SetBackgroundManager(mgr)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	mgr.SetOnDone(func(j *Job) { wg.Done() })
+
+	job := mgr.Spawn("slow task", "do something slow", "primary", "test-model",
+		func(jobCtx context.Context, jobID string, jobOut io.Writer) (string, session.TokenUsage, error) {
+			<-jobCtx.Done() // blocks until Cancel() fires
+			return "", session.TokenUsage{}, jobCtx.Err()
+		})
+
+	tc := toolCall{ID: "tc1", Function: toolCallFunction{
+		Name:      "cancel_background_agent",
+		Arguments: fmt.Sprintf(`{"job_id":%q}`, job.ID),
+	}}
+	outcome := agent.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, &session.Session{}, nil, nil)
+	if !strings.Contains(outcome.msg.Content, "Cancelled background agent "+job.ID) {
+		t.Errorf("expected a cancellation confirmation, got %q", outcome.msg.Content)
+	}
+
+	wg.Wait()
+	jobs := mgr.Drain()
+	if len(jobs) != 1 || jobs[0].Status != JobFailed {
+		t.Fatalf("expected the job to end up JobFailed after cancellation, got %+v", jobs)
+	}
+}
+
+// TestDispatchOneTool_CancelBackgroundAgent_UnknownID_ReturnsError verifies
+// that cancelling a nonexistent/already-finished job ID surfaces a tool
+// error instead of silently succeeding.
+func TestDispatchOneTool_CancelBackgroundAgent_UnknownID_ReturnsError(t *testing.T) {
+	agent := New("http://unused", "test-model")
+	mgr := NewManager(context.Background(), 3)
+	agent.SetBackgroundManager(mgr)
+
+	tc := toolCall{ID: "tc1", Function: toolCallFunction{
+		Name:      "cancel_background_agent",
+		Arguments: `{"job_id":"job_does_not_exist"}`,
+	}}
+	outcome := agent.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, &session.Session{}, nil, nil)
+	if !strings.Contains(outcome.msg.Content, "no running background agent") {
+		t.Errorf("expected an error result for an unknown job ID, got %q", outcome.msg.Content)
+	}
+}

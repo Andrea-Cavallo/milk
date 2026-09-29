@@ -533,6 +533,9 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 	// Also cap the total rendered prompt to prevent combinatorial bloat
 	// from multiple moderate-sized variables.
 	prompt = truncatePromptSections(prompt, maxRenderedPromptChars)
+	if mar, ok := runner.(workflow.MemoryAwareTurnRunner); ok {
+		mar.SetUseMemoryForNextCall(s.UseMemory)
+	}
 	out, err := workflow.Turn(ec.ctx, runner, prompt, ec.cfg.Send)
 	if err != nil {
 		return "", fmt.Errorf("workflow: stage %q: %w", s.ID, err)
@@ -649,6 +652,9 @@ func resolveUserCheckpointDance(ec *execContext, s workflow.Stage, runner workfl
 	finalPrompt, err := renderTemplate(s.ID+".on_answer_prompt", s.OnAnswerPrompt, ec.vars)
 	if err != nil {
 		return "", fmt.Errorf("workflow: stage %q: %w", s.ID, err)
+	}
+	if mar, ok := runner.(workflow.MemoryAwareTurnRunner); ok {
+		mar.SetUseMemoryForNextCall(s.UseMemory)
 	}
 	final, err := workflow.Turn(ec.ctx, runner, finalPrompt, ec.cfg.Send)
 	if err != nil {
