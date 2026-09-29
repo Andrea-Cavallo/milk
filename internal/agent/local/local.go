@@ -36,6 +36,14 @@ const inferenceScope = "github.com/scoutme/milk"
 
 const defaultMaxToolIterations = 20
 
+// iterationBudgetExhaustedMarker prefixes the fallback message when
+// runToolLoop exhausts maxIter without producing a final response. Kept
+// distinct from the loop-detectors' own "[turn terminated..." messages so a
+// consumer (notably internal/workflow/interp's isBudgetExhaustedTurn) can
+// tell "ran out of budget, possibly still making progress" apart from "a
+// detector concluded this was a stuck loop and killed it."
+const iterationBudgetExhaustedMarker = "[budget exhausted: exceeded the maximum tool-call iteration limit without a final response — this may reflect a task that needed more iterations, not necessarily a stuck loop]"
+
 // streamIdleLogInterval is how often scanSSE's heartbeat goroutine checks
 // whether the stream has gone idle (no new SSE line) and, if so, logs it.
 // Chosen well under the ~10+ minute hangs observed in practice so a live
@@ -1568,7 +1576,16 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	// trail entirely, not just the summary).
 	a.logWarn("exceeded maximum tool iterations", "model", a.model,
 		"agent", a.logRole(), "max_iter", maxIter)
-	resp := summarizeToolTrail(msgs, "")
+	// iterationBudgetExhaustedMarker distinguishes "ran out of iteration
+	// budget while still making distinct tool calls" from a genuine stuck
+	// loop (the doom-loop gate and the other detectors above all produce
+	// their own "[turn terminated..." text). The workflow interpreter
+	// (isBudgetExhaustedTurn in internal/workflow/interp) checks for this
+	// marker specifically so it doesn't lump a budget-exhausted step in
+	// with a loop-detector kill under the same "terminated by loop
+	// detection" message — see
+	// docs/prompt-context-management-review.md §8 rec #10.
+	resp := iterationBudgetExhaustedMarker + "\n\n" + summarizeToolTrail(msgs, "")
 	if a.onResponseSegment != nil && resp != "" {
 		a.onResponseSegment(resp)
 	}

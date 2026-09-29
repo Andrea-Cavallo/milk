@@ -696,6 +696,72 @@ func TestExecParallelGroup_OneItemErrorDoesNotAbortSiblings(t *testing.T) {
 	}
 }
 
+// TestExecAgentTurn_BudgetExhaustedIsDistinctFromLoopTermination verifies
+// that a stage output carrying the iteration-budget-exhausted marker (what
+// internal/agent/local produces when runToolLoop exhausts maxIter without a
+// final response) advances the workflow via the new distinct
+// isBudgetExhaustedTurn path -- not the loop-detector "terminated by loop
+// detection" message isTerminatedTurn's callers report.
+func TestExecAgentTurn_BudgetExhaustedIsDistinctFromLoopTermination(t *testing.T) {
+	budgetExhaustedOutput := "[budget exhausted: exceeded the maximum tool-call iteration limit without a final response — this may reflect a task that needed more iterations, not necessarily a stuck loop]\n\n" +
+		"[turn ended without a final summary — tool activity this turn:]\n- read_file(a.go)\n"
+	worker := &fakeRunner{name: "w", responses: []string{budgetExhaustedOutput}}
+	def := workflow.Definition{
+		Name: "t",
+		Stages: []workflow.Stage{
+			{ID: "work", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "go", SaveAs: "out"},
+		},
+	}
+	r := New(def, "task")
+
+	var sentTexts []string
+	var mu sync.Mutex
+	cfg := workflow.RunConfig{
+		Runners: map[string]workflow.TurnRunner{"w": worker},
+		Send: func(msg tea.Msg) {
+			if m, ok := msg.(workflow.WorkflowChunkMsg); ok {
+				mu.Lock()
+				sentTexts = append(sentTexts, m.Text)
+				mu.Unlock()
+			}
+		},
+	}
+	if err := r.Run(context.Background(), cfg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(sentTexts, "\n")
+	if !strings.Contains(joined, "ran out of tool-call iteration budget") {
+		t.Errorf("expected the budget-exhausted message, got sent texts: %v", sentTexts)
+	}
+	if strings.Contains(joined, "terminated by loop detection") {
+		t.Errorf("expected the loop-detection message NOT to fire for a budget-exhausted turn, got sent texts: %v", sentTexts)
+	}
+}
+
+// TestIsBudgetExhaustedTurn verifies the marker-detection helper directly.
+func TestIsBudgetExhaustedTurn(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{"empty", "", false},
+		{"normal verdict", "good_to_go", false},
+		{"loop terminated, no budget marker", "[turn terminated: stuck in a reasoning loop]", false},
+		{"budget exhausted", "[budget exhausted: exceeded the maximum tool-call iteration limit without a final response]", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isBudgetExhaustedTurn(tt.out); got != tt.want {
+				t.Errorf("isBudgetExhaustedTurn(%q) = %v, want %v", tt.out, got, tt.want)
+			}
+		})
+	}
+}
+
 // blockingRunner sleeps for delay before returning, calling before/after
 // around the sleep so tests can measure concurrency.
 type blockingRunner struct {
