@@ -316,6 +316,35 @@ const duplicateToolMaxRecovery = 5
 // before terminating the turn. Matches MiMo-Code's TEXT_NGRAM_MAX_RECOVERY.
 const ngramMaxRecovery = 2
 
+// doomLoopThreshold is the number of *consecutive* iterations issuing the
+// exact same tool-call batch before the hard doom-loop gate fires (see
+// runToolLoop's use of toolCallBatchSignature). Matches MiMo-Code's
+// DOOM_LOOP_THRESHOLD. Deliberately separate from duplicateToolMaxRecovery
+// above: that detector nudges on any repeat of a call seen anywhere earlier
+// in the turn (a soft, self-recovery signal); this one requires the calls to
+// be back-to-back and, once reached, treats it as a safety event needing
+// confirmation rather than another nudge attempt.
+const doomLoopThreshold = 3
+
+// toolCallBatchSignature returns a signature for a whole iteration's tool
+// calls (order-sensitive, exact-match) so two iterations can be compared for
+// an identical repeat. Empty for an iteration with no tool calls.
+func toolCallBatchSignature(toolCalls []toolCall) string {
+	if len(toolCalls) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, tc := range toolCalls {
+		if i > 0 {
+			b.WriteByte('\x01')
+		}
+		b.WriteString(tc.Function.Name)
+		b.WriteByte('\x00')
+		b.WriteString(tc.Function.Arguments)
+	}
+	return b.String()
+}
+
 // normalizeForTextLoop lowercases, collapses whitespace, strips leading
 // phrases, and truncates — matching MiMo-Code's normalizeForLoopDetection.
 func normalizeForTextLoop(text string) string {

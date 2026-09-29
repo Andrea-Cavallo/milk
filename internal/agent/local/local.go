@@ -1324,6 +1324,8 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	var textLoop textLoopTracker // output-text loop detection
 	var duplicateRecoveryCount int
 	var textLoopRecoveryCount int
+	var lastToolCallSignature string
+	var consecutiveIdenticalToolCalls int
 	ngram := newReasoningNgramMonitor()
 	ngramRecoveryCount := 0
 	a.reasoningNgram = ngram
@@ -1392,6 +1394,45 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			}
 			msgs = append(msgs, Message{Role: "assistant", Content: resp, ReasoningContent: reasoningText})
 			return msgs, nil
+		}
+
+		// Hard doom-loop gate: 3 *consecutive* iterations issuing the exact
+		// same tool-call batch (order-sensitive, exact-match — unlike the
+		// nudge-based detector below, which fires on any repeat of a call
+		// seen anywhere earlier in the turn) is treated as a safety event
+		// needing confirmation, not another self-recovery nudge. Applies to
+		// every tool, not just write/mutate ones — 3 identical calls in a
+		// row has no legitimate read-only explanation either. Modeled on
+		// MiMo-Code's doom_loop mechanism: ask for interactive confirmation,
+		// or fail closed immediately when there is no one to ask (a
+		// background job or workflow-role turn) rather than risking an
+		// unattended runaway loop.
+		sig := toolCallBatchSignature(toolCalls) // never "" here: toolCalls is non-empty past the check above
+		if sig == lastToolCallSignature {
+			consecutiveIdenticalToolCalls++
+		} else {
+			consecutiveIdenticalToolCalls = 1
+		}
+		lastToolCallSignature = sig
+		if consecutiveIdenticalToolCalls >= doomLoopThreshold {
+			failClosed := a.workflowRole || a.jobID != "" || a.permAsk == nil
+			var finalResp string
+			switch {
+			case failClosed:
+				finalResp = "[turn terminated: the model repeated the exact same tool call 3 times in a row and this context has no way to ask for confirmation, so the turn was stopped instead of risking an unattended runaway loop]"
+			case !a.permAsk("doom_loop", "the model has repeated the exact same tool call 3 times in a row — allow it to continue?"):
+				finalResp = "[turn terminated: the model repeated the exact same tool call 3 times in a row and the user declined to let it continue]"
+			}
+			if finalResp != "" {
+				if a.onResponseSegment != nil {
+					a.onResponseSegment(finalResp)
+				}
+				msgs = append(msgs, Message{Role: "assistant", Content: finalResp, ReasoningContent: reasoningText})
+				return msgs, nil
+			}
+			// Approved: let it continue, but reset the streak so an
+			// immediate 4th repeat asks again instead of sailing through.
+			consecutiveIdenticalToolCalls = 0
 		}
 
 		// Deduplicate: if every tool call in this turn was already executed with

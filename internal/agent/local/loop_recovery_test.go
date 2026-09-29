@@ -19,6 +19,12 @@ import (
 // reasoning-based detectors (n-gram, streak, text-loop) which stay
 // workflow-gated because reasoning legitimately repeats across workflow
 // passes.
+//
+// A workflow-role turn now hits the hard doom-loop gate (3 consecutive
+// identical calls, fail-closed — there's no one to ask) before the older
+// 5-attempt nudge ladder would have terminated it, so the expected message
+// is the doom-loop gate's, not the nudge ladder's "[turn terminated: ..."
+// text.
 func TestRun_DuplicateToolCall_TerminatesEvenForWorkflowRole(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -39,8 +45,8 @@ func TestRun_DuplicateToolCall_TerminatesEvenForWorkflowRole(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 	last := history[len(history)-1]
-	if !strings.Contains(last.Content, "[turn terminated: the model kept repeating the same tool call") {
-		t.Errorf("expected duplicate-tool-call termination for a workflow-role agent, got %q", last.Content)
+	if !strings.Contains(last.Content, "[turn terminated: the model repeated the exact same tool call 3 times in a row") {
+		t.Errorf("expected the doom-loop gate's fail-closed termination for a workflow-role agent, got %q", last.Content)
 	}
 }
 
