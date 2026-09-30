@@ -90,6 +90,26 @@ func TestQuery_FindsByKeyword(t *testing.T) {
 	}
 }
 
+// TestQuery_MatchesAcrossPossessiveApostrophe reproduces a real incident: a
+// user asked about "the dog's name" and the query "dog name" failed to match
+// a percept phrased "The user's dog's name is Biscuit." because neither
+// "dog name" nor "dog's name" is a literal substring of it — the possessive
+// apostrophe splits "dog's" from "name". Token-based matching must still find
+// it since both content words ("dog", "name") are present.
+func TestQuery_MatchesAcrossPossessiveApostrophe(t *testing.T) {
+	s := newTestStore(t, false)
+	s.Record(context.Background(), "The user's dog's name is Biscuit.", ProducerUser, ConsumerAll, Roles{}, false) //nolint:errcheck
+	s.Record(context.Background(), "unrelated fact about cats", ProducerUser, ConsumerAll, Roles{}, false)         //nolint:errcheck
+
+	results := s.Query(context.Background(), "dog name", 0, 10, ConsumerAll)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d: %+v", len(results), results)
+	}
+	if results[0].Content != "The user's dog's name is Biscuit." {
+		t.Errorf("unexpected content: %q", results[0].Content)
+	}
+}
+
 func TestQuery_EmptyQueryReturnsAll(t *testing.T) {
 	s := newTestStore(t, false)
 	s.Record(context.Background(), "fact one", ProducerUser, ConsumerAll, Roles{}, false)   //nolint:errcheck
