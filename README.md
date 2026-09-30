@@ -99,3 +99,15 @@ See [docs/eval.md](docs/eval.md) for scenario format, per-adapter options, and j
 - `smolagents[litellm]` pip package — only if using the `subprocess`/smolagent provider
 
 See [docs/getting-started.md](docs/getting-started.md) for the fastest path to a working setup, [docs/providers.md](docs/providers.md) for provider-specific configuration (including a reference local setup with NVIDIA GPU, Ubuntu/WSL2, llama.cpp from source), and [docs/eval.md](docs/eval.md) for evaluating and comparing agents.
+
+## Acknowledgments
+
+milk's prompt/context-management and loop-detection design was informed by studying (not copying
+code from) other coding-agent harnesses — independent implementations compared directly against
+milk's own, not ports:
+
+- **[Claude Code](https://claude.com/claude-code)** — the escalation-agent subprocess milk drives via `claude --print`, and the reference for milk's own project-instruction loading (AGENTS.md/CLAUDE.md).
+- **[MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code)** (Xiaomi's fork of OpenCode) — compared for loop-detection thresholds (the doom-loop gate, n-gram repetition monitor), prompt-caching breakpoint strategy, and checkpoint/distillation memory design.
+- **[OpenCode](https://github.com/anomalyco/opencode)** — compared for `AGENTS.md` project-instruction loading, sub-agent context isolation (`ForkContext`), and prompt-caching strategy.
+
+See [docs/prompt-context-management-review.md](docs/prompt-context-management-review.md) for the full comparison and what came out of it.

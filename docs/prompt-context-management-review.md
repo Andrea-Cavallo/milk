@@ -33,9 +33,9 @@ not in the repo).
 Code-level analysis of milk's four prompt/context surfaces (primary agent, escalation agent,
 background sub-agents, workflow engine), cross-referenced against three coding-harness
 references: Claude Code (this tool, self-knowledge), and two local clones read directly —
-`~/altworkspace/MiMo-Code` (Xiaomi's fork of `sst/opencode`) and `~/altworkspace/opencode`
-(upstream `sst/opencode`). All findings below are backed by file:line citations gathered in the
-underlying research passes; this document is the synthesis.
+[MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code) (Xiaomi's fork of OpenCode) and
+[OpenCode](https://github.com/anomalyco/opencode) itself. All findings below are backed by
+file:line citations gathered in the underlying research passes; this document is the synthesis.
 
 One incidental finding while reading the OpenCode clone: several of its prompt files
 (`session/prompt/plan-reminder-anthropic.txt`, `default.txt`) are near-verbatim scrapes of

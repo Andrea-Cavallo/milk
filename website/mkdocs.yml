@@ -61,6 +61,7 @@ exclude_docs: |
   mock-setup.md
   observability-design.md
   observability-refactor.md
+  prompt-context-management-review.md
   silent-turn-issue-analysis.md
   smolagent-integration-design.md
   embed.go

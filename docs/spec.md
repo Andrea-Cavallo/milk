@@ -75,6 +75,9 @@ internal/
   agent/aider/      aider-cli provider (wraps subprocess agent)
   agent/smolagent/  subprocess provider (wraps subprocess agent)
   escalation/       context builders: static instruction block + dynamic summary sent to escalation agent
+  instructions/     loads the target repo's AGENTS.md (falling back to CLAUDE.md for the local-model
+                    path only) into agent system/static context, cached by file mtime
+  textbudget/       shared head+tail truncation helper for bounding large text before prompt hand-off
   memory/           Percept store; NREM decay/prune/promote consolidation (~/.milk/memory/)
   obs/              OpenTelemetry file exporters (~/.milk/otel/)
   claudesettings/   ~/.claude/settings.json reader (allowed tools, directories, AWS refresh command)
