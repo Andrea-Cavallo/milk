@@ -102,6 +102,9 @@ func DeepMerge(dst, src Config) Config {
 	if src.LocalMemoryResultMaxBytes != 0 {
 		dst.LocalMemoryResultMaxBytes = src.LocalMemoryResultMaxBytes
 	}
+	if src.LocalToolResultMaxBytes != 0 {
+		dst.LocalToolResultMaxBytes = src.LocalToolResultMaxBytes
+	}
 	if src.LocalMemoryReinjectionTurns != 0 {
 		dst.LocalMemoryReinjectionTurns = src.LocalMemoryReinjectionTurns
 	}
@@ -620,6 +623,8 @@ type AgentLimits struct {
 	MemoryReinjectionBytes *int `json:"memory_reinjection_bytes,omitempty"`
 	// MemoryResultMaxBytes overrides local_memory_result_max_bytes.
 	MemoryResultMaxBytes *int `json:"memory_result_max_bytes,omitempty"`
+	// ToolResultMaxBytes overrides local_tool_result_max_bytes.
+	ToolResultMaxBytes *int `json:"tool_result_max_bytes,omitempty"`
 	// PerceptInjectMax overrides percept_inject_max.
 	PerceptInjectMax *int `json:"percept_inject_max,omitempty"`
 	// PerceptInjectMaxBytes overrides percept_inject_max_bytes.
@@ -892,6 +897,16 @@ type Config struct {
 	// Results are truncated to this limit before being appended to the
 	// local context. Default: 2048. Set to 0 for no limit.
 	LocalMemoryResultMaxBytes int `json:"local_memory_result_max_bytes,omitempty"`
+
+	// LocalToolResultMaxBytes caps the byte size of any other tool result
+	// (bash, read_file, …) appended to the local agent's context — unlike
+	// memory tool results, these have no cap of their own and a single
+	// verbose shell/build/test output can otherwise dominate a turn's
+	// payload before the payload-size trim loop ever gets a chance to run.
+	// Truncation keeps both ends (see truncateHeadAndTail) since shell/build
+	// output's most important signal is typically at the end.
+	// Default: 20000 (~5000 tokens). Set to 0 for no limit.
+	LocalToolResultMaxBytes int `json:"local_tool_result_max_bytes,omitempty"`
 
 	// LocalMemoryReinjectionTurns is the number of local agent turns after which
 	// the memory/need instruction block is unconditionally re-appended to the
@@ -1270,6 +1285,19 @@ func (c Config) LocalMemoryResultMaxByteCount() int {
 	return c.LocalMemoryResultMaxBytes
 }
 
+// LocalToolResultMaxByteCount returns the max byte size of a non-memory tool
+// result returned to the local agent per call, defaulting to 20000. Returns 0
+// when explicitly disabled (unlimited).
+func (c Config) LocalToolResultMaxByteCount() int {
+	if c.LocalToolResultMaxBytes < 0 {
+		return 0
+	}
+	if c.LocalToolResultMaxBytes == 0 {
+		return 20000
+	}
+	return c.LocalToolResultMaxBytes
+}
+
 // LocalMemoryReinjectionTurnThreshold returns the local-turn interval for
 // memory instruction re-injection, defaulting to 20. Returns 0 when disabled.
 func (c Config) LocalMemoryReinjectionTurnThreshold() int {
@@ -1473,6 +1501,19 @@ func (c Config) AgentMemoryResultMaxByteCount(a AgentConfig) int {
 		return intOr(v, 2048)
 	}
 	return c.LocalMemoryResultMaxByteCount()
+}
+
+// AgentToolResultMaxByteCount returns the non-memory tool result size cap for
+// the given agent, falling back to the global LocalToolResultMaxByteCount().
+func (c Config) AgentToolResultMaxByteCount(a AgentConfig) int {
+	if a.Limits != nil && a.Limits.ToolResultMaxBytes != nil {
+		v := *a.Limits.ToolResultMaxBytes
+		if v < 0 {
+			return 0
+		}
+		return intOr(v, 20000)
+	}
+	return c.LocalToolResultMaxByteCount()
 }
 
 // AgentPerceptInjectMaxCount returns the percept injection count cap for the

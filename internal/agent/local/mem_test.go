@@ -1,6 +1,9 @@
 package local
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -8,11 +11,11 @@ import (
 	"github.com/scoutme/milk/internal/session"
 )
 
-// --- capMemToolResult ---
+// --- capToolResult ---
 
 func TestCapMemToolResult_NoLimit(t *testing.T) {
 	result := `{"output":"fact1\nfact2\nfact3"}`
-	got := capMemToolResult(result, 0)
+	got := capToolResult(result, 0)
 	if got != result {
 		t.Errorf("expected unchanged with limit 0, got %q", got)
 	}
@@ -20,7 +23,7 @@ func TestCapMemToolResult_NoLimit(t *testing.T) {
 
 func TestCapMemToolResult_WithinLimit(t *testing.T) {
 	result := `{"output":"short"}`
-	got := capMemToolResult(result, 1000)
+	got := capToolResult(result, 1000)
 	if got != result {
 		t.Errorf("expected unchanged when within limit, got %q", got)
 	}
@@ -29,7 +32,7 @@ func TestCapMemToolResult_WithinLimit(t *testing.T) {
 func TestCapMemToolResult_Truncated(t *testing.T) {
 	long := strings.Repeat("x", 3000)
 	result := `{"output":"` + long + `"}`
-	got := capMemToolResult(result, 100)
+	got := capToolResult(result, 100)
 	if len(got) == len(result) {
 		t.Error("expected result to be truncated")
 	}
@@ -44,7 +47,7 @@ func TestCapMemToolResult_Truncated(t *testing.T) {
 func TestCapMemToolResult_PreservesTail(t *testing.T) {
 	body := "BEGIN-MARKER" + strings.Repeat("filler ", 500) + "FAIL: TestSomething END-MARKER"
 	result := `{"output":"` + body + `"}`
-	got := capMemToolResult(result, 200)
+	got := capToolResult(result, 200)
 
 	if !strings.Contains(got, "BEGIN-MARKER") {
 		t.Error("expected the head marker to survive truncation")
@@ -56,7 +59,7 @@ func TestCapMemToolResult_PreservesTail(t *testing.T) {
 
 func TestCapMemToolResult_InvalidJSON(t *testing.T) {
 	result := "not json"
-	got := capMemToolResult(result, 100)
+	got := capToolResult(result, 100)
 	if got != result {
 		t.Errorf("expected unchanged on invalid JSON, got %q", got)
 	}
@@ -64,9 +67,31 @@ func TestCapMemToolResult_InvalidJSON(t *testing.T) {
 
 func TestCapMemToolResult_EmptyOutput(t *testing.T) {
 	result := `{"error":"not found"}`
-	got := capMemToolResult(result, 10)
+	got := capToolResult(result, 10)
 	if got != result {
 		t.Errorf("expected unchanged when output field is empty, got %q", got)
+	}
+}
+
+// TestDispatchOneTool_CapsNonMemoryToolResult verifies that a tool with no
+// cap of its own (bash) gets truncated via memCfg.ToolResultMaxBytes, the
+// same as memory/session-context tools already were — a long shell output
+// alone should not be able to dominate a turn's payload before the
+// payload-size trim loop ever gets a chance to run.
+func TestDispatchOneTool_CapsNonMemoryToolResult(t *testing.T) {
+	a := (&Agent{}).WithMemConfig(MemConfig{ToolResultMaxBytes: 200})
+	tc := toolCall{ID: "1", Function: toolCallFunction{
+		Name:      "bash",
+		Arguments: `{"command":"head -c 1000 /dev/zero | tr '\\0' 'a'"}`,
+	}}
+	outcome := a.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, &session.Session{}, nil, nil)
+
+	var r toolResult
+	if err := json.Unmarshal([]byte(outcome.msg.Content), &r); err != nil {
+		t.Fatalf("expected valid toolResult JSON, got %q: %v", outcome.msg.Content, err)
+	}
+	if len(r.Output) > 200 {
+		t.Errorf("expected output capped to ~200 bytes, got %d bytes", len(r.Output))
 	}
 }
 

@@ -242,6 +242,7 @@ type streamChunk struct {
 // runtime to gate memory tool results and instruction re-injection.
 type MemConfig struct {
 	ResultMaxBytes       int  // max bytes of a memory tool result appended to context; 0 = unlimited
+	ToolResultMaxBytes   int  // max bytes of any other tool result (bash, read_file, …) appended to context; 0 = unlimited
 	ReinjectionTurns     int  // re-inject instruction after N local turns; 0 = disabled
 	ReinjectionBytes     int  // re-inject instruction after N bytes of local output; 0 = disabled
 	RelevanceGateEnabled bool // apply keyword relevance filter to get_memory results
@@ -1353,7 +1354,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			msgs = append(msgs, Message{Role: "user", Content: maxIterSummaryReminder})
 			tools = nil
 		}
-		resp, fallbackRaw, toolCalls, emptyFallback, reasoningText, err := a.streamCompletion(ctx, msgs, tools, out)
+		resp, fallbackRaw, toolCalls, emptyFallback, reasoningText, err := a.streamCompletion(ctx, msgs, tools, out, userMsgIdx)
 		if err != nil {
 			return msgs, err
 		}
@@ -1937,10 +1938,10 @@ func isSessionContextTool(name string) bool {
 
 const sessionContextResultMaxBytes = 8000 // ~2000 tokens, enough for recent context summary
 
-// capMemToolResult truncates the output field of a toolResult JSON string so
+// capToolResult truncates the output field of a toolResult JSON string so
 // that the total content size stays within maxBytes.
 // When maxBytes is 0 the result is returned unchanged.
-func capMemToolResult(result string, maxBytes int) string {
+func capToolResult(result string, maxBytes int) string {
 	if maxBytes <= 0 {
 		return result
 	}
@@ -2337,14 +2338,19 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 		}
 	}
 
-	if isMemoryReadTool(tc.Function.Name) {
+	switch {
+	case isMemoryReadTool(tc.Function.Name):
 		if a.memCfg.RelevanceGateEnabled && tc.Function.Name == "list_memory" && mem != nil {
 			result = memory.DispatchListMemoryFiltered(ctx, mem, tc.Function.Arguments, userPrompt)
 		}
-		result = capMemToolResult(result, a.memCfg.ResultMaxBytes)
-	}
-	if isSessionContextTool(tc.Function.Name) {
-		result = capMemToolResult(result, sessionContextResultMaxBytes)
+		result = capToolResult(result, a.memCfg.ResultMaxBytes)
+	case isSessionContextTool(tc.Function.Name):
+		result = capToolResult(result, sessionContextResultMaxBytes)
+	default:
+		// Every other tool (bash, read_file, …) has no cap of its own — a
+		// single verbose shell/build/test output can otherwise dominate a
+		// turn's payload well before the payload-size trim loop ever runs.
+		result = capToolResult(result, a.memCfg.ToolResultMaxBytes)
 	}
 	return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}
 }
@@ -2510,31 +2516,55 @@ func toolArgSummary(args map[string]any) string {
 //     message (its tool results), as one atomic group.
 //
 // Either way, the system prompt (index 0) and the current turn's own user
-// message are never touched. This matters: a turn's own tool-loop can
-// easily be the only content left once prior history is exhausted (a
-// background job's turn — ADR-0043 — starts with nothing else), and it has
-// only one user message total. The previous version of this trim assumed
-// it could always find a "user"-role message to stop at while walking
-// forward from the front; once that assumption broke, it kept dropping
-// until only the system prompt and whatever the last message happened to
-// be were left — which, mid-tool-loop, is a "tool"-role result with no
-// preceding assistant message carrying its tool_call_id anymore, an
-// invalid conversation shape most chat-completions APIs reject outright.
-func dropOldestDroppableUnit(msgs []Message) ([]Message, bool) {
-	var userIdxs []int
-	for i, m := range msgs {
-		if m.Role == "user" {
-			userIdxs = append(userIdxs, i)
-		}
-	}
-	if len(userIdxs) == 0 {
+// message — protectedIdx, always runToolLoop's userMsgIdx — are never
+// touched. This matters for two independent reasons:
+//
+//  1. A turn's own tool-loop can easily be the only content left once prior
+//     history is exhausted (a background job's turn — ADR-0043 — starts
+//     with nothing else), and it has only one user message total. An
+//     earlier version of this trim assumed it could always find a
+//     "user"-role message to stop at while walking forward from the front;
+//     once that assumption broke, it kept dropping until only the system
+//     prompt and whatever the last message happened to be were left —
+//     which, mid-tool-loop, is a "tool"-role result with no preceding
+//     assistant message carrying its tool_call_id anymore, an invalid
+//     conversation shape most chat-completions APIs reject outright.
+//
+//  2. Loop-recovery nudges (loop_streak.go's loopRecoveryAction, the
+//     try-best detector, the max-iteration forced-summary reminder, and the
+//     "image dropped" notice) are all injected as Role: "user" messages —
+//     a prompting convenience, not a genuine new user turn. A version of
+//     this function that treated *any* "user"-role message as a turn
+//     boundary would, the moment such a nudge fired, drop everything from
+//     the turn's real question up to that nudge as "the oldest disposable
+//     unit" — silently deleting the actual question (and every tool call
+//     made answering it) while leaving the nudge and whatever came after
+//     it. Anchoring on protectedIdx instead of on "the next user-role
+//     message, whatever it is" closes that hole without needing to tag
+//     which later messages are synthetic: only messages strictly *before*
+//     protectedIdx are ever considered "older, unrelated turns" safe to
+//     drop wholesale; anything at or after it is only ever trimmed one
+//     assistant+tool round at a time, and protectedIdx itself is never in
+//     either dropped range.
+func dropOldestDroppableUnit(msgs []Message, protectedIdx int) ([]Message, bool) {
+	if protectedIdx < 0 || protectedIdx >= len(msgs) || msgs[protectedIdx].Role != "user" {
 		return msgs, false
 	}
-	if len(userIdxs) > 1 {
-		start, end := userIdxs[0], userIdxs[1]
+	var priorUserIdxs []int
+	for i := 0; i < protectedIdx; i++ {
+		if msgs[i].Role == "user" {
+			priorUserIdxs = append(priorUserIdxs, i)
+		}
+	}
+	if len(priorUserIdxs) > 0 {
+		start := priorUserIdxs[0]
+		end := protectedIdx
+		if len(priorUserIdxs) > 1 {
+			end = priorUserIdxs[1]
+		}
 		return append(append([]Message{}, msgs[:start]...), msgs[end:]...), true
 	}
-	p := userIdxs[0] + 1
+	p := protectedIdx + 1
 	if p >= len(msgs) {
 		return msgs, false
 	}
@@ -2583,7 +2613,11 @@ func messagesContainImage(msgs []Message) bool {
 // each non-final attempt is buffered rather than streamed live to out: if the
 // backend dropped the image, the user must never see the resulting
 // non-answer, only the eventually-accepted response.
-func (a *Agent) streamCompletion(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer) (string, string, []toolCall, bool, string, error) {
+// userMsgIdx is the index of the message that started the current turn (see
+// runToolLoop) — passed through so a pre-flight payload-size trim never
+// discards it; see dropOldestDroppableUnit's doc comment for why that
+// matters.
+func (a *Agent) streamCompletion(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, userMsgIdx int) (string, string, []toolCall, bool, string, error) {
 	if a.useBedrockNative {
 		return a.bedrockStreamCompletion(ctx, msgs, tools, out)
 	}
@@ -2607,7 +2641,7 @@ func (a *Agent) streamCompletion(ctx context.Context, msgs []Message, tools []ma
 			buf = &bytes.Buffer{}
 			attemptOut = buf
 		}
-		t, fr, tc, ef, rt, imageTokens, err := a.streamCompletionOnce(ctx, msgs, tools, attemptOut)
+		t, fr, tc, ef, rt, imageTokens, err := a.streamCompletionOnce(ctx, msgs, tools, attemptOut, userMsgIdx)
 		if err != nil {
 			return "", "", nil, false, "", err
 		}
@@ -2628,7 +2662,7 @@ func (a *Agent) streamCompletion(ctx context.Context, msgs []Message, tools []ma
 // implementation streamCompletion loops over. imageTokens is
 // usage.prompt_tokens_details.image_tokens from the final usage chunk — see
 // streamCompletion's doc comment for why callers care.
-func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer) (string, string, []toolCall, bool, string, int64, error) {
+func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, userMsgIdx int) (string, string, []toolCall, bool, string, int64, error) {
 	req := chatRequest{
 		Model:    a.model,
 		Messages: msgs,
@@ -2654,7 +2688,7 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 			"size_bytes", len(body), "limit_bytes", a.maxPayloadBytes,
 			"messages_before", len(msgs))
 		for len(body) > a.maxPayloadBytes {
-			next, ok := dropOldestDroppableUnit(msgs)
+			next, ok := dropOldestDroppableUnit(msgs, userMsgIdx)
 			if !ok {
 				break
 			}

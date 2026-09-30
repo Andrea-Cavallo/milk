@@ -704,6 +704,7 @@ All keys go in `~/.milk/config.json`; sensible defaults apply when omitted. See 
 | `memory_reinjection_turns` | 20 | Re-inject memory/need instructions into escalation context after this many escalation turns. `0` disables. |
 | `memory_reinjection_bytes` | 40000 | Re-inject after this many bytes of escalation output. `0` disables. |
 | `local_memory_result_max_bytes` | 2048 | Max byte size of `get_memory`/`list_memory` results to the primary agent. `-1` = no limit. |
+| `local_tool_result_max_bytes` | 20000 | Max byte size of any other tool result (`bash`, `read_file`, …) to the primary agent, keeping both head and tail (the error/exit status at the end of shell/build/test output survives, not just the head). Unlike memory tool results, these had no cap at all before this setting — a single verbose shell/build/test output could otherwise balloon a turn's payload well before the payload-size trim loop ever ran. `0` = no limit. |
 | `local_memory_reinjection_turns` | 20 | Re-inject into the primary agent's context after this many local turns. `-1` disables. |
 | `local_memory_reinjection_bytes` | 40000 | Re-inject after this many bytes of primary agent output. `-1` disables. |
 | `local_max_tool_iterations` | 20 | Max tool-call/response cycles per turn before the turn is aborted. `-1` = unlimited. |
@@ -730,7 +731,7 @@ Any `agents` entry accepts a `limits` object overriding global context/memory se
       "limits": {
         "context_budget_chars": 6000, "message_budget_chars": 12000,
         "percept_inject_max": 5, "percept_inject_max_bytes": 512,
-        "memory_result_max_bytes": 1024, "memory_reinjection_turns": 10,
+        "memory_result_max_bytes": 1024, "tool_result_max_bytes": 8000, "memory_reinjection_turns": 10,
         "memory_reinjection_bytes": 20000, "percept_relevance_gate": true
       } }
   ]
@@ -748,6 +749,7 @@ All fields optional; omitted → global value applies.
 | `percept_inject_max` | `percept_inject_max` | 25 | Max percepts injected per turn |
 | `percept_inject_max_bytes` | `percept_inject_max_bytes` | 2048 | Max total bytes of injected percept content |
 | `memory_result_max_bytes` | `local_memory_result_max_bytes` | 2048 | Max bytes of a memory tool result |
+| `tool_result_max_bytes` | `local_tool_result_max_bytes` | 20000 | Max bytes of any other tool result (`bash`, `read_file`, …) |
 | `memory_reinjection_turns` | `memory_reinjection_turns`/`local_memory_reinjection_turns` | 20 | Re-inject after N turns |
 | `memory_reinjection_bytes` | `memory_reinjection_bytes`/`local_memory_reinjection_bytes` | 40000 | Re-inject after N bytes of output |
 | `percept_relevance_gate` | `percept_relevance_gate` | `true` | Keyword-intersection filter before injection |

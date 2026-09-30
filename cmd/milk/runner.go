@@ -188,6 +188,7 @@ func (r *localRunner) Execute(
 
 	agent := r.agent.WithMemConfig(local.MemConfig{
 		ResultMaxBytes:       cfg.AgentMemoryResultMaxByteCount(ac),
+		ToolResultMaxBytes:   cfg.AgentToolResultMaxByteCount(ac),
 		ReinjectionTurns:     cfg.AgentMemoryReinjectionTurnThreshold(ac, role == RolePrimary),
 		ReinjectionBytes:     cfg.AgentMemoryReinjectionByteThreshold(ac, role == RolePrimary),
 		RelevanceGateEnabled: cfg.AgentPerceptRelevanceGateEnabled(ac),
