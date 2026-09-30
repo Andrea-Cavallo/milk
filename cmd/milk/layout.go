@@ -2,12 +2,17 @@ package main
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/creack/pty"
 )
+
+// viewportRebuildThrottle caps how often a streamed chunk triggers a full
+// viewport rebuild (~30fps) — see viewportDirty's doc comment on model.
+const viewportRebuildThrottle = 33 * time.Millisecond
 
 // activeViewport returns the viewport currently being displayed in the main
 // area: the attach view's own viewport while attached (ADR-0047) and no
@@ -160,6 +165,44 @@ func (m *model) setViewportContent() {
 	transcript := m.wrappedTranscript()
 	content := transcript + "\n" + sep + "\n" + m.colorizeInput(m.ta.View())
 	m.vp.SetContent(content)
+	m.viewportDirty = false
+	m.lastViewportRebuild = time.Now()
+}
+
+// syncViewportThrottled is the streaming-chunk path into the viewport:
+// appendTranscript/appendThinking call this instead of setViewportContent
+// directly. It rebuilds immediately (sticky-bottom preserved) at most once
+// per viewportRebuildThrottle window; a call inside that window just marks
+// the viewport dirty for the next flushViewportIfDirty (spinnerTickMsg, or
+// any other setViewportContent/syncLayout call elsewhere in Update()) to pick
+// up — see viewportDirty's doc comment on model for why this never leaves
+// streamed text stuck off-screen.
+func (m *model) syncViewportThrottled() {
+	if !m.ready {
+		return
+	}
+	if time.Since(m.lastViewportRebuild) < viewportRebuildThrottle {
+		m.viewportDirty = true
+		return
+	}
+	atBottom := m.vp.AtBottom()
+	m.setViewportContent()
+	if atBottom {
+		m.vp.GotoBottom()
+	}
+}
+
+// flushViewportIfDirty performs the deferred rebuild syncViewportThrottled
+// skipped, if one is still pending. Cheap no-op otherwise.
+func (m *model) flushViewportIfDirty() {
+	if !m.viewportDirty {
+		return
+	}
+	atBottom := m.vp.AtBottom()
+	m.setViewportContent()
+	if atBottom {
+		m.vp.GotoBottom()
+	}
 }
 
 func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {

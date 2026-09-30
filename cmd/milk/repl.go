@@ -797,6 +797,20 @@ type model struct {
 	turnColorCache []string // colorized output per completed turn
 	turnRawCache   []string // raw text per completed turn (cache key)
 
+	// viewport rebuild throttle: bubbles/viewport.SetContent re-splits and
+	// re-measures the *entire* content on every call (including a full
+	// findLongestLineWidth scan milk never needs, since it never scrolls
+	// horizontally) — appendTranscript/appendThinking used to call it once per
+	// streamed chunk, so a long turn with heavy tool output made the TUI
+	// visibly lag. viewportDirty defers that rebuild to at most once per
+	// viewportRebuildThrottle window; every other setViewportContent/syncLayout
+	// call site (turn completion, resize, selection, …) is unaffected and still
+	// rebuilds immediately, and spinnerTickMsg (already firing every 80ms while
+	// busy) flushes any deferred rebuild so streamed text never lags by more
+	// than one tick.
+	viewportDirty       bool
+	lastViewportRebuild time.Time
+
 	// hintDebounceGen is incremented on every keystroke that triggers a hint
 	// rebuild. hintDebounceMsg carries the gen value at dispatch time; any
 	// message whose gen no longer matches is a stale firing and is dropped.
@@ -1667,12 +1681,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case prefixChunkMsg:
 		m.currentTurnChars += int64(len(msg.text))
-		m.appendTranscript(msg.text)
+		m.appendTranscriptStreamed(msg.text)
 		return m, nil
 
 	case chunkMsg:
 		m.currentTurnChars += int64(len(msg.text))
-		m.appendTranscript(msg.text)
+		m.appendTranscriptStreamed(msg.text)
 		// Intra-turn loop detection: feed chunk and check for repetition.
 		if m.loopDetector != nil {
 			for _, v := range m.loopDetector.FeedChunk(msg.text) {
@@ -1690,7 +1704,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case thinkChunkMsg:
 		m.currentTurnChars += int64(len(msg.text))
 		m.currentTurnThinking.WriteString(msg.text)
-		m.appendThinking(msg.text)
+		m.appendThinkingStreamed(msg.text)
 		// Intra-turn loop detection: reasoning chunks get their own (higher)
 		// repetition threshold — see internal/loop.
 		if m.loopDetector != nil {
@@ -1952,6 +1966,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		if m.busy {
 			m.spinnerFrame++
+			m.flushViewportIfDirty()
 			return m, spinnerTick()
 		}
 		return m, nil
