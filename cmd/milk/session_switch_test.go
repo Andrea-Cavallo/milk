@@ -55,3 +55,37 @@ func TestHandleSlashInputNewRefreshesSessionScopedState(t *testing.T) {
 		t.Fatalf("expected new session task file: %v", err)
 	}
 }
+
+// TestHandleSlashInputClearAliasesNew covers #164: /clear must behave
+// exactly like /new — recognized as a leading command token (not inert
+// text) and replacing the active session with a fresh one.
+func TestHandleSlashInputClearAliasesNew(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	oldSess, err := session.New("/repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &interactiveState{sess: oldSess, cwd: "/repo", notifier: oversight.Noop{}}
+	m := newModel(context.Background(), st, nil, dispatchAgents{}, nil)
+
+	// extractSlashCommand must recognize /clear as a leading command token.
+	cmd, rest, found := extractSlashCommand("/clear leftover prompt")
+	if !found || cmd != "/clear" || rest != "leftover prompt" {
+		t.Fatalf("expected /clear to be extracted, got cmd=%q rest=%q found=%v", cmd, rest, found)
+	}
+
+	updated, _ := m.handleSlashInput("/clear", "")
+	if updated == nil {
+		t.Fatal("expected a model back from /clear")
+	}
+	if st.sess.ID == oldSess.ID {
+		t.Fatal("expected /clear to replace active session (alias of /new)")
+	}
+
+	// The alias must also show up in tab-completion's variant hints.
+	vars, ok := cmdVariants["/clear"]
+	if !ok || len(vars) == 0 {
+		t.Fatalf("expected /clear variants derived from help text, got %#v", vars)
+	}
+}

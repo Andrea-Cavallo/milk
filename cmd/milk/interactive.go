@@ -52,7 +52,7 @@ const cmdBg = "/bg"
 
 var slashCommands = []string{
 	cmdEscalate, cmdPrimary, cmdPaste, cmdLearn, cmdOtel, cmdMetrics, cmdUsage, cmdMemory, cmdExport, cmdHistory, cmdPanel, cmdForget, cmdSkipPerms, cmdAgent, cmdColorize, cmdThink, cmdSetup, cmdConfig, cmdOpen, cmdMCP, cmdUpdate, cmdWorkflow, cmdServer, cmdReload, cmdTasks, cmdTask, cmdAttach, cmdBash, cmdBg,
-	"/new", "/drop", "/list", "/help", "/exit", "/quit",
+	"/new", "/clear", "/drop", "/list", "/help", "/exit", "/quit",
 }
 
 // initWizardState tracks state for the /config init TUI wizard.
@@ -119,6 +119,7 @@ const interactiveHelp = `
 ── Sessions ─────────────────────────────────────────────────────────────
   /list                  list sessions for current directory
   /new                   start a fresh session
+  /clear                 alias for /new — start a fresh session
   /drop                  delete current session
   /export                print session transcript (text)
   /export json           print session transcript as JSON
@@ -488,7 +489,7 @@ func handleSlashCommand(cmd, prompt string, st *interactiveState) (exit bool, di
 	switch cmd {
 	case "/exit", "/quit":
 		return true, "", ""
-	case "/help", "/new", "/drop", "/list", cmdPaste:
+	case "/help", "/new", "/clear", "/drop", "/list", cmdPaste:
 		output = execNonPromptCmd(cmd, prompt, st)
 	case cmdLearn:
 		output = execLearn(prompt, st)
@@ -588,7 +589,7 @@ func execNonPromptCmd(cmd, prompt string, st *interactiveState) string {
 	switch cmd {
 	case "/help":
 		fmt.Fprint(&out, renderHelp(interactiveHelp, 0))
-	case "/new":
+	case "/new", "/clear":
 		var err error
 		st.sess, err = session.New(st.cwd, "")
 		if err != nil {
