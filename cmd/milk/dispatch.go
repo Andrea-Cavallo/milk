@@ -16,8 +16,17 @@ import (
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
+	"github.com/scoutme/milk/internal/textbudget"
 	"github.com/scoutme/milk/internal/workflow"
 )
+
+// backgroundJobResultMaxChars bounds how much of a completed background
+// job's result is spliced into the next turn's prompt. Without this, a job
+// whose whole point is protecting the caller's context budget could blow
+// that budget right back open on delivery — see
+// docs/prompt-context-management-review.md §8 rec #3. Matches the workflow
+// engine's own sectionCharBudget (internal/workflow/interp/template.go).
+const backgroundJobResultMaxChars = 12000
 
 // drainBackgroundJobs collects results from any spawn_background_agent jobs
 // (ADR-0043) that completed since the last turn, records their token usage
@@ -51,7 +60,20 @@ func drainBackgroundJobs(ctx context.Context, mgr *local.Manager, sess *session.
 			}
 			continue
 		}
-		fmt.Fprintf(&b, "[background agent %q completed: %s]\n", j.Label, j.Result)
+		// The job's answer may end with an optional structured tag (see
+		// local.backgroundSystemPrompt) — surface status/files_touched
+		// alongside the text instead of leaving the caller to parse prose
+		// for them. Absent for a job that didn't use the convention; text
+		// is then just j.Result unchanged.
+		text, status, filesTouched := local.ParseBackgroundResult(j.Result)
+		var meta strings.Builder
+		if status != "" {
+			fmt.Fprintf(&meta, " status=%s", status)
+		}
+		if filesTouched != "" {
+			fmt.Fprintf(&meta, " files_touched=%s", filesTouched)
+		}
+		fmt.Fprintf(&b, "[background agent %q completed%s: %s]\n", j.Label, meta.String(), textbudget.SummarizeLong(text, backgroundJobResultMaxChars))
 	}
 	if b.Len() > 0 {
 		b.WriteString("\n")

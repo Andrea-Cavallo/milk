@@ -86,7 +86,8 @@ Operate inside the local agent's tool iteration loop. All share the same recover
 | **Streak tracker** | `loop_streak.go` | Same reasoning hash or tool-call signature across consecutive iterations | SHA-256 of normalised reasoning (truncated to 500 chars, leading phrases stripped) |
 | **Streaming n-gram** | `reasoning_ngram.go` | Periodic reasoning repetition during streaming ("I'm done → let me check → I'm done") | Sliding 500-token window, detects blocks of 4+ tokens repeating 10+ times consecutively. **Cuts the stream immediately** to save tokens. |
 | **Text-loop tracker** | `loop_streak.go` | Same output text across consecutive steps | Normalised text (200 chars, leading phrases stripped) compared across steps |
-| **Duplicate tool calls** | `local.go` | Model re-issues a tool call already executed with identical arguments | Exact match on tool name + arguments. Nudges first (matching MiMo-Code's approach); terminates after max recovery. |
+| **Duplicate tool calls** | `local.go` | Model re-issues a tool call already executed with identical arguments | Exact match on tool name + arguments. Nudges first (similarly to MiMo-Code's approach); terminates after max recovery. |
+| **Doom-loop gate** | `local.go`, `loop_streak.go` | 3 *consecutive* iterations issuing the exact same tool-call batch (stronger signal than "duplicate tool calls" above, which fires on any repeat seen anywhere earlier in the turn) | Not a nudge — raises an interactive permission ask before letting the model continue, or fails closed immediately for a background job/workflow step (no one to ask) |
 
 ### TUI-level detector (`internal/loop/detector.go`)
 
@@ -179,6 +180,8 @@ The `/bg` slash command manages background agents interactively:
 | `/bg stop <id>` | Terminate a running background agent by its ID |
 
 `/bg` is safe to use while an agent turn is in progress (it never dispatches a new turn). Use `/bg list` to see job IDs, then `/bg stop job_N` to cancel one that's no longer needed.
+
+The spawning agent has a model-facing equivalent to `/bg stop`: a `cancel_background_agent(job_id)` tool call, using the same cancellation path, for when the agent itself decides mid-turn that a job it spawned is no longer needed (e.g. the user's request changed).
 
 **Watching a job (or workflow) live** (ADR-0047): double-click a job's row in the background panel (**F3**), or the workflow panel (**F4**) while a `/workflow` is running, to swap the main transcript for that job's/workflow's own live output — its tool calls and streamed text, kept off the main transcript the whole time, not just summarized after the fact. Esc detaches back to the main transcript, which keeps accumulating underneath the whole time. The buffer keeps growing after the job/workflow finishes, so re-attaching (or never detaching) still shows the full output; nothing auto-detaches on completion. `obs.Debug` logs `attach.start`/`attach.stop` with the job/workflow ID and label, so this is checkable from `milk.log` even without watching the terminal live.
 

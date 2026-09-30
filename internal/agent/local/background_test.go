@@ -64,7 +64,7 @@ func TestRunBackgroundTask_ExcludesRecursiveAndEscalationTools(t *testing.T) {
 	agent.toolAgentEntries = []config.AgentToolEntry{{Agent: "helper", Description: "a helper"}}
 
 	var out strings.Builder
-	resp, _, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "investigate something", &out)
+	resp, _, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "investigate something", "", &out)
 	if err != nil {
 		t.Fatalf("RunBackgroundTask returned error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestRunBackgroundTask_TokenUsageNotAttributedToParent(t *testing.T) {
 	})
 
 	var out strings.Builder
-	_, usage, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "investigate", &out)
+	_, usage, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "investigate", "", &out)
 	if err != nil {
 		t.Fatalf("RunBackgroundTask returned error: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestRunBackgroundTask_RespectsMaxIterations(t *testing.T) {
 	agent := New(srv.URL, "test-model").WithMemConfig(MemConfig{MaxToolIterations: 3})
 	agent.skipPerms = true
 	var out strings.Builder
-	resp, _, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "keep going forever", &out)
+	resp, _, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "keep going forever", "", &out)
 	if err != nil {
 		t.Fatalf("RunBackgroundTask returned error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestRunBackgroundTask_ConcurrentWithParentRun_NoRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		var out strings.Builder
-		if _, _, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "investigate", &out); err != nil {
+		if _, _, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "investigate", "", &out); err != nil {
 			t.Errorf("RunBackgroundTask returned error: %v", err)
 		}
 	}()
@@ -429,7 +429,7 @@ func TestRunBackgroundTask_PermissionGatedToolDeniesInsteadOfHanging(t *testing.
 	var runErr error
 	go func() {
 		var out strings.Builder
-		resp, _, runErr = agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "run ls", &out)
+		resp, _, runErr = agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "run ls", "", &out)
 		close(done)
 	}()
 
@@ -443,5 +443,143 @@ func TestRunBackgroundTask_PermissionGatedToolDeniesInsteadOfHanging(t *testing.
 	}
 	if resp != "done" {
 		t.Errorf("expected the model to react to the denial and finish normally with %q, got %q", "done", resp)
+	}
+}
+
+// TestDispatchOneTool_CancelBackgroundAgent_CancelsRunningJob verifies the
+// model-facing cancel_background_agent tool actually cancels a running job
+// via the same Manager.Cancel path /bg stop uses.
+func TestDispatchOneTool_CancelBackgroundAgent_CancelsRunningJob(t *testing.T) {
+	agent := New("http://unused", "test-model")
+	mgr := NewManager(context.Background(), 3)
+	agent.SetBackgroundManager(mgr)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	mgr.SetOnDone(func(j *Job) { wg.Done() })
+
+	job := mgr.Spawn("slow task", "do something slow", "primary", "test-model",
+		func(jobCtx context.Context, jobID string, jobOut io.Writer) (string, session.TokenUsage, error) {
+			<-jobCtx.Done() // blocks until Cancel() fires
+			return "", session.TokenUsage{}, jobCtx.Err()
+		})
+
+	tc := toolCall{ID: "tc1", Function: toolCallFunction{
+		Name:      "cancel_background_agent",
+		Arguments: fmt.Sprintf(`{"job_id":%q}`, job.ID),
+	}}
+	outcome := agent.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, &session.Session{}, nil, nil)
+	if !strings.Contains(outcome.msg.Content, "Cancelled background agent "+job.ID) {
+		t.Errorf("expected a cancellation confirmation, got %q", outcome.msg.Content)
+	}
+
+	wg.Wait()
+	jobs := mgr.Drain()
+	if len(jobs) != 1 || jobs[0].Status != JobFailed {
+		t.Fatalf("expected the job to end up JobFailed after cancellation, got %+v", jobs)
+	}
+}
+
+// TestDispatchOneTool_CancelBackgroundAgent_UnknownID_ReturnsError verifies
+// that cancelling a nonexistent/already-finished job ID surfaces a tool
+// error instead of silently succeeding.
+func TestDispatchOneTool_CancelBackgroundAgent_UnknownID_ReturnsError(t *testing.T) {
+	agent := New("http://unused", "test-model")
+	mgr := NewManager(context.Background(), 3)
+	agent.SetBackgroundManager(mgr)
+
+	tc := toolCall{ID: "tc1", Function: toolCallFunction{
+		Name:      "cancel_background_agent",
+		Arguments: `{"job_id":"job_does_not_exist"}`,
+	}}
+	outcome := agent.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, &session.Session{}, nil, nil)
+	if !strings.Contains(outcome.msg.Content, "no running background agent") {
+		t.Errorf("expected an error result for an unknown job ID, got %q", outcome.msg.Content)
+	}
+}
+
+// TestDispatchOneTool_SpawnBackgroundAgent_FullContext_InjectsSummary
+// verifies that full_context:true carries the spawning agent's
+// sess.LastLocalSummary into the background job's own request as an extra
+// system message, alongside its own isolated system prompt and task.
+func TestDispatchOneTool_SpawnBackgroundAgent_FullContext_InjectsSummary(t *testing.T) {
+	var mu sync.Mutex
+	var bodies [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	agent := New(srv.URL, "test-model")
+	mgr := NewManager(context.Background(), 3)
+	agent.SetBackgroundManager(mgr)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	mgr.SetOnDone(func(j *Job) { wg.Done() })
+
+	sess := &session.Session{CWD: "/tmp", LastLocalSummary: "User: investigate the login bug\nAssistant: found it in auth.go"}
+	tc := toolCall{ID: "tc1", Function: toolCallFunction{
+		Name:      "spawn_background_agent",
+		Arguments: `{"task":"write a fix for the bug","label":"fix it","full_context":true}`,
+	}}
+	agent.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, sess, nil, nil)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("expected 1 request to the background job's own server, got %d", len(bodies))
+	}
+	if !strings.Contains(string(bodies[0]), "found it in auth.go") {
+		t.Errorf("expected the parent's LastLocalSummary injected into the job's request, got %s", bodies[0])
+	}
+}
+
+// TestDispatchOneTool_SpawnBackgroundAgent_DefaultNoFullContext_NoSummary
+// verifies that omitting full_context (default false) does NOT leak the
+// parent's summary into the job's request — the isolated-by-default
+// behavior must be unchanged.
+func TestDispatchOneTool_SpawnBackgroundAgent_DefaultNoFullContext_NoSummary(t *testing.T) {
+	var mu sync.Mutex
+	var bodies [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	agent := New(srv.URL, "test-model")
+	mgr := NewManager(context.Background(), 3)
+	agent.SetBackgroundManager(mgr)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	mgr.SetOnDone(func(j *Job) { wg.Done() })
+
+	sess := &session.Session{CWD: "/tmp", LastLocalSummary: "User: investigate the login bug\nAssistant: found it in auth.go"}
+	tc := toolCall{ID: "tc1", Function: toolCallFunction{
+		Name:      "spawn_background_agent",
+		Arguments: `{"task":"write a fix for the bug","label":"fix it"}`,
+	}}
+	agent.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, sess, nil, nil)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("expected 1 request to the background job's own server, got %d", len(bodies))
+	}
+	if strings.Contains(string(bodies[0]), "found it in auth.go") {
+		t.Errorf("expected no summary leaked without full_context, got %s", bodies[0])
 	}
 }

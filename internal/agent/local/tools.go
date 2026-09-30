@@ -30,9 +30,10 @@ const errMemUnavailable = "memory store not available"
 const errTaskUnavailable = "task store not available"
 
 // maxReadLines is the default cap for read_file when no limit is given.
-// Matches MiMo-Code's DEFAULT_READ_LIMIT (2000) — large enough that a model
-// reads a whole file (or a substantial window of one) in a single call
-// instead of paging through it in small, iteration-burning slices.
+// Sized similarly to MiMo-Code's DEFAULT_READ_LIMIT (2000) — large enough
+// that a model reads a whole file (or a substantial window of one) in a
+// single call instead of paging through it in small, iteration-burning
+// slices.
 const maxReadLines = 2000
 
 // TaskStore is the subset of the tasks.Store interface used by the local agent.
@@ -563,10 +564,35 @@ func spawnBackgroundAgentSchema() map[string]any {
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task":  map[string]any{"type": "string", "description": "The self-contained question or task for the background agent. Include everything it needs — it does not see your conversation."},
-					"label": map[string]any{"type": "string", "description": `Short human-readable label for status display, e.g. "analyze level-gen code".`},
+					"task":         map[string]any{"type": "string", "description": "The self-contained question or task for the background agent. Include everything it needs — it does not see your conversation."},
+					"label":        map[string]any{"type": "string", "description": `Short human-readable label for status display, e.g. "analyze level-gen code".`},
+					"full_context": map[string]any{"type": "boolean", "description": "Rarely needed — default false. When true, the job also receives a summary of your own recent activity in this conversation, for a task that genuinely depends on what you've been doing (not just a self-contained question). This makes the job more expensive and defeats most of the point of forking (keeping your context small doesn't help if the fork re-pays that cost) — prefer putting everything the task needs directly in the task text instead."},
 				},
 				"required": []string{"task", "label"},
+			},
+		},
+	}
+}
+
+// cancelBackgroundAgentSchema is the schema for the cancel_background_agent
+// tool (docs/prompt-context-management-review.md §8 rec #12) — the
+// model-facing counterpart to the human-only `/bg stop` command, letting the
+// spawning agent itself cancel a job it decided is no longer needed. Gated
+// identically to spawnBackgroundAgentSchema (only appended when
+// a.backgroundManager is set), and for the same reason: never offered to a
+// background job's own tool list.
+func cancelBackgroundAgentSchema() map[string]any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "cancel_background_agent",
+			"description": "Cancel a background agent job you previously spawned via spawn_background_agent, by its job ID. Use this if you decide the answer is no longer needed (e.g. the user's request changed) — otherwise let it run to completion.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id": map[string]any{"type": "string", "description": "The job ID returned by spawn_background_agent."},
+				},
+				"required": []string{"job_id"},
 			},
 		},
 	}

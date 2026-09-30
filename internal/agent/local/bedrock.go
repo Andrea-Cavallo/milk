@@ -52,6 +52,7 @@ type bedrockContentBlock struct {
 	Text       string             `json:"text,omitempty"`
 	ToolUse    *bedrockToolUse    `json:"toolUse,omitempty"`
 	ToolResult *bedrockToolResult `json:"toolResult,omitempty"`
+	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
 }
 
 type bedrockToolUse struct {
@@ -206,16 +207,64 @@ func convertMessagesToConverse(msgs []Message) ([]bedrockMessage, []bedrockSyste
 	return result, system
 }
 
-// appendSystemCachePoint appends an explicit cachePoint block as the last
-// element of the system array, opting the stable system-prompt prefix into
-// AWS Bedrock's explicit prompt caching (see AgentConfig.PromptCaching).
-// No-op when system is empty: a lone cachePoint block with no preceding
-// content has no prefix to mark as reusable.
+// appendSystemCachePoint inserts an explicit cachePoint block right after
+// the *first* element of the system array, not at the end, opting the
+// stable system-prompt prefix into AWS Bedrock's explicit prompt caching
+// (see AgentConfig.PromptCaching). No-op when system is empty: a lone
+// cachePoint block with no preceding content has no prefix to mark as
+// reusable.
+//
+// Position matters here: convertMessagesToConverse flattens every
+// role=="system" message into its own system[] entry, in order. system[0]
+// is always the large, mostly-static buildSystemPrompt output (see Run's
+// msgs := []Message{{Role: "system", Content: systemPrompt}}); any percepts
+// or current-need orientation are separate system-role messages prepended
+// into history *after* that (runner.go), so they land at system[1:] —
+// small and turn-to-turn-varying. Placing the cachePoint at the very end
+// (the original behavior) bundled the stable prompt and the dynamic
+// entries into one cached unit, invalidating the whole thing — including
+// the expensive-to-reprocess system prompt — on every percept/need change.
+// Anchoring it right after system[0] instead caches only the part that's
+// actually stable, independent of what comes after.
 func appendSystemCachePoint(system []bedrockSystem) []bedrockSystem {
 	if len(system) == 0 {
 		return system
 	}
-	return append(system, bedrockSystem{CachePoint: &bedrockCachePoint{Type: "default"}})
+	out := make([]bedrockSystem, 0, len(system)+1)
+	out = append(out, system[0], bedrockSystem{CachePoint: &bedrockCachePoint{Type: "default"}})
+	return append(out, system[1:]...)
+}
+
+// appendMessageCachePoints marks the last two messages as cache breakpoints
+// (a rolling "double buffer"), in addition to the single system-prefix
+// breakpoint appendSystemCachePoint adds. The system prefix alone only
+// caches the (small, mostly-static) system prompt; the conversation/tool-
+// call history is what actually grows during a tool loop, and previously
+// had no cache breakpoint at all.
+//
+// Marking only the single last message would mean any retry, edit, or
+// removal of that message drops its marker and forces a full-prefix
+// recompute; marking the last two means the next-to-last marker survives as
+// a fallback anchor, degrading the worst case to "recompute only the
+// removed message" instead. This is the same double-buffer strategy
+// MiMo-Code and OpenCode converged on independently — see
+// docs/prompt-context-management-review.md §8 rec #11. Bedrock allows up to
+// 4 cache breakpoints total; this uses at most 3 (1 system + 2 message) to
+// leave headroom.
+//
+// EXPERIMENTAL, like the rest of this file's prompt-caching support: not
+// live-tested against a real Bedrock endpoint (no Bedrock agent was
+// available during development).
+func appendMessageCachePoints(messages []bedrockMessage) []bedrockMessage {
+	n := len(messages)
+	if n == 0 {
+		return messages
+	}
+	start := max(n-2, 0)
+	for i := start; i < n; i++ {
+		messages[i].Content = append(messages[i].Content, bedrockContentBlock{CachePoint: &bedrockCachePoint{Type: "default"}})
+	}
+	return messages
 }
 
 // convertToolsToConverse translates OpenAI tool schemas to Bedrock ToolSpec format.
@@ -261,6 +310,7 @@ func (a *Agent) bedrockStreamCompletion(ctx context.Context, msgs []Message, too
 	bedrockMsgs, system := convertMessagesToConverse(msgs)
 	if a.promptCaching {
 		system = appendSystemCachePoint(system)
+		bedrockMsgs = appendMessageCachePoints(bedrockMsgs)
 	}
 	bedrockTools := convertToolsToConverse(tools)
 

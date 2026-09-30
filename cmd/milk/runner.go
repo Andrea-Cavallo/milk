@@ -20,6 +20,7 @@ import (
 	"github.com/scoutme/milk/internal/agentprompt"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/escalation"
+	"github.com/scoutme/milk/internal/instructions"
 	"github.com/scoutme/milk/internal/mcp"
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/session"
@@ -187,6 +188,7 @@ func (r *localRunner) Execute(
 
 	agent := r.agent.WithMemConfig(local.MemConfig{
 		ResultMaxBytes:       cfg.AgentMemoryResultMaxByteCount(ac),
+		ToolResultMaxBytes:   cfg.AgentToolResultMaxByteCount(ac),
 		ReinjectionTurns:     cfg.AgentMemoryReinjectionTurnThreshold(ac, role == RolePrimary),
 		ReinjectionBytes:     cfg.AgentMemoryReinjectionByteThreshold(ac, role == RolePrimary),
 		RelevanceGateEnabled: cfg.AgentPerceptRelevanceGateEnabled(ac),
@@ -234,7 +236,7 @@ func (r *localRunner) Execute(
 
 	case RoleEscalation:
 		// Inject orientation as a system message, build appropriately-scoped history.
-		orientationText := escalation.BuildDynamicContext(sess, ctxMode)
+		orientationText := escalation.BuildDynamicContext(sess, ctxMode, percepts)
 		perceptsText := escalation.FormatPercepts(percepts)
 		skipOther := cfg.ExperimentalLazyHistoryManagement
 
@@ -256,7 +258,11 @@ func (r *localRunner) Execute(
 			overhead := agent.SystemOverheadChars(sess) + len(orientationText)
 			msgBudget = max(1, msgBudget-overhead)
 		}
-		if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+		if ac.DisableCompaction {
+			if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+				history = trimmed
+			}
+		} else if trimmed, ok := trimLocalMessagesWithCompaction(ctx, agent, sess, history, msgBudget); ok {
 			history = trimmed
 		}
 
@@ -284,7 +290,11 @@ func (r *localRunner) Execute(
 			overhead := agent.SystemOverheadChars(sess)
 			msgBudget = max(1, msgBudget-overhead)
 		}
-		if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+		if ac.DisableCompaction {
+			if trimmed, ok := trimLocalMessages(history, msgBudget); ok {
+				history = trimmed
+			}
+		} else if trimmed, ok := trimLocalMessagesWithCompaction(ctx, agent, sess, history, msgBudget); ok {
 			history = trimmed
 		}
 	}
@@ -488,6 +498,12 @@ func (r *cliRunner) Execute(
 		default: // RoleEscalation
 			s = escalation.BuildStaticContext(nonce, percepts, mode, inject, primaryName, escalationName)
 		}
+		if role != RoleWorkflow && !roleAC.DisableProjectInstructions {
+			// AGENTS.md only, no CLAUDE.md fallback: the Claude CLI already loads
+			// the repo's own CLAUDE.md natively, so injecting it again here would
+			// only duplicate tokens milk doesn't need to send.
+			s += instructions.Block(sess.CWD, false)
+		}
 		if cfg.ExperimentalPermissionManagement {
 			s += permissionManagementInstruction
 		}
@@ -503,7 +519,7 @@ func (r *cliRunner) Execute(
 		case RolePrimary:
 			return escalation.BuildPrimaryDynamicContext(sess, mode)
 		default: // RoleEscalation
-			return escalation.BuildDynamicContext(sess, mode)
+			return escalation.BuildDynamicContext(sess, mode, percepts)
 		}
 	}
 
@@ -803,7 +819,12 @@ func (r *subprocessRunner) Execute(
 		dynamicCtx = escalation.BuildPrimaryDynamicContext(sess, ctxMode)
 	default: // RoleEscalation
 		staticCtx = escalation.BuildStaticContext(nonce, percepts, ctxMode, injectInstructions, primaryName, escalationName)
-		dynamicCtx = escalation.BuildDynamicContext(sess, ctxMode)
+		dynamicCtx = escalation.BuildDynamicContext(sess, ctxMode, percepts)
+	}
+	if role != RoleWorkflow && !agentConfigForRole(cfg, role).DisableProjectInstructions {
+		// AGENTS.md only — see the identical comment in cliRunner.Execute's
+		// buildStatic for why no CLAUDE.md fallback here.
+		staticCtx += instructions.Block(sess.CWD, false)
 	}
 	if r.mcpToolSet != nil {
 		mcpBlock := escalation.BuildMCPContextBlock(r.mcpServers, r.mcpToolSet.Schemas(ctx))

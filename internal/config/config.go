@@ -102,6 +102,9 @@ func DeepMerge(dst, src Config) Config {
 	if src.LocalMemoryResultMaxBytes != 0 {
 		dst.LocalMemoryResultMaxBytes = src.LocalMemoryResultMaxBytes
 	}
+	if src.LocalToolResultMaxBytes != 0 {
+		dst.LocalToolResultMaxBytes = src.LocalToolResultMaxBytes
+	}
 	if src.LocalMemoryReinjectionTurns != 0 {
 		dst.LocalMemoryReinjectionTurns = src.LocalMemoryReinjectionTurns
 	}
@@ -528,6 +531,36 @@ type AgentConfig struct {
 	// Empty string is treated as "standard".
 	SystemPromptTier string `json:"system_prompt_tier,omitempty"`
 
+	// DisableProjectInstructions turns off loading the target repo's
+	// AGENTS.md/CLAUDE.md into this agent's system/static context. Default:
+	// false (enabled) — set true if a repo's instructions file is irrelevant
+	// or wrong for this particular agent.
+	DisableProjectInstructions bool `json:"disable_project_instructions,omitempty"`
+
+	// DisableCompaction turns off the one-extra-inference-call summarization
+	// step that runs when this agent's message history would otherwise be
+	// hard-dropped for exceeding message_budget_chars/local_context_budget_chars
+	// (see cmd/milk/main.go's trimLocalMessagesWithCompaction). Default: false
+	// (enabled) — set true to skip the extra call's latency/cost and fall back
+	// to a plain drop-oldest-first trim, e.g. for a model that summarizes
+	// poorly or a provider Summarize doesn't support (Bedrock, Responses API —
+	// those already fall back automatically, but the flag avoids even
+	// attempting the call).
+	DisableCompaction bool `json:"disable_compaction,omitempty"`
+
+	// BashAllowedPatterns is a static, admin-configured allow-list of bash
+	// command prefixes that never require a permission ask/grant for this
+	// agent — a finer-grained alternative to a blanket "bash" grant (see
+	// docs/prompt-context-management-review.md §8 rec #8). Each entry is
+	// matched against the tool call's actual "command" argument: an entry
+	// ending in "*" matches by prefix (e.g. "git diff*" matches "git diff
+	// --stat HEAD"); an entry with no "*" must match the whole command
+	// exactly. A command that doesn't match any pattern here falls through
+	// to the normal PermStore grant/ask flow unchanged — this only adds a
+	// fast, safe pre-approval path, it never narrows what a plain "bash"
+	// grant already allows.
+	BashAllowedPatterns []string `json:"bash_allowed_patterns,omitempty"`
+
 	// ContextWindowTokens is the context window size of this agent's model in
 	// tokens. When set and no explicit limits.message_budget_chars or
 	// limits.max_tool_iterations override is configured, milk auto-derives
@@ -590,6 +623,8 @@ type AgentLimits struct {
 	MemoryReinjectionBytes *int `json:"memory_reinjection_bytes,omitempty"`
 	// MemoryResultMaxBytes overrides local_memory_result_max_bytes.
 	MemoryResultMaxBytes *int `json:"memory_result_max_bytes,omitempty"`
+	// ToolResultMaxBytes overrides local_tool_result_max_bytes.
+	ToolResultMaxBytes *int `json:"tool_result_max_bytes,omitempty"`
 	// PerceptInjectMax overrides percept_inject_max.
 	PerceptInjectMax *int `json:"percept_inject_max,omitempty"`
 	// PerceptInjectMaxBytes overrides percept_inject_max_bytes.
@@ -862,6 +897,16 @@ type Config struct {
 	// Results are truncated to this limit before being appended to the
 	// local context. Default: 2048. Set to 0 for no limit.
 	LocalMemoryResultMaxBytes int `json:"local_memory_result_max_bytes,omitempty"`
+
+	// LocalToolResultMaxBytes caps the byte size of any other tool result
+	// (bash, read_file, …) appended to the local agent's context — unlike
+	// memory tool results, these have no cap of their own and a single
+	// verbose shell/build/test output can otherwise dominate a turn's
+	// payload before the payload-size trim loop ever gets a chance to run.
+	// Truncation keeps both ends (see truncateHeadAndTail) since shell/build
+	// output's most important signal is typically at the end.
+	// Default: 20000 (~5000 tokens). Set to 0 for no limit.
+	LocalToolResultMaxBytes int `json:"local_tool_result_max_bytes,omitempty"`
 
 	// LocalMemoryReinjectionTurns is the number of local agent turns after which
 	// the memory/need instruction block is unconditionally re-appended to the
@@ -1240,6 +1285,19 @@ func (c Config) LocalMemoryResultMaxByteCount() int {
 	return c.LocalMemoryResultMaxBytes
 }
 
+// LocalToolResultMaxByteCount returns the max byte size of a non-memory tool
+// result returned to the local agent per call, defaulting to 20000. Returns 0
+// when explicitly disabled (unlimited).
+func (c Config) LocalToolResultMaxByteCount() int {
+	if c.LocalToolResultMaxBytes < 0 {
+		return 0
+	}
+	if c.LocalToolResultMaxBytes == 0 {
+		return 20000
+	}
+	return c.LocalToolResultMaxBytes
+}
+
 // LocalMemoryReinjectionTurnThreshold returns the local-turn interval for
 // memory instruction re-injection, defaulting to 20. Returns 0 when disabled.
 func (c Config) LocalMemoryReinjectionTurnThreshold() int {
@@ -1443,6 +1501,19 @@ func (c Config) AgentMemoryResultMaxByteCount(a AgentConfig) int {
 		return intOr(v, 2048)
 	}
 	return c.LocalMemoryResultMaxByteCount()
+}
+
+// AgentToolResultMaxByteCount returns the non-memory tool result size cap for
+// the given agent, falling back to the global LocalToolResultMaxByteCount().
+func (c Config) AgentToolResultMaxByteCount(a AgentConfig) int {
+	if a.Limits != nil && a.Limits.ToolResultMaxBytes != nil {
+		v := *a.Limits.ToolResultMaxBytes
+		if v < 0 {
+			return 0
+		}
+		return intOr(v, 20000)
+	}
+	return c.LocalToolResultMaxByteCount()
 }
 
 // AgentPerceptInjectMaxCount returns the percept injection count cap for the

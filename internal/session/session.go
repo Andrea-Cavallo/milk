@@ -87,6 +87,14 @@ type Session struct {
 	// LastLocalSummaryInjected is the value of LastLocalSummary at the time it was last
 	// sent to the escalation agent. Used to detect when re-injection is necessary.
 	LastLocalSummaryInjected string `json:"-"` // transient, not persisted
+	// EscalationPerceptsInjected is a snapshot of the percept content strings
+	// last delivered to the escalation agent (via the static context on
+	// First/Returning turns, or the dynamic context's diff on Resume/
+	// Continuation turns). Used so a percept recorded mid-way through a long
+	// resumed/sticky escalation session is still surfaced on the next turn,
+	// instead of staying invisible until the session naturally re-enters
+	// First/Returning mode. See escalation.BuildDynamicContext.
+	EscalationPerceptsInjected []string `json:"-"` // transient, not persisted
 	// LastEscalationSummary is a pre-rendered, sanitized, budget-capped summary of
 	// Escalation turns. Reserved for future demotion back to local.
 	LastEscalationSummary string `json:"last_claude_summary,omitempty"`

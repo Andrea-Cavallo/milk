@@ -280,7 +280,7 @@ func TestBuildDynamicContext_ContainsNeedAndBrief(t *testing.T) {
 		EscalationBrief:  "nil pointer in auth.go",
 		LastLocalSummary: "User: run tests\nAssistant: done",
 	}
-	got := BuildDynamicContext(sess, ContextModeFirst)
+	got := BuildDynamicContext(sess, ContextModeFirst, nil)
 	if strings.Contains(got, identityBlock) {
 		t.Error("dynamic context should NOT contain identity block (moved to static)")
 	}
@@ -300,7 +300,7 @@ func TestBuildDynamicContext_ResumeOnlyChangedSummary(t *testing.T) {
 		CurrentNeed:      "fix the bug",
 		LastLocalSummary: "User: run tests",
 	}
-	got := BuildDynamicContext(sess, ContextModeResume)
+	got := BuildDynamicContext(sess, ContextModeResume, nil)
 	if strings.Contains(got, identityBlock) {
 		t.Error("dynamic context on resume should not contain identity block")
 	}
@@ -317,9 +317,50 @@ func TestBuildDynamicContext_ResumeEmptyWhenSummaryUnchanged(t *testing.T) {
 		LastLocalSummary:         "User: run tests",
 		LastLocalSummaryInjected: "User: run tests",
 	}
-	got := BuildDynamicContext(sess, ContextModeResume)
+	got := BuildDynamicContext(sess, ContextModeResume, nil)
 	if got != "" {
 		t.Errorf("dynamic context on resume should be empty when summary unchanged, got %q", got)
+	}
+}
+
+func TestBuildDynamicContext_ResumeSurfacesNewPercept(t *testing.T) {
+	sess := &session.Session{EscalationPerceptsInjected: []string{"fact A"}}
+	got := BuildDynamicContext(sess, ContextModeResume, []string{"fact A", "fact B"})
+	if !strings.Contains(got, "[New remembered facts]") {
+		t.Error("expected a new-percepts block when a percept was recorded since the last injection")
+	}
+	if !strings.Contains(got, "fact B") {
+		t.Error("expected the new percept's content in the block")
+	}
+	if got2 := "\n" + got; strings.Count(got2, "fact A") != 0 {
+		t.Errorf("expected the already-injected percept NOT to be re-announced, got %q", got)
+	}
+	if len(sess.EscalationPerceptsInjected) != 2 {
+		t.Errorf("expected EscalationPerceptsInjected to snapshot both percepts, got %v", sess.EscalationPerceptsInjected)
+	}
+}
+
+func TestBuildDynamicContext_ResumeNoNewPercepts(t *testing.T) {
+	sess := &session.Session{EscalationPerceptsInjected: []string{"fact A"}}
+	got := BuildDynamicContext(sess, ContextModeResume, []string{"fact A"})
+	if strings.Contains(got, "[New remembered facts]") {
+		t.Errorf("expected no new-percepts block when nothing changed, got %q", got)
+	}
+}
+
+func TestBuildDynamicContext_ContinuationSurfacesNewPercept(t *testing.T) {
+	sess := &session.Session{EscalationPerceptsInjected: []string{"fact A"}}
+	got := BuildDynamicContext(sess, ContextModeContinuation, []string{"fact A", "fact B"})
+	if !strings.Contains(got, "[New remembered facts]") || !strings.Contains(got, "fact B") {
+		t.Errorf("expected the new percept surfaced on a continuation turn too, got %q", got)
+	}
+}
+
+func TestBuildDynamicContext_FirstModeSnapshotsPercepts(t *testing.T) {
+	sess := &session.Session{}
+	_ = BuildDynamicContext(sess, ContextModeFirst, []string{"fact A", "fact B"})
+	if len(sess.EscalationPerceptsInjected) != 2 {
+		t.Errorf("expected First mode to snapshot the delivered percepts (via static context) for future diffing, got %v", sess.EscalationPerceptsInjected)
 	}
 }
 
@@ -332,7 +373,7 @@ func TestBuildStaticContext_ContainsIdentityBlock(t *testing.T) {
 
 func TestBuildDynamicContext_DoesNotContainInstructions(t *testing.T) {
 	sess := &session.Session{}
-	got := BuildDynamicContext(sess, ContextModeFirst)
+	got := BuildDynamicContext(sess, ContextModeFirst, nil)
 	if strings.Contains(got, "milk:percept:") {
 		t.Error("dynamic context should not contain memory instruction")
 	}
@@ -412,7 +453,7 @@ func TestBuildDynamicContext_ContinuationOnlyChangedSummary(t *testing.T) {
 		EscalationBrief:  "nil pointer in auth.go",
 		LastLocalSummary: "User: run tests",
 	}
-	got := BuildDynamicContext(sess, ContextModeContinuation)
+	got := BuildDynamicContext(sess, ContextModeContinuation, nil)
 	if strings.Contains(got, identityBlock) {
 		t.Error("dynamic context on continuation should not contain identity block")
 	}
@@ -432,7 +473,7 @@ func TestBuildDynamicContext_ContinuationEmptyWhenSummaryUnchanged(t *testing.T)
 		LastLocalSummary:         "User: run tests",
 		LastLocalSummaryInjected: "User: run tests",
 	}
-	got := BuildDynamicContext(sess, ContextModeContinuation)
+	got := BuildDynamicContext(sess, ContextModeContinuation, nil)
 	if got != "" {
 		t.Errorf("dynamic context on continuation should be empty when summary unchanged, got %q", got)
 	}
@@ -443,7 +484,7 @@ func TestBuildDynamicContext_ContinuationEmptyWhenNoSummary(t *testing.T) {
 		CurrentNeed:     "fix the bug",
 		EscalationBrief: "nil pointer",
 	}
-	got := BuildDynamicContext(sess, ContextModeContinuation)
+	got := BuildDynamicContext(sess, ContextModeContinuation, nil)
 	if got != "" {
 		t.Errorf("dynamic context on continuation with no summary should be empty, got %q", got)
 	}

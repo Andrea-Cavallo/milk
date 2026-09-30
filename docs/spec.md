@@ -75,6 +75,9 @@ internal/
   agent/aider/      aider-cli provider (wraps subprocess agent)
   agent/smolagent/  subprocess provider (wraps subprocess agent)
   escalation/       context builders: static instruction block + dynamic summary sent to escalation agent
+  instructions/     loads the target repo's AGENTS.md (falling back to CLAUDE.md for the local-model
+                    path only) into agent system/static context, cached by file mtime
+  textbudget/       shared head+tail truncation helper for bounding large text before prompt hand-off
   memory/           Percept store; NREM decay/prune/promote consolidation (~/.milk/memory/)
   obs/              OpenTelemetry file exporters (~/.milk/otel/)
   claudesettings/   ~/.claude/settings.json reader (allowed tools, directories, AWS refresh command)
@@ -300,3 +303,19 @@ Both agents stream output in real time: SSE from OpenAI-compat APIs (`stream: tr
 - Web UI / TUI
 - MCP stdio transport for local tools ✓ (done)
 - Multi-user / daemon mode
+
+---
+
+## Acknowledgments
+
+milk's prompt/context-management and loop-detection design was informed by studying (not copying
+code from) other coding-agent harnesses — independent implementations compared directly against
+milk's own, not ports:
+
+- **[Claude Code](https://claude.com/claude-code)** — the escalation-agent subprocess milk drives via `claude --print`, and the reference for milk's own project-instruction loading (AGENTS.md/CLAUDE.md).
+- **[MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code)** (Xiaomi's fork of OpenCode) — compared for loop-detection thresholds (the doom-loop gate, n-gram repetition monitor), prompt-caching breakpoint strategy, and checkpoint/distillation memory design.
+- **[OpenCode](https://github.com/anomalyco/opencode)** — compared for `AGENTS.md` project-instruction loading, sub-agent context isolation (`ForkContext`), and prompt-caching strategy.
+
+The full comparison (findings, what was and wasn't adopted, and why) lives in a design analysis
+kept out of this published site — see the `prompt-context-management-review.md` doc in the
+repository root's `docs/` directory on [GitHub](https://github.com/scoutme/milk).

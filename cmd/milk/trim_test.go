@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/scoutme/milk/internal/agent/local"
+	"github.com/scoutme/milk/internal/session"
 )
 
 func msgs(pairs ...string) []local.Message {
@@ -124,5 +130,93 @@ func TestTrimLocalMessages_OverheadExceedsBudget(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 messages remaining, got %d", len(got))
+	}
+}
+
+// --- trimLocalMessagesWithCompaction ---
+
+func TestTrimLocalMessagesWithCompaction_NilAgentFallsBackToHardDrop(t *testing.T) {
+	in := msgs(
+		"user", "first long message that pushes over budget",
+		"assistant", "first reply",
+		"user", "second",
+		"assistant", "ok",
+	)
+	budget := len("second") + len("ok") + 5
+	got, trimmed := trimLocalMessagesWithCompaction(context.Background(), nil, nil, in, budget)
+	if !trimmed {
+		t.Error("expected trimming to occur")
+	}
+	if len(got) != 2 || got[0].Content != "second" {
+		t.Errorf("expected plain hard-drop fallback, got %+v", got)
+	}
+}
+
+func TestTrimLocalMessagesWithCompaction_WithinBudgetNoOp(t *testing.T) {
+	in := msgs("user", "hi", "assistant", "hey")
+	got, trimmed := trimLocalMessagesWithCompaction(context.Background(), nil, nil, in, 10000)
+	if trimmed {
+		t.Error("should not trim when under budget")
+	}
+	if len(got) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(got))
+	}
+}
+
+func TestTrimLocalMessagesWithCompaction_SplicesSummaryInsteadOfDropping(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"condensed summary of the dropped turns"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
+	}))
+	defer srv.Close()
+	agent := local.New(srv.URL, "test-model")
+
+	in := msgs(
+		"user", "first long message that pushes over budget",
+		"assistant", "first reply",
+		"user", "second",
+		"assistant", "ok",
+	)
+	budget := len("second") + len("ok") + 5
+	sess := &session.Session{}
+	got, trimmed := trimLocalMessagesWithCompaction(context.Background(), agent, sess, in, budget)
+	if !trimmed {
+		t.Error("expected trimming to occur")
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 1 summary message + 2 kept messages, got %d: %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].Content, "condensed summary of the dropped turns") {
+		t.Errorf("expected summary content spliced in as the first message, got %q", got[0].Content)
+	}
+	if got[1].Content != "second" || got[2].Content != "ok" {
+		t.Errorf("expected kept messages preserved after the summary, got %+v", got[1:])
+	}
+	usage := sess.Tokens["test-model\x00primary:compaction"]
+	if usage == nil || usage.Prompt != 10 || usage.Completion != 5 {
+		t.Errorf("expected compaction token usage recorded on the session, got %+v", usage)
+	}
+}
+
+func TestTrimLocalMessagesWithCompaction_SummarizeFailureFallsBackToHardDrop(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	agent := local.New(srv.URL, "test-model")
+
+	in := msgs(
+		"user", "first long message that pushes over budget",
+		"assistant", "first reply",
+		"user", "second",
+		"assistant", "ok",
+	)
+	budget := len("second") + len("ok") + 5
+	got, trimmed := trimLocalMessagesWithCompaction(context.Background(), agent, nil, in, budget)
+	if !trimmed {
+		t.Error("expected trimming to occur")
+	}
+	if len(got) != 2 || got[0].Content != "second" {
+		t.Errorf("expected plain hard-drop fallback on summarize failure, got %+v", got)
 	}
 }

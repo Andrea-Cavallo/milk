@@ -178,9 +178,17 @@ func (s *Store) RecordGlobal(ctx context.Context, content string, producer Produ
 	return p.ID, s.saveFile(s.globalPath, s.global)
 }
 
-// Query returns Percepts matching a keyword query, ordered by weight desc.
-// maxResults <= 0 means no limit. minConfidence filters by W.
-// caller restricts results to percepts visible to that agent (ConsumerAll = no restriction).
+// Query returns Percepts matching a keyword query, ordered by token-overlap
+// count desc then weight desc. maxResults <= 0 means no limit. minConfidence
+// filters by W. caller restricts results to percepts visible to that agent
+// (ConsumerAll = no restriction).
+//
+// Matching is token-based (tokenize, shared with FindSimilar/FilterByRelevance)
+// rather than literal substring — a query like "dog name" must still match a
+// percept phrased "the user's dog's name is Biscuit", where the possessive
+// apostrophe means "dog's" and "name" never literally contain "dog name" as a
+// substring. A query with no content-bearing tokens (empty, or stop-words
+// only) matches everything, same as FilterByRelevance.
 func (s *Store) Query(ctx context.Context, query string, minConfidence float64, maxResults int, caller Consumer) []Percept {
 	ctx, end := traceRecall(ctx, query)
 
@@ -188,9 +196,13 @@ func (s *Store) Query(ctx context.Context, query string, minConfidence float64, 
 	defer s.mu.Unlock()
 
 	all := s.allPercepts()
-	lower := strings.ToLower(query)
+	queryTokens := tokenize(query)
 
-	var candidates []Percept
+	type scored struct {
+		p    Percept
+		hits int
+	}
+	var candidates []scored
 	for _, p := range all {
 		if p.W < minConfidence {
 			continue
@@ -198,23 +210,41 @@ func (s *Store) Query(ctx context.Context, query string, minConfidence float64, 
 		if caller != ConsumerAll && p.Consumer != ConsumerAll && p.Consumer != caller {
 			continue
 		}
-		if lower == "" || strings.Contains(strings.ToLower(p.Content), lower) {
-			candidates = append(candidates, p)
+		if len(queryTokens) == 0 {
+			candidates = append(candidates, scored{p, 0})
+			continue
+		}
+		hits := 0
+		for t := range tokenize(p.Content) {
+			if _, ok := queryTokens[t]; ok {
+				hits++
+			}
+		}
+		if hits > 0 {
+			candidates = append(candidates, scored{p, hits})
 		}
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].W > candidates[j].W
+		if candidates[i].hits != candidates[j].hits {
+			return candidates[i].hits > candidates[j].hits
+		}
+		return candidates[i].p.W > candidates[j].p.W
 	})
 
 	if maxResults > 0 && len(candidates) > maxResults {
 		candidates = candidates[:maxResults]
 	}
 
-	end(len(candidates), nil)
-	logRecall(ctx, query, len(candidates), s.sessionID)
+	out := make([]Percept, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.p
+	}
+
+	end(len(out), nil)
+	logRecall(ctx, query, len(out), s.sessionID)
 	metricsRecall(ctx)
-	return candidates
+	return out
 }
 
 // ListOpts filters for List.

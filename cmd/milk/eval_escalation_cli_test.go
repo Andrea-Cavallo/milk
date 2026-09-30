@@ -67,7 +67,7 @@ func applyStalenessDowngrade(mode escalation.ContextMode, sess *session.Session,
 // nonce and percepts mirror what runCLIEscalationWith passes.
 func cliContextBytes(sess *session.Session, mode escalation.ContextMode, nonce string, percepts []string, injectInstructions bool, primaryName, escalationName string) (staticBytes, dynamicBytes int) {
 	static := escalation.BuildStaticContext(nonce, percepts, mode, injectInstructions, primaryName, escalationName)
-	dynamic := escalation.BuildDynamicContext(sess, mode)
+	dynamic := escalation.BuildDynamicContext(sess, mode, percepts)
 	return len(static), len(dynamic)
 }
 

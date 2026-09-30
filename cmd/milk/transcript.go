@@ -50,15 +50,41 @@ func (m *model) appendTranscript(text string) {
 	}
 }
 
-// appendThinking adds thinking/reasoning text to the full transcript (dim-styled)
-// and a single "[thinking…]" placeholder to transcriptNoThink (only on the first
-// chunk of a new thinking block, to avoid repeated placeholders per token).
+// appendTranscriptStreamed is appendTranscript's throttled counterpart for
+// the actual per-token streaming path (chunkMsg/prefixChunkMsg) — see
+// viewportDirty's doc comment on model for why every other call site (this
+// function included, for one-off system/status messages) keeps rebuilding
+// the viewport immediately instead.
+func (m *model) appendTranscriptStreamed(text string) {
+	if m.thinkingActiveInTurn {
+		if isTTY {
+			m.transcript.WriteString(ansiReset)
+		}
+		if s := m.transcript.String(); len(s) > 0 && s[len(s)-1] != '\n' {
+			m.transcript.WriteByte('\n')
+		}
+		if s := m.transcriptNoThink.String(); len(s) > 0 && s[len(s)-1] != '\n' {
+			m.transcriptNoThink.WriteByte('\n')
+		}
+	}
+	m.transcript.WriteString(text)
+	m.transcriptNoThink.WriteString(text)
+	m.thinkingActiveInTurn = false
+	m.syncViewportThrottled()
+}
+
+// appendThinkingStreamed adds thinking/reasoning text to the full transcript
+// (dim-styled) and a single "[thinking…]" placeholder to transcriptNoThink
+// (only on the first chunk of a new thinking block, to avoid repeated
+// placeholders per token). The only source of thinking text is the per-token
+// reasoning stream (thinkChunkMsg), so this is throttled the same way
+// appendTranscriptStreamed is — see its doc comment on model.viewportDirty.
 //
 // The dim escape is opened once per block (not re-wrapped per chunk) and closed
 // in appendTranscript when regular content follows: back-to-back self-terminated
 // \x1b[2m...\x1b[0m pairs from per-chunk wrapping could otherwise land right at
 // a line-wrap boundary and leave a stray, orphaned "m" terminator visible.
-func (m *model) appendThinking(text string) {
+func (m *model) appendThinkingStreamed(text string) {
 	if !m.thinkingActiveInTurn {
 		if isTTY {
 			m.transcript.WriteString(ansiDim)
@@ -67,13 +93,7 @@ func (m *model) appendThinking(text string) {
 		m.thinkingActiveInTurn = true
 	}
 	m.transcript.WriteString(text)
-	if m.ready {
-		atBottom := m.vp.AtBottom()
-		m.setViewportContent()
-		if atBottom {
-			m.vp.GotoBottom()
-		}
-	}
+	m.syncViewportThrottled()
 }
 
 // activeTranscript returns the transcript variant to render based on showThinking.

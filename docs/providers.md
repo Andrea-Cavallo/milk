@@ -317,7 +317,12 @@ Verify: `milk --new --primary "say hi in one word"`.
 
 > This was implemented and unit-tested against AWS's documented Converse API contract, but has **not** been exercised against a real Bedrock endpoint — no Bedrock agent was available during development. The request-side gating (never sends `cachePoint` unless you opt in) is verified; live behavior on a real account/model/region is not. Contrast with local-agent implicit caching for OpenAI-compatible providers (e.g. Xiaomi MiMo), which *has* been live-verified and needs no config flag.
 
-Set `"prompt_caching": true` on a `provider: "bedrock"` entry to append a `{"cachePoint": {"type": "default"}}` block to the Converse API `system` array. Off by default and must be opted in explicitly — sending `cachePoint` to a model/region that doesn't support it is a hard API error, not a graceful no-op. Only caches the system-prompt prefix, not per-message content. Cache-hit stats appear in the same `cache:NN%` display used elsewhere.
+Set `"prompt_caching": true` on a `provider: "bedrock"` entry to enable explicit `cachePoint` breakpoints on the Converse API request. Off by default and must be opted in explicitly — sending `cachePoint` to a model/region that doesn't support it is a hard API error, not a graceful no-op. Uses up to 3 of Bedrock's 4 allowed breakpoints:
+
+- One right after the stable system-prompt prefix — anchored there specifically (not at the end of the `system` array) so it caches independently of any per-turn percepts/current-need orientation that follow it; those change often and would otherwise invalidate the whole system block on every change.
+- Two more as a rolling "double buffer" over the last two conversation messages, so a retry/edit that drops the newest message still leaves the next-to-last marker as a fallback anchor instead of forcing a full recompute.
+
+Cache-hit stats appear in the same `cache:NN%` display used elsewhere.
 
 #### Troubleshooting
 
@@ -509,6 +514,43 @@ milk's default system prompt (`standard`) is tuned for capable models. Smaller l
 
 ---
 
+### Project instructions (`disable_project_instructions`)
+
+milk loads the target repo's own `AGENTS.md` into the primary/local agent's system prompt, the same way Claude Code loads `CLAUDE.md` and OpenCode loads `AGENTS.md` — repo-specific conventions the model wouldn't otherwise know. Searches upward from the working directory to the repo root (first `AGENTS.md` found wins); falls back to `CLAUDE.md` when no `AGENTS.md` exists, since a local model has no other path to it (the escalation agent's own Claude CLI subprocess already loads `CLAUDE.md` natively, so milk only injects `AGENTS.md` on that path, never `CLAUDE.md`, to avoid sending it twice). Content is cached by file mtime and capped at 12,000 chars.
+
+On by default. Set `"disable_project_instructions": true` on an agent entry to turn it off — e.g. a repo's instructions file is irrelevant or wrong for that particular agent.
+
+```json
+{ "name": "qwen-local", "url": "http://localhost:8090", "model": "qwen2.5-coder", "provider": "local",
+  "disable_project_instructions": true }
+```
+
+---
+
+### Context compaction (`disable_compaction`)
+
+When an agent's message history exceeds its budget (`message_budget_chars`/`local_context_budget_chars` — see [Context budget configuration](#context-budget-configuration)), the oldest turns are normally dropped outright. With compaction enabled (the default), milk instead makes one extra inference call to summarize exactly the span that would be dropped, splicing the summary in as a single message instead of discarding that context — so a fact or decision from early in a long session survives as a summary rather than vanishing outright. Falls back to a plain drop when there's nothing to summarize, the call fails, or the provider doesn't support it yet (Bedrock, the Responses API).
+
+Set `"disable_compaction": true` on an agent entry to skip the extra call's latency/cost and go back to a plain drop-oldest-first trim — e.g. for a model that summarizes poorly.
+
+```json
+{ "name": "qwen-local", "url": "http://localhost:8090", "model": "qwen2.5-coder", "provider": "local",
+  "disable_compaction": true }
+```
+
+---
+
+### Bash command pre-approval (`bash_allowed_patterns`)
+
+Permission grants normally apply to a whole tool at once — once `bash` is granted, every bash command is approved for the rest of the session, with no way to pre-approve just the safe, read-only commands while still gating riskier ones. `bash_allowed_patterns` is a static, per-agent allow-list of bash command prefixes that skip the permission ask/grant entirely, checked before it: an entry ending in `*` matches by prefix (`"git diff*"` matches `git diff --stat HEAD`); an entry with no `*` must match the whole command exactly. A command that doesn't match any pattern falls through to the normal grant/ask flow, completely unchanged — this only adds a fast, safe pre-approval path, it never narrows what a plain `bash` grant already allows.
+
+```json
+{ "name": "qwen-local", "url": "http://localhost:8090", "model": "qwen2.5-coder", "provider": "local",
+  "bash_allowed_patterns": ["git status*", "git diff*", "git log*"] }
+```
+
+---
+
 ### Custom agent behaviour (`prompt` / `prompt_file`)
 
 Any agent entry can carry a custom system prompt, **prepended** to milk's default on every turn.
@@ -618,6 +660,9 @@ Common to all inference-server providers (everything except `claude-cli`):
 | `prompt_caching` | bool | Bedrock-only, experimental — see [Prompt caching](#prompt-caching-prompt_caching--️-experimental-not-live-tested) |
 | `context_window_tokens` | int | See [Context window declaration](#context-window-declaration-context_window_tokens) |
 | `system_prompt_tier` | string | See [System prompt verbosity](#system-prompt-verbosity-system_prompt_tier) |
+| `disable_project_instructions` | bool | See [Project instructions](#project-instructions-disable_project_instructions) |
+| `disable_compaction` | bool | See [Context compaction](#context-compaction-disable_compaction) |
+| `bash_allowed_patterns` | array of string | See [Bash command pre-approval](#bash-command-pre-approval-bash_allowed_patterns) |
 | `prompt` / `prompt_file` | string | See [Custom agent behaviour](#custom-agent-behaviour-prompt-prompt_file) |
 | `mcp_servers` | array of string | See [docs/tooling.md](tooling.md#mcp-servers) |
 | `tools` | array of AgentToolEntry | Per-agent overrides of the global `agent_tools` list — see [docs/tooling.md](tooling.md#agent-as-tool) |
@@ -659,6 +704,7 @@ All keys go in `~/.milk/config.json`; sensible defaults apply when omitted. See 
 | `memory_reinjection_turns` | 20 | Re-inject memory/need instructions into escalation context after this many escalation turns. `0` disables. |
 | `memory_reinjection_bytes` | 40000 | Re-inject after this many bytes of escalation output. `0` disables. |
 | `local_memory_result_max_bytes` | 2048 | Max byte size of `get_memory`/`list_memory` results to the primary agent. `-1` = no limit. |
+| `local_tool_result_max_bytes` | 20000 | Max byte size of any other tool result (`bash`, `read_file`, …) to the primary agent, keeping both head and tail (the error/exit status at the end of shell/build/test output survives, not just the head). Unlike memory tool results, these had no cap at all before this setting — a single verbose shell/build/test output could otherwise balloon a turn's payload well before the payload-size trim loop ever ran. `0` = no limit. |
 | `local_memory_reinjection_turns` | 20 | Re-inject into the primary agent's context after this many local turns. `-1` disables. |
 | `local_memory_reinjection_bytes` | 40000 | Re-inject after this many bytes of primary agent output. `-1` disables. |
 | `local_max_tool_iterations` | 20 | Max tool-call/response cycles per turn before the turn is aborted. `-1` = unlimited. |
@@ -670,7 +716,7 @@ All keys go in `~/.milk/config.json`; sensible defaults apply when omitted. See 
 | Key | Default | Description |
 |---|---|---|
 | `context_budget_chars` | 12000 | Max characters per summary brick injected into the escalation system prompt; oldest turns dropped first. |
-| `local_context_budget_chars` | 24000 | Max total characters in the primary agent's `messages` array per turn; oldest pairs dropped when over budget. `0` = no limit. |
+| `local_context_budget_chars` | 24000 | Max total characters in the primary agent's `messages` array per turn. When over budget, the oldest turns that would be dropped are summarized into one message instead (see [Context compaction](#context-compaction-disable_compaction)) unless `disable_compaction` is set, in which case they're dropped outright as before. `0` = no limit. |
 
 ---
 
@@ -685,7 +731,7 @@ Any `agents` entry accepts a `limits` object overriding global context/memory se
       "limits": {
         "context_budget_chars": 6000, "message_budget_chars": 12000,
         "percept_inject_max": 5, "percept_inject_max_bytes": 512,
-        "memory_result_max_bytes": 1024, "memory_reinjection_turns": 10,
+        "memory_result_max_bytes": 1024, "tool_result_max_bytes": 8000, "memory_reinjection_turns": 10,
         "memory_reinjection_bytes": 20000, "percept_relevance_gate": true
       } }
   ]
@@ -703,6 +749,7 @@ All fields optional; omitted → global value applies.
 | `percept_inject_max` | `percept_inject_max` | 25 | Max percepts injected per turn |
 | `percept_inject_max_bytes` | `percept_inject_max_bytes` | 2048 | Max total bytes of injected percept content |
 | `memory_result_max_bytes` | `local_memory_result_max_bytes` | 2048 | Max bytes of a memory tool result |
+| `tool_result_max_bytes` | `local_tool_result_max_bytes` | 20000 | Max bytes of any other tool result (`bash`, `read_file`, …) |
 | `memory_reinjection_turns` | `memory_reinjection_turns`/`local_memory_reinjection_turns` | 20 | Re-inject after N turns |
 | `memory_reinjection_bytes` | `memory_reinjection_bytes`/`local_memory_reinjection_bytes` | 40000 | Re-inject after N bytes of output |
 | `percept_relevance_gate` | `percept_relevance_gate` | `true` | Keyword-intersection filter before injection |

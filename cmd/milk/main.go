@@ -1505,24 +1505,79 @@ func messagesCharCount(msgs []local.Message) int {
 	return n
 }
 
+// trimSplitIndex returns the index at which msgs should be split so that the
+// tail (msgs[idx:]) fits within budgetChars: drop the oldest user+assistant
+// pairs first, and any tool-result messages that follow a dropped assistant
+// turn, so the head is never left with an orphaned assistant turn. Returns 0
+// (no split) when budgetChars is 0/negative or msgs already fits.
+func trimSplitIndex(msgs []local.Message, budgetChars int) int {
+	if budgetChars <= 0 || messagesCharCount(msgs) <= budgetChars {
+		return 0
+	}
+	idx := 0
+	for messagesCharCount(msgs[idx:]) > budgetChars && idx < len(msgs) {
+		idx++
+		for idx < len(msgs) && msgs[idx].Role != "user" {
+			idx++
+		}
+	}
+	return idx
+}
+
 // trimLocalMessages drops the oldest user+assistant pairs from msgs until the
 // total character count is within budgetChars. Tool-result messages that follow
 // a dropped assistant turn are also dropped. Returns the trimmed slice and true
 // when any trimming occurred. budgetChars == 0 means no limit.
 func trimLocalMessages(msgs []local.Message, budgetChars int) ([]local.Message, bool) {
-	if budgetChars <= 0 || messagesCharCount(msgs) <= budgetChars {
+	idx := trimSplitIndex(msgs, budgetChars)
+	if idx == 0 {
 		return msgs, false
 	}
-	for messagesCharCount(msgs) > budgetChars && len(msgs) > 0 {
-		// Always drop the first message. If it was a user turn, also drop the
-		// immediately following assistant+tool-result run so we don't leave an
-		// orphaned assistant turn at the head.
-		msgs = msgs[1:]
-		for len(msgs) > 0 && msgs[0].Role != "user" {
-			msgs = msgs[1:]
-		}
+	return msgs[idx:], true
+}
+
+// trimLocalMessagesWithCompaction is like trimLocalMessages, but instead of
+// silently discarding the messages that would be dropped, it makes one extra
+// inference call (via agent.Summarize) to condense exactly that span into a
+// single system message, and splices the summary in ahead of the kept tail.
+// Falls back to a plain hard-drop (trimLocalMessages' behavior) when
+// agent is nil, there is nothing worth summarizing, or the summarization
+// call itself fails (unsupported provider, network error, etc.) — a failed
+// compaction attempt must never block the turn.
+// See docs/prompt-context-management-review.md §8 rec #4.
+func trimLocalMessagesWithCompaction(ctx context.Context, agent *local.Agent, sess *session.Session, msgs []local.Message, budgetChars int) ([]local.Message, bool) {
+	idx := trimSplitIndex(msgs, budgetChars)
+	if idx == 0 {
+		return msgs, false
 	}
-	return msgs, true
+	dropped, kept := msgs[:idx], msgs[idx:]
+	if agent == nil {
+		return kept, true
+	}
+
+	var b strings.Builder
+	for _, m := range dropped {
+		if m.Content == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "[%s]: %s\n", m.Role, m.Content)
+	}
+	if b.Len() == 0 {
+		return kept, true
+	}
+
+	summary, usage, err := agent.Summarize(ctx, b.String())
+	if err != nil || summary == "" {
+		return kept, true
+	}
+	if sess != nil {
+		sess.AddTokens(agent.ModelName(), agent.LogRole()+":compaction", usage.Prompt, usage.Completion)
+	}
+	summaryMsg := local.Message{
+		Role:    "system",
+		Content: "[Summary of earlier conversation, compacted to save context]\n" + summary,
+	}
+	return append([]local.Message{summaryMsg}, kept...), true
 }
 
 // sessionToUnifiedMessages converts session history to the local agent's Message format,

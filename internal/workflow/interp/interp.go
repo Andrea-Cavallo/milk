@@ -460,6 +460,21 @@ func isTerminatedTurn(out string) bool {
 		strings.Contains(s, "turn ended without a final summary")
 }
 
+// isBudgetExhaustedTurn reports whether the agent's output indicates the
+// turn ran out of tool-call iteration budget without producing a final
+// response — distinct from isTerminatedTurn's loop-detector-kill signal
+// (internal/agent/local's iterationBudgetExhaustedMarker). A budget-
+// exhausted step may simply have needed more iterations; it is not
+// necessarily evidence of a stuck loop, so it's given its own outcome
+// instead of being silently lumped in with a genuine loop-detector kill —
+// see docs/prompt-context-management-review.md §8 rec #10. Checked before
+// isTerminatedTurn, since the budget-exhausted fallback text also happens
+// to contain "turn ended without a final summary" and would otherwise match
+// the generic check too.
+func isBudgetExhaustedTurn(out string) bool {
+	return strings.Contains(out, "[budget exhausted:")
+}
+
 // maxRenderedPromptChars is the hard cap for a fully rendered prompt after
 // template expansion. Prompts exceeding this are truncated head+tail. This
 // catches cases where multiple moderate-sized template variables combine into
@@ -518,9 +533,33 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 	// Also cap the total rendered prompt to prevent combinatorial bloat
 	// from multiple moderate-sized variables.
 	prompt = truncatePromptSections(prompt, maxRenderedPromptChars)
+	if mar, ok := runner.(workflow.MemoryAwareTurnRunner); ok {
+		mar.SetUseMemoryForNextCall(s.UseMemory)
+	}
 	out, err := workflow.Turn(ec.ctx, runner, prompt, ec.cfg.Send)
 	if err != nil {
 		return "", fmt.Errorf("workflow: stage %q: %w", s.ID, err)
+	}
+
+	// Budget exhaustion (checked first — see isBudgetExhaustedTurn's doc
+	// comment for why it must precede isTerminatedTurn): the step simply
+	// ran out of tool-call iterations, which is not necessarily a stuck
+	// loop. Still advances the workflow with the partial output (an actual
+	// retry-with-larger-budget is a natural follow-up, not implemented
+	// here), but with its own distinct log message and trace outcome so it
+	// isn't reported to the user as "terminated by loop detection."
+	if isBudgetExhaustedTurn(out) {
+		if ec.cfg.Send != nil {
+			ec.cfg.Send(workflow.WorkflowChunkMsg{Text: fmt.Sprintf(
+				"\n[stage %q ran out of tool-call iteration budget (not flagged as a loop) — advancing workflow with partial output]\n", s.ID)})
+		}
+		if s.SaveAs != "" {
+			ec.vars[s.SaveAs] = summarizeLongOutput(out, sectionCharBudget)
+		}
+		ec.completeActivePath()
+		ec.reportProgress("")
+		ec.recordLeaf(TraceEntry{StageID: s.ID, SaveAs: s.SaveAs, Value: out, Outcome: "break_budget_exhausted"})
+		return "break", nil
 	}
 
 	// Automatic recovery for terminated turns: when the agent's loop
@@ -613,6 +652,9 @@ func resolveUserCheckpointDance(ec *execContext, s workflow.Stage, runner workfl
 	finalPrompt, err := renderTemplate(s.ID+".on_answer_prompt", s.OnAnswerPrompt, ec.vars)
 	if err != nil {
 		return "", fmt.Errorf("workflow: stage %q: %w", s.ID, err)
+	}
+	if mar, ok := runner.(workflow.MemoryAwareTurnRunner); ok {
+		mar.SetUseMemoryForNextCall(s.UseMemory)
 	}
 	final, err := workflow.Turn(ec.ctx, runner, finalPrompt, ec.cfg.Send)
 	if err != nil {
