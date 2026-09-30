@@ -484,22 +484,107 @@ func TestDragResetMsg_ClearsDragModeOnTimeout(t *testing.T) {
 		t.Fatal("expected dragResetPending after press")
 	}
 
-	// First motion reschedules the timer.
+	// First in-area motion reschedules the timer.
 	motion := tea.MouseEvent{X: 10, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}
 	_, _ = m.handleMouse(tea.MouseMsg(motion))
 	if !m.selDragging {
 		t.Fatal("expected selDragging after motion")
 	}
 
-	// Simulate the release being dropped: the dragResetMsg fires after 500ms.
-	// The handler should finalize the selection and reset the drag state.
-	dm, _ := m.Update(dragResetMsg{})
+	// Pointer drifts outside the viewport bounds (Y=39 >= height-2=38) and
+	// the release is dropped: the dragResetMsg fires after 500ms with the
+	// current generation. The handler should finalize the selection and
+	// reset the drag state.
+	outside := tea.MouseEvent{X: 10, Y: 39, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}
+	_, _ = m.handleMouse(tea.MouseMsg(outside))
+	if !m.dragSawOutside {
+		t.Fatal("expected dragSawOutside after motion outside viewport bounds")
+	}
+	dm, _ := m.Update(dragResetMsg{gen: m.dragResetGen})
 	m2 := dm.(model)
 	if m2.dragResetPending {
 		t.Error("expected dragResetPending cleared after timeout")
 	}
 	if m2.selText == "" {
 		t.Error("expected selText to be populated (selection finalized on timeout)")
+	}
+}
+
+// TestDragResetMsg_StaleGenerationIgnored is the regression test for #168:
+// the handler must compare msg.gen against dragResetGen. Without that check
+// the press-time tick fires ~500ms into every drag and resets mouse mode to
+// 1000, which stops motion events and freezes the selection highlight until
+// the release finally arrives.
+func TestDragResetMsg_StaleGenerationIgnored(t *testing.T) {
+	m := dragTestModel()
+
+	press := tea.MouseEvent{X: 5, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	_, _ = m.handleMouse(tea.MouseMsg(press)) // gen: 0 -> 1
+	motion := tea.MouseEvent{X: 10, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}
+	_, _ = m.handleMouse(tea.MouseMsg(motion)) // gen: 1 -> 2 (timer rescheduled)
+
+	// The press-time tick (gen 1) arrives after the motion already bumped the
+	// generation — it must be discarded, not processed.
+	dm, _ := m.Update(dragResetMsg{gen: m.dragResetGen - 1})
+	m2 := dm.(model)
+	if !m2.dragResetPending {
+		t.Error("expected dragResetPending to stay true for a stale-generation timeout")
+	}
+	if m2.selText != "" {
+		t.Error("expected no selection finalization from a stale-generation timeout")
+	}
+}
+
+// TestDragResetMsg_PauseKeepsDragMode covers the mid-drag pause hole: with
+// the pointer still inside the drag's area, a timeout means the user paused
+// (button held, cursor still) — not that the release was dropped. The handler
+// must keep mode 1002 and reschedule, otherwise motion stops arriving when
+// the user resumes and the highlight freezes until release.
+func TestDragResetMsg_PauseKeepsDragMode(t *testing.T) {
+	m := dragTestModel()
+
+	press := tea.MouseEvent{X: 5, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	_, _ = m.handleMouse(tea.MouseMsg(press))
+	motion := tea.MouseEvent{X: 10, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}
+	_, _ = m.handleMouse(tea.MouseMsg(motion))
+
+	dm, cmd := m.Update(dragResetMsg{gen: m.dragResetGen})
+	m2 := dm.(model)
+	if !m2.dragResetPending {
+		t.Error("expected dragResetPending to stay true after a mid-drag pause timeout")
+	}
+	if m2.selText != "" {
+		t.Error("expected no selection finalization while the drag is still active in-area")
+	}
+	if cmd == nil {
+		t.Error("expected the timeout to reschedule itself during a mid-drag pause")
+	}
+}
+
+// TestDragResetMsg_PanelDragOutsideRegionResets checks the panel half of the
+// dropped-release detection: a panel drag whose pointer lands back in the
+// transcript region counts as outside, so the timeout finalizes the panel
+// selection and resets the mode.
+func TestDragResetMsg_PanelDragOutsideRegionResets(t *testing.T) {
+	m := dragTestModel()
+
+	m.handlePanelMouse(regionBackground, 2, tea.MouseEvent{Y: 2, Action: tea.MouseActionPress})
+	m.handlePanelMouse(regionBackground, 2, tea.MouseEvent{Y: 4, Action: tea.MouseActionMotion})
+	if !m.panelSelDragging {
+		t.Fatal("expected panelSelDragging after panel motion")
+	}
+	// Pointer leaves the panel for the transcript region.
+	_, _ = m.handleMouse(tea.MouseMsg(tea.MouseEvent{X: 5, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}))
+	if !m.dragSawOutside {
+		t.Fatal("expected dragSawOutside after pointer left the panel region")
+	}
+	dm, _ := m.Update(dragResetMsg{gen: m.dragResetGen})
+	m2 := dm.(model)
+	if m2.dragResetPending {
+		t.Error("expected dragResetPending cleared after timeout")
+	}
+	if m2.panelSelText == "" {
+		t.Error("expected panelSelText finalized on dropped release")
 	}
 }
 
@@ -515,8 +600,9 @@ func TestDragResetMsg_IgnoredAfterRelease(t *testing.T) {
 		t.Fatal("expected dragResetPending cleared after release")
 	}
 
-	// Now the delayed dragResetMsg arrives — it should be a no-op.
-	dm, _ := m.Update(dragResetMsg{})
+	// Now the delayed dragResetMsg arrives (current generation, so only the
+	// pending guard can reject it) — it should be a no-op.
+	dm, _ := m.Update(dragResetMsg{gen: m.dragResetGen})
 	m2 := dm.(model)
 	if m2.selText != "" {
 		t.Error("expected no selection finalization — release already handled it")
