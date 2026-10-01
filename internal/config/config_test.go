@@ -371,6 +371,32 @@ func TestAgentPayloadTrimCompactionThreshold_ZeroOrNegative_Disables(t *testing.
 	}
 }
 
+func TestAgentEscalateAfterRecoveries_NilLimits(t *testing.T) {
+	cfg := Config{}
+	ac := AgentConfig{}
+	if got := cfg.AgentEscalateAfterRecoveries(ac); got != DefaultEscalateAfterRecoveries {
+		t.Errorf("expected default %d, got %d", DefaultEscalateAfterRecoveries, got)
+	}
+}
+
+func TestAgentEscalateAfterRecoveries_Override(t *testing.T) {
+	cfg := Config{}
+	ac := AgentConfig{Limits: &AgentLimits{EscalateAfterRecoveries: intPtr(6)}}
+	if got := cfg.AgentEscalateAfterRecoveries(ac); got != 6 {
+		t.Errorf("expected 6, got %d", got)
+	}
+}
+
+func TestAgentEscalateAfterRecoveries_ZeroOrNegative_Disables(t *testing.T) {
+	cfg := Config{}
+	for _, v := range []int{0, -1} {
+		ac := AgentConfig{Limits: &AgentLimits{EscalateAfterRecoveries: intPtr(v)}}
+		if got := cfg.AgentEscalateAfterRecoveries(ac); got != v {
+			t.Errorf("expected explicit %d to pass through unchanged, got %d", v, got)
+		}
+	}
+}
+
 func TestAgentPerceptInjectMaxCount_NilLimits(t *testing.T) {
 	cfg := Config{PerceptInjectMax: 10}
 	ac := AgentConfig{}

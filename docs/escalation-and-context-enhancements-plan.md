@@ -108,6 +108,41 @@ every iteration for ~1h45m straight (02:05→03:50), each time hard-dropping old
 
 ## Track A, Phase 3 — Give the recovery ladder an escalation option
 
+**Status: landed** (branch `feat/forced-escalation-after-recoveries`). Two scope reductions
+from the sketch below, both discovered mid-implementation and necessary for correctness — not
+just simplifications:
+
+- **No "is an escalation agent configured" check inside `internal/agent/local`.** The existing
+  precedent (`isRepeatedPrompt`'s forced escalation) doesn't check for one either — it just
+  returns `&EscalationSignal{...}` unconditionally and lets `cmd/milk/dispatch.go` handle graceful
+  degradation (per CLAUDE.md's "Graceful degradation" table). This phase follows the same
+  pattern rather than inventing agent-level awareness of session/config state it doesn't have.
+- **"Auto-escalate on fail-closed" (item 3 below) is dropped**, not implemented. Investigation
+  found background jobs have *no real escalation path at all*: `escalate` is deliberately excluded
+  from their tool schema (ADR-0043's cost-risk isolation), and a background job's `run` closure
+  just records any returned error — including an `EscalationSignal` — as a plain job failure, not
+  an actual hand-off. A stateless tool-agent call (`RunToolCall`) has no session/runner behind it
+  to escalate into either (its own "defense in depth" comment in `cmd/milk/runner.go` says so
+  explicitly). And a workflow step's `EscalationSignal` would reach the interpreter with no
+  handling for it at all. Auto-escalating any of these three would silently degrade to a confusing
+  result instead of the plain crop/nudge/terminate ladder they already handle correctly today — so
+  a new `(*Agent).canEscalate()` guard (false for workflow role, background jobs, and tool-agent
+  calls) gates **every** new escalation decision in this phase, and the fail-closed doom-loop branch
+  is untouched. What *did* ship for the doom-loop gate: a **denied** interactive ask now escalates
+  instead of terminating (when `canEscalate()`) — a user explicitly saying "no, don't keep doing
+  that" is itself a strong signal the primary model isn't handling the task, and handing off is
+  strictly better than giving up. This needed no new three-way prompt UI: the existing allow/deny
+  ask is unchanged, only what happens on *deny* changed.
+
+Everything else matches the sketch: a per-turn aggregate `totalRecoveryCount` local var in
+`runToolLoop`, threaded into `loopRecoveryAction` (now returning a third `escalate bool`, checked
+*before* the max-recovery-exceeded terminate check — the two conditions can coincide, and
+escalating is strictly better than either continuing or terminating), config
+`escalate_after_recoveries` (default 4, `AgentEscalateAfterRecoveries` accessor,
+`WithEscalateAfterRecoveries` builder, wired in `cmd/milk/runner.go` alongside Phase 1/2's
+builders), and the same `milk.loop.recovery`/`session_id`-tagged-logWarn conventions
+(`outcome=escalated`).
+
 **Why:** `loopRecoveryAction` and the doom-loop gate currently only ever crop/nudge/terminate the
 *same* stuck model — confirmed by direct code read, no exception. The repeated-user-prompt
 detector (`local.go:1099-1169`) already proves the pattern of milk forcing an `EscalationSignal`

@@ -400,6 +400,18 @@ const DefaultMaxPayloadBytes = 900 * 1024
 // Track B Phase 2.
 const DefaultPayloadTrimCompactionThreshold = 3
 
+// DefaultEscalateAfterRecoveries is how many loop-recovery events (summed
+// across the duplicate-tool-call, reasoning n-gram, loop-streak, and
+// text-loop detectors) within a single turn force an escalation to the
+// configured escalation agent instead of letting the recovery ladder keep
+// nudging the same (already-struggling) model. Deliberately a starting
+// guess from exactly one real session (5 recoveries in 16 minutes, see
+// docs/session-2026-10-01-primary-overload-analysis.md) rather than a
+// well-tuned value — intended to be revisited once milk.loop.recovery
+// (Track B Phase 1) has data across more sessions. See
+// docs/escalation-and-context-enhancements-plan.md Track A Phase 3.
+const DefaultEscalateAfterRecoveries = 4
+
 // OtelConfig controls OpenTelemetry signal collection and file management.
 type OtelConfig struct {
 	Enabled             bool   `json:"enabled"`
@@ -672,6 +684,13 @@ type AgentLimits struct {
 	// summarizing compaction instead of continuing to hard-drop oldest
 	// content on every request. Default: DefaultPayloadTrimCompactionThreshold (3).
 	PayloadTrimCompactionThreshold *int `json:"payload_trim_compaction_threshold,omitempty"`
+
+	// EscalateAfterRecoveries overrides how many loop-recovery events within
+	// a single turn force an escalation instead of continuing to nudge the
+	// same model. Default: DefaultEscalateAfterRecoveries (4). <= 0 disables
+	// this forced-escalation path (the crop/nudge/terminate ladder runs
+	// exactly as before this feature existed).
+	EscalateAfterRecoveries *int `json:"escalate_after_recoveries,omitempty"`
 
 	// IncludedTools is a whitelist of tool names exposed to this agent. When
 	// non-empty, only the listed names are included in the outgoing request
@@ -1459,6 +1478,16 @@ func (c Config) AgentPayloadTrimCompactionThreshold(a AgentConfig) int {
 		return *a.Limits.PayloadTrimCompactionThreshold
 	}
 	return DefaultPayloadTrimCompactionThreshold
+}
+
+// AgentEscalateAfterRecoveries returns how many loop-recovery events within
+// a single turn force an escalation for the given agent, falling back to
+// DefaultEscalateAfterRecoveries. A value <= 0 disables forced escalation.
+func (c Config) AgentEscalateAfterRecoveries(a AgentConfig) int {
+	if a.Limits != nil && a.Limits.EscalateAfterRecoveries != nil {
+		return *a.Limits.EscalateAfterRecoveries
+	}
+	return DefaultEscalateAfterRecoveries
 }
 
 // NeedExpiryHours returns the configured need expiry threshold in hours.

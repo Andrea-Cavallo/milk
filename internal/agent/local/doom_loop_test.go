@@ -62,7 +62,14 @@ func TestDoomLoopGate_InteractiveApprove_ContinuesAndResets(t *testing.T) {
 	}
 }
 
-func TestDoomLoopGate_InteractiveDeny_Terminates(t *testing.T) {
+// TestDoomLoopGate_InteractiveDeny_Escalates: a denial is itself a strong
+// signal the primary model isn't handling the task well, so — as of
+// docs/escalation-and-context-enhancements-plan.md Track A Phase 3 — a
+// denied doom_loop ask escalates to a more capable agent instead of just
+// terminating the turn, whenever a real escalation path exists (ordinary
+// live turn: not a workflow step, not a background job, not a tool-agent
+// call — see canEscalate).
+func TestDoomLoopGate_InteractiveDeny_Escalates(t *testing.T) {
 	srv, requests := doomLoopServer(10) // would keep repeating well past 3 if not stopped
 	defer srv.Close()
 
@@ -75,12 +82,43 @@ func TestDoomLoopGate_InteractiveDeny_Terminates(t *testing.T) {
 	sess := &session.Session{}
 	var out strings.Builder
 
-	history, err := agent.Run(context.Background(), nil, "do the thing", &out, sess, nil)
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
+	_, err := agent.Run(context.Background(), nil, "do the thing", &out, sess, nil)
+	esc, ok := err.(*EscalationSignal)
+	if !ok {
+		t.Fatalf("expected an *EscalationSignal, got %v (%T)", err, err)
+	}
+	if !strings.Contains(esc.Reason, "the user declined to let it continue") {
+		t.Errorf("expected the escalation reason to explain the denial, got %q", esc.Reason)
 	}
 	if atomic.LoadInt32(&asked) != 1 {
 		t.Errorf("expected exactly one doom_loop ask, got %d", asked)
+	}
+	if got := atomic.LoadInt32(requests); got != 3 {
+		t.Errorf("expected exactly 3 requests before stopping, got %d", got)
+	}
+}
+
+// TestDoomLoopGate_InteractiveDeny_NoEscalationPath_StillTerminates covers
+// the one case where a denial can't escalate even though a*permAsk callback
+// exists: a stateless tool-agent call (RunToolCall) has no session/runner
+// behind it to escalate into (see canEscalate), so it must keep today's
+// plain termination behavior.
+func TestDoomLoopGate_InteractiveDeny_NoEscalationPath_StillTerminates(t *testing.T) {
+	srv, requests := doomLoopServer(10)
+	defer srv.Close()
+
+	var asked int32
+	agent := New(srv.URL, "test-model").WithMemConfig(MemConfig{MaxToolIterations: 15}).WithToolAgentRole()
+	agent = agent.WithPermissions(nil, func(tool, summary string) bool {
+		atomic.AddInt32(&asked, 1)
+		return false // deny
+	})
+	sess := &session.Session{}
+	var out strings.Builder
+
+	history, err := agent.Run(context.Background(), nil, "do the thing", &out, sess, nil)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
 	}
 	last := history[len(history)-1]
 	if !strings.Contains(last.Content, "the user declined to let it continue") {
@@ -155,9 +193,9 @@ func TestDoomLoopGate_DifferentToolCalls_NeverFires(t *testing.T) {
 // TestDoomLoopGate_SessionIDIsLoggingOnly guards the ctx/sessionID parameters
 // threaded into loopRecoveryAction (and the doom-loop gate's own logging) for
 // observability — a session ID must only ever be attributed on a log/metric
-// line, never change the gate's actual allow/deny/terminate decision. A real
-// (non-empty) session ID here must behave identically to the ""-ID case
-// covered by TestDoomLoopGate_InteractiveDeny_Terminates.
+// line, never change the gate's actual allow/deny/escalate/terminate
+// decision. A real (non-empty) session ID here must behave identically to
+// the ""-ID case covered by TestDoomLoopGate_InteractiveDeny_Escalates.
 func TestDoomLoopGate_SessionIDIsLoggingOnly(t *testing.T) {
 	srv, requests := doomLoopServer(10)
 	defer srv.Close()
@@ -171,16 +209,16 @@ func TestDoomLoopGate_SessionIDIsLoggingOnly(t *testing.T) {
 	sess := &session.Session{ID: "sess-with-a-real-id"}
 	var out strings.Builder
 
-	history, err := agent.Run(context.Background(), nil, "do the thing", &out, sess, nil)
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
+	_, err := agent.Run(context.Background(), nil, "do the thing", &out, sess, nil)
+	esc, ok := err.(*EscalationSignal)
+	if !ok {
+		t.Fatalf("expected an *EscalationSignal, got %v (%T)", err, err)
+	}
+	if !strings.Contains(esc.Reason, "the user declined to let it continue") {
+		t.Errorf("expected the escalation reason to explain the denial, got %q", esc.Reason)
 	}
 	if atomic.LoadInt32(&asked) != 1 {
 		t.Errorf("expected exactly one doom_loop ask, got %d", asked)
-	}
-	last := history[len(history)-1]
-	if !strings.Contains(last.Content, "the user declined to let it continue") {
-		t.Errorf("expected a user-declined termination message, got %q", last.Content)
 	}
 	if got := atomic.LoadInt32(requests); got != 3 {
 		t.Errorf("expected exactly 3 requests before stopping, got %d", got)
