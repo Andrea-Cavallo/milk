@@ -46,3 +46,4 @@
 * [44. Side-Panel Auto-Open, Shortcut Hints, and Alternating Background](0044-panel-auto-open-and-styling.md)
 * [45. Local Project-Level Config Overrides (.milk/)](0045-local-config-overrides.md)
 * [47. Live-Attach View for Background Jobs and Workflows](0047-live-background-transcript-view.md)
+* [48. Notification Toasts: Displaced, Timestamped, Dismissable Events](0048-notification-toasts.md)

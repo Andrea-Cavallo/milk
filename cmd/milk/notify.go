@@ -1,0 +1,294 @@
+package main
+
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
+
+// Toast/notification subsystem (issue #162, ADR-0048).
+//
+// milk's own informational events (thinking-visibility switches, panel
+// open/close, background-job lifecycle, credential refresh, config reload…)
+// used to be appended straight into the transcript, where they pollute the
+// conversation view, carry no timestamp, can't be dismissed, and scroll
+// away. They now render as a floating toast overlay pinned to the top-right
+// of the main area (viewport or PTY pane) — visually displaced, never part
+// of the transcript content, so nothing changes for scrollback, selection,
+// or the escalation context builder.
+//
+// Scope boundary (ADR-0048): only turn-unrelated *informational* events move
+// here. Tool calls, turn-bound output, warnings, and errors stay in the
+// transcript where they persist until the user scrolls past them.
+
+const (
+	// toastTTL is how long a toast stays visible once promoted from the
+	// queue to the visible set.
+	toastTTL = 6 * time.Second
+	// maxVisibleToasts caps how many toasts render simultaneously (stacked
+	// top-right); further events wait in toastQueue.
+	maxVisibleToasts = 3
+	// toastQueueCap bounds the waiting queue — beyond it the oldest *waiting*
+	// toast is dropped (it is still recorded in history either way).
+	toastQueueCap = 50
+	// toastHistoryCap bounds the /notifications history ring.
+	toastHistoryCap = 500
+	// toastHistoryShow is how many entries a bare /notifications prints.
+	toastHistoryShow = 20
+)
+
+// toastEvent is one notification: either queued, visible (expiresAt set), or
+// historical (expiresAt zeroed once recorded).
+type toastEvent struct {
+	at        time.Time
+	text      string
+	hint      string    // related slash command; empty → "/notifications" fallback
+	expiresAt time.Time // set when the toast is promoted to visible
+}
+
+// hintOrFallback returns the event's related slash command, defaulting to
+// the history command — per issue #162 the hint is always "the command you
+// would use to see the full history or act on it".
+func (ev toastEvent) hintOrFallback() string {
+	if ev.hint != "" {
+		return ev.hint
+	}
+	return "/notifications"
+}
+
+// toastTickMsg schedules toast expiry. gen must match model.toastGen —
+// stale ticks (from before a dismissal or a re-arm) are ignored rather than
+// mutating tick state: the exact class of bug issue #168 caught in
+// dragResetMsg, where the generation existed but was never checked.
+type toastTickMsg struct{ gen int }
+
+// notify enqueues an informational event: recorded in history, pushed onto
+// the toast queue, and promoted into the visible set while there is room.
+//
+// It deliberately returns nothing: emitters are value-receiver helpers
+// (handleThinkCmd, autoOpenPanel, refreshMCPToolSets…) that predate toasts.
+// The Update wrapper (repl.go) arms the expiry tick after every message, so
+// firing-and-forgetting here is safe as long as the caller returns the
+// mutated model — which every emitter call site does.
+func (m *model) notify(text, hint string) {
+	now := time.Now()
+	ev := toastEvent{at: now, text: text, hint: hint}
+
+	m.toastHistory = append(m.toastHistory, ev)
+	if over := len(m.toastHistory) - toastHistoryCap; over > 0 {
+		m.toastHistory = append(m.toastHistory[:0], m.toastHistory[over:]...)
+	}
+
+	m.toastQueue = append(m.toastQueue, ev)
+	if over := len(m.toastQueue) - toastQueueCap; over > 0 {
+		// Drop the oldest *waiting* toasts; the visible set sits at the
+		// front of the queue so it keeps its slots, and every dropped event
+		// survives in history either way.
+		m.toastQueue = append(m.toastQueue[:0], m.toastQueue[over:]...)
+	}
+
+	m.promoteToasts(now)
+}
+
+// promoteToasts fills the visible window from the queue, stamping each newly
+// visible toast with a fresh TTL so queued events never expire unseen.
+func (m *model) promoteToasts(now time.Time) {
+	for len(m.toastVisible) < maxVisibleToasts && len(m.toastQueue) > 0 {
+		ev := m.toastQueue[0]
+		m.toastQueue = m.toastQueue[1:]
+		ev.expiresAt = now.Add(toastTTL)
+		m.toastVisible = append(m.toastVisible, ev)
+	}
+}
+
+// expireToasts drops visible toasts past their deadline and promotes queued
+// ones into the freed slots. Reports whether the visible set changed.
+func (m *model) expireToasts(now time.Time) bool {
+	kept := m.toastVisible[:0]
+	for _, ev := range m.toastVisible {
+		if ev.expiresAt.After(now) {
+			kept = append(kept, ev)
+		}
+	}
+	changed := len(kept) != len(m.toastVisible)
+	m.toastVisible = kept
+
+	before := len(m.toastVisible)
+	m.promoteToasts(now)
+	return changed || len(m.toastVisible) != before
+}
+
+// dismissToasts clears the visible toasts AND the waiting queue (history is
+// kept — /notifications still shows everything). Returns false when there
+// was nothing to dismiss.
+//
+// Bumping toastGen invalidates any expiry tick already in flight; without
+// that, a stale tick firing after a re-arm would clear the "armed" flag that
+// now belongs to a newer tick and open the door to duplicate tick chains —
+// the #168 lesson applied proactively.
+func (m *model) dismissToasts() bool {
+	if len(m.toastVisible) == 0 && len(m.toastQueue) == 0 {
+		return false
+	}
+	m.toastVisible = nil
+	m.toastQueue = nil
+	m.toastGen++
+	m.toastTickArmed = false
+	return true
+}
+
+// armToastTick returns a Tick cmd for the earliest visible expiry, or nil
+// when a tick is already in flight or nothing is visible. Each arm bumps
+// toastGen so only the newest tick is considered live (see toastTickMsg).
+func (m *model) armToastTick() tea.Cmd {
+	if m.toastTickArmed || len(m.toastVisible) == 0 {
+		return nil
+	}
+	earliest := m.toastVisible[0].expiresAt
+	for _, ev := range m.toastVisible[1:] {
+		if ev.expiresAt.Before(earliest) {
+			earliest = ev.expiresAt
+		}
+	}
+	delay := time.Until(earliest)
+	if delay < 0 {
+		delay = 0
+	}
+	m.toastTickArmed = true
+	m.toastGen++
+	gen := m.toastGen
+	return tea.Tick(delay, func(time.Time) tea.Msg { return toastTickMsg{gen: gen} })
+}
+
+// toastBackgroundCode returns the raw SGR background sequence for the toast
+// band ("" when not a TTY), mirroring panelAltBackgroundCode.
+func toastBackgroundCode() string {
+	if !isTTY {
+		return ""
+	}
+	if lipgloss.HasDarkBackground() {
+		return "\033[48;2;26;38;58m" // #1A263A
+	}
+	return "\033[48;2;217;228;245m" // #D9E4F5
+}
+
+// renderToast builds one full-width toast line: dim time, message, related
+// slash-command hint, and — on the last visible line — the dismiss
+// affordance. The plain-text budget is computed first so the styled result
+// fits `width` without wrapping; withPanelBackground then re-applies the
+// band background after every embedded reset so dim/blue spans don't punch
+// holes in it.
+func renderToast(ev toastEvent, width int, showDismiss bool) string {
+	timeStr := ev.at.Format("15:04")
+	hint := ev.hintOrFallback()
+	dismiss := ""
+	if showDismiss {
+		dismiss = " · ctrl+g dismiss"
+	}
+
+	hintPart := "  " + hint
+	dismissPart := dismiss
+
+	// Budget for the free-form message: everything else is fixed width.
+	budget := width - (len(timeStr) + 1 + len([]rune(hintPart)) + len([]rune(dismissPart)))
+	if budget < 8 && dismissPart != "" {
+		dismissPart = ""
+		budget = width - (len(timeStr) + 1 + len([]rune(hintPart)))
+	}
+	if budget < 6 && hintPart != "" {
+		hintPart = ""
+		budget = width - (len(timeStr) + 1)
+	}
+	if budget < 4 {
+		budget = 4
+	}
+	text := truncate(ev.text, budget)
+
+	line := dim(timeStr) + " " + text
+	if hintPart != "" {
+		line += hintPart[:2] + blue(hint)
+	}
+	if dismissPart != "" {
+		line += dim(dismissPart)
+	}
+	plainW := len(timeStr) + 1 + len([]rune(text)) + len([]rune(hintPart)) + len([]rune(dismissPart))
+	if pad := width - plainW; pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+
+	bg := toastBackgroundCode()
+	if bg == "" {
+		return line
+	}
+	// Leading reset first: the transcript line underneath may have been cut
+	// mid-SGR during truncation, and its state would otherwise bleed into
+	// the toast text.
+	return ansiReset + withPanelBackground(line, bg)
+}
+
+// overlayToasts paints the visible toasts over the top-right corner of the
+// already-rendered main-area block (viewport+panels, attach view, or PTY
+// screen). Because it operates purely at render time it consumes no layout
+// rows: viewportHeight, panel geometry, PTY sizing, and the attach view all
+// stay untouched — the toast genuinely floats over whatever is underneath.
+func (m *model) overlayToasts(block string) string {
+	if len(m.toastVisible) == 0 {
+		return block
+	}
+	width := m.mainWidth()
+	if width < 20 {
+		return block
+	}
+	lines := strings.Split(block, "\n")
+	for i, ev := range m.toastVisible {
+		if i >= len(lines) {
+			break
+		}
+		toast := renderToast(ev, width, i == len(m.toastVisible)-1)
+		toastW := ansi.StringWidth(toast)
+		keep := width - toastW
+		if keep <= 0 {
+			lines[i] = ansi.Truncate(toast, width, "")
+			continue
+		}
+		head := ansi.Truncate(lines[i], keep, "")
+		pad := keep - ansi.StringWidth(head)
+		lines[i] = head + strings.Repeat(" ", pad) + toast
+	}
+	return strings.Join(lines, "\n")
+}
+
+// handleNotificationsCmd implements `/notifications [clear]` — the history
+// view required by issue #162. Output goes to the transcript like every
+// other explicit query (/history, /export…): the user asked for it.
+func (m model) handleNotificationsCmd(sub string) model {
+	switch strings.TrimSpace(sub) {
+	case "clear":
+		m.toastHistory = nil
+		m.appendTranscript(milkTag() + " notification history cleared\n")
+		return m
+	}
+	if len(m.toastHistory) == 0 {
+		m.appendTranscript(milkTag() + " no notifications recorded\n")
+		return m
+	}
+	entries := m.toastHistory
+	note := ""
+	if len(entries) > toastHistoryShow {
+		note = " (last " + strconv.Itoa(len(entries)) + ")"
+		entries = entries[len(entries)-toastHistoryShow:]
+	}
+	var b strings.Builder
+	b.WriteString(milkTag() + " notification history" + note + ":\n")
+	for _, ev := range entries {
+		b.WriteString("  " + dim(ev.at.Format("15:04:05")) + "  " + ev.text)
+		b.WriteString("  " + blue(ev.hintOrFallback()))
+		b.WriteString("\n")
+	}
+	m.appendTranscript(b.String())
+	return m
+}

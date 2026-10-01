@@ -14,10 +14,11 @@ import (
 	"github.com/scoutme/milk/internal/session"
 )
 
-// TestUpdate_BackgroundJobDoneMsg_AppendsTranscript verifies a completed job
-// is surfaced in the transcript immediately (independent of the
-// turn-boundary drainBackgroundJobs path), for both success and failure.
-func TestUpdate_BackgroundJobDoneMsg_AppendsTranscript(t *testing.T) {
+// TestUpdate_BackgroundJobDoneMsg_NotifiesToast verifies a completed job
+// surfaces as a timestamped notification toast (issue #162 — turn-unrelated
+// job lifecycle events no longer pollute the transcript), for both success
+// and failure, independently of the turn-boundary drainBackgroundJobs path.
+func TestUpdate_BackgroundJobDoneMsg_NotifiesToast(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sess, err := session.New("/repo", "")
 	if err != nil {
@@ -28,14 +29,20 @@ func TestUpdate_BackgroundJobDoneMsg_AppendsTranscript(t *testing.T) {
 
 	updated, _ := m.Update(backgroundJobDoneMsg{job: &local.Job{Label: "investigate X", Result: "found it"}})
 	m2 := updated.(model)
-	if !strings.Contains(m2.transcript.String(), `background agent "investigate X" completed`) {
-		t.Errorf("expected transcript to mention completion, got %q", m2.transcript.String())
+	if !toastMentions(m2, `background agent "investigate X" completed`) {
+		t.Errorf("expected a completion toast, got %#v", m2.toastVisible)
+	}
+	if strings.Contains(m2.transcript.String(), `background agent "investigate X"`) {
+		t.Errorf("job completion must not be appended to the transcript (#162), got %q", m2.transcript.String())
 	}
 
 	updated2, _ := m2.Update(backgroundJobDoneMsg{job: &local.Job{Label: "investigate Y", Err: errors.New("boom")}})
 	m3 := updated2.(model)
-	if !strings.Contains(m3.transcript.String(), `background agent "investigate Y" failed: boom`) {
-		t.Errorf("expected transcript to mention failure, got %q", m3.transcript.String())
+	if !toastMentions(m3, `background agent "investigate Y" failed: boom`) {
+		t.Errorf("expected a failure toast, got %#v", m3.toastVisible)
+	}
+	if strings.Contains(m3.transcript.String(), `background agent "investigate Y"`) {
+		t.Errorf("job failure must not be appended to the transcript (#162), got %q", m3.transcript.String())
 	}
 }
 
@@ -215,8 +222,13 @@ func TestHandleBusyKey_CtrlJSpawnsBackgroundAgent(t *testing.T) {
 	msg := cmd()
 	updated3, _ := m3.Update(msg)
 	m4 := updated3.(model)
-	if !strings.Contains(m4.transcript.String(), "spawned background agent") {
-		t.Errorf("expected a transcript line confirming the spawn, got %q", m4.transcript.String())
+	// Spawn confirmation is a turn-unrelated status event (issue #162): it
+	// surfaces as a toast, never as a transcript line.
+	if !toastMentions(m4, "spawned background agent") {
+		t.Errorf("expected a spawn toast, got %#v", m4.toastVisible)
+	}
+	if strings.Contains(m4.transcript.String(), "spawned background agent") {
+		t.Errorf("spawn confirmation must not be appended to the transcript (#162), got %q", m4.transcript.String())
 	}
 	if got := mgr.ActiveCount(); got != 1 {
 		t.Errorf("expected 1 active job after spawning, got %d", got)
@@ -337,8 +349,11 @@ func TestF3TogglesBackgroundPanel(t *testing.T) {
 	if !m2.panelBackground {
 		t.Fatal("expected F3 to open the background panel")
 	}
-	if !strings.Contains(m2.transcript.String(), "background agents panel: on") {
-		t.Errorf("expected a confirmation line, got %q", m2.transcript.String())
+	if !toastMentions(m2, "background agents panel: on") {
+		t.Errorf("expected a panel-toggle toast, got %#v", m2.toastVisible)
+	}
+	if strings.Contains(m2.transcript.String(), "background agents panel: on") {
+		t.Errorf("panel confirmation must not be appended to the transcript (#162), got %q", m2.transcript.String())
 	}
 
 	updated2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyF3})

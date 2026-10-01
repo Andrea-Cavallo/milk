@@ -676,6 +676,15 @@ type model struct {
 	credStatus     string // non-empty after refresh completes: last result message
 	credOK         bool   // true if last refresh succeeded, false if failed
 
+	// Notification toasts (issue #162): turn-unrelated informational events
+	// render as a floating overlay instead of entering the transcript.
+	// Full lifecycle detail lives in notify.go (queue → visible → history).
+	toastQueue     []toastEvent // waiting to become visible (FIFO)
+	toastVisible   []toastEvent // currently rendered, each with expiresAt set
+	toastHistory   []toastEvent // every event ever, capped; shown by /notifications
+	toastGen       int          // generation of the live expiry tick (stale ticks ignored)
+	toastTickArmed bool         // true while a toastTickMsg is in flight
+
 	// keyboard selection state in the input area (rune offsets into ta.Value(); -1 = none)
 	taSelAnchor int
 	taSelEnd    int
@@ -1559,7 +1568,23 @@ func (m model) Init() tea.Cmd {
 
 // --- Update ---
 
+// Update wraps updateInner to arm the toast-expiry tick whenever toasts are
+// visible and no tick is in flight. Emitters (notify) live in helpers that
+// return only the model, so the tick is armed centrally here rather than
+// threaded through every call site.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.updateInner(msg)
+	nm, ok := next.(model)
+	if !ok {
+		return next, cmd
+	}
+	if c := nm.armToastTick(); c != nil {
+		return nm, tea.Batch(cmd, c)
+	}
+	return next, cmd
+}
+
+func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Ctrl+Enter arrives as bubbletea's unexported unknownCSISequenceMsg
 	// ([]byte) in terminals with extended key protocols — detect via its
 	// String() representation before the main type switch, which cannot
@@ -1598,6 +1623,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePanelCmd("background")
 		case "f4":
 			return m.handlePanelCmd("workflow")
+		}
+		// Ctrl+G: dismiss all open notification toasts (issue #162) — global
+		// like F1-F4 so it works in any mode (busy, prompt, attached…);
+		// bubbles' textarea doesn't bind ctrl+g, so nothing else wants it.
+		// Falls through untouched when no toast is open.
+		if msg.String() == "ctrl+g" && m.dismissToasts() {
+			return m, nil
 		}
 		// Adding a pending-state check below? Also add it to
 		// hasPendingPrompt() (layout.go) — it mirrors this list so the
@@ -2021,6 +2053,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busyHint = ""
 		return m, nil
 
+	case toastTickMsg:
+		// Generation check (issue #168's lesson): a tick scheduled before a
+		// dismissal or a re-arm carries an older gen and must not clear the
+		// armed flag that now belongs to the newer tick.
+		if msg.gen != m.toastGen {
+			return m, nil
+		}
+		m.toastTickArmed = false
+		m.expireToasts(time.Now())
+		// The Update wrapper re-arms the tick if toasts remain visible.
+		return m, nil
+
 	case dragResetMsg:
 		if !m.dragResetPending {
 			return m, nil // already cancelled by a release event
@@ -2063,7 +2107,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.credStatus = "ok"
 				m.credOK = true
-				m.appendTranscript(fmt.Sprintf("%s OAuth authorization for MCP server %q completed — run /mcp reconnect %s to connect\n", milkTag(), serverName, serverName))
+				// Informational completion (issue #162): the follow-up command
+				// rides along as the toast hint instead of prose in the text.
+				m.notify(fmt.Sprintf("OAuth authorization for MCP server %q completed", serverName), "/mcp reconnect "+serverName)
 			}
 			m.syncLayout()
 			return m, nil
@@ -2074,6 +2120,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.credStatus = "ok"
 			m.credOK = true
+			// Turn-unrelated async event (issue #162): timestamped toast, so
+			// periodic Bedrock/token refreshes are visible in history instead
+			// of only flickering in the status bar.
+			m.notify(msg.label+" credentials refreshed", "")
 			if msg.creds != nil {
 				// AWS: apply fresh credentials and rebuild the local agent.
 				ac := activeLocalAgentConfig(m.st.cfg)
@@ -2142,7 +2192,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case backgroundSpawnedMsg:
-		m.appendTranscript("\n" + dimWrap(fmt.Sprintf("⚙ spawned background agent %s (%q)", msg.jobID, msg.label)) + "\n")
+		m.notify(fmt.Sprintf("spawned background agent %s (%q)", msg.jobID, msg.label), "/bg list")
 		m.autoOpenPanel(regionBackground)
 		m.syncLayout()
 		return m, nil
@@ -2150,9 +2200,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case backgroundJobDoneMsg:
 		j := msg.job
 		if j.Err != nil {
-			m.appendTranscript("\n" + dimWrap(fmt.Sprintf("⚙ background agent %q failed: %v", j.Label, j.Err)) + "\n")
+			m.notify(fmt.Sprintf("background agent %q failed: %v", j.Label, j.Err), "/bg list")
 		} else {
-			m.appendTranscript("\n" + dimWrap(fmt.Sprintf("⚙ background agent %q completed", j.Label)) + "\n")
+			m.notify(fmt.Sprintf("background agent %q completed", j.Label), "/bg list")
 		}
 		return m, nil
 
@@ -2176,7 +2226,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		contentChanged := !reflect.DeepEqual(oldCfg, newCfg)
 		m.st.cfg = msg.cfg
 		if contentChanged {
-			m.appendTranscript(milkTag() + " config reloaded\n")
+			m.notify("config reloaded", "/config")
 		}
 		m = m.refreshMCPToolSets()
 		return m, nil

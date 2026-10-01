@@ -56,6 +56,7 @@ cmd/milk/
   dispatch.go       runPrimary / runEscalation — role-specific session bookkeeping shared by single-shot and TUI
   interactive.go    slash commands, tab completion, prompt label helpers
   ansi.go           ANSI colour helpers and activity spinner
+  notify.go         notification toasts: queue/history, expiry tick, overlay render, /notifications (ADR-0048)
   panel_memory.go   right-side memory panel (/panel memory)
   panel_workflow.go workflow progress panel (/panel workflow)
   workflow_cmd.go   /workflow slash command + interactive wizard
@@ -159,7 +160,7 @@ milk [flags] <prompt>         # single-prompt mode
 
 `milk` with no prompt argument starts a REPL built on charmbracelet/bubbletea. The input prompt uses `❯` as the prefix. The status bar reflects the current routing state and active agent.
 
-**Slash commands:** `/escalate`, `/primary`, `/new`, `/clear`, `/drop`, `/list`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/open`, `/update`, `/help`, `/exit`
+**Slash commands:** `/escalate`, `/primary`, `/new`, `/clear`, `/drop`, `/list`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/open`, `/update`, `/notifications`, `/help`, `/exit`
 
 **Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [json|<path>]` — see [docs/operations.md — Memory](operations.md#memory).
 
@@ -318,4 +319,6 @@ milk's own, not ports:
 
 The full comparison (findings, what was and wasn't adopted, and why) lives in a design analysis
 kept out of this published site — see the `prompt-context-management-review.md` doc in the
+repository root's `docs/` directory on [GitHub](https://github.com/scoutme/milk).
+
 repository root's `docs/` directory on [GitHub](https://github.com/scoutme/milk).

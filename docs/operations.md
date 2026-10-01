@@ -271,5 +271,8 @@ When an agent calls `edit_file`/`write_file` (primary) or `Edit`/`Write` (Claude
 | **Shift-Arrows** | Text selection (transcript and input) |
 | **Ctrl-X** | Cut selected input text |
 | **F1 / F2 / F3 / F4** | Show/hide the memory / tasks / background-agents / workflow panel — same effect as `/panel <name>`. Works in any mode, including mid-turn. |
+| **Ctrl+G** | Dismiss all open notification toasts (history stays: `/notifications`) |
+
+Turn-unrelated informational events — thinking-visibility switches, panel open/close, background-job lifecycle, credential refreshes — surface as floating toasts in the top-right corner (timestamped, each with the related slash-command hint, auto-expiring after a few seconds). They are **not** part of the transcript; `/notifications` shows the full history with timestamps (`/notifications clear` empties it). Tool calls and turn-bound output stay in the transcript.
 
 Each panel's title shows its shortcut (e.g. `tasks    F2`) as a reminder. The tasks, background-agents, and workflow panels also open themselves automatically the moment their content becomes active — a task is created, a background job starts, a workflow launches — so you don't have to notice and press the shortcut first. Manually toggling a panel (`/panel <name>` or its F-key) overrides this for the rest of the session: once you've explicitly shown or hidden a panel, automatic management leaves it alone, in either direction. When two or more panels are open, every other one (by left-to-right position among the panels currently showing, not a fixed panel) gets a subtle background tint so adjacent panels are easier to tell apart.
