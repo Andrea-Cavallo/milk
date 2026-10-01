@@ -61,12 +61,17 @@ blocked, explain the blocker to the user instead of repeating the same step.
 </system-reminder>`
 
 // recoveryNudgeStrong is injected on the second consecutive streak detection.
+// Point 4 (the escalate hint) is deliberately on the strong tier only, not
+// the mild one above — a single nudge is often enough to self-correct, and
+// suggesting escalation on the first, often-harmless, recovery would be
+// premature.
 const recoveryNudgeStrong = `<system-reminder>
 WARNING: You are STILL stuck in a loop after a previous recovery attempt.
 You MUST:
 1. Abandon your current approach entirely.
 2. State what you were trying and why it failed.
 3. Ask the user for guidance instead of continuing.
+4. If you cannot make progress, call escalate(reason) instead of trying again.
 If you repeat the same action again the session will be terminated.
 </system-reminder>`
 
@@ -88,6 +93,7 @@ attempt. You MUST:
 1. Abandon your current approach entirely.
 2. State what you were trying and why it failed.
 3. Ask the user for guidance instead of continuing.
+4. If you cannot make progress, call escalate(reason) instead of trying again.
 If you repeat the same action again the session will be terminated.
 </system-reminder>`
 
@@ -126,6 +132,7 @@ You MUST completely replan before continuing:
 1. Abandon your current approach entirely — it is stuck in repetition
 2. Write out a NEW plan with different steps and a different strategy
 3. State what you were trying to do, why it failed, and how your new plan differs
+4. If you cannot make progress, call escalate(reason) instead of trying again
 Do NOT continue the same line of reasoning or reuse the same wording.
 </system-reminder>`
 

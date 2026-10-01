@@ -1,6 +1,7 @@
 package local
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -205,5 +206,32 @@ func TestNormalisedHash_Deterministic(t *testing.T) {
 	h3 := normalisedHash("  HELLO   WORLD  ")
 	if h1 != h2 || h2 != h3 {
 		t.Fatalf("expected identical hashes, got %q %q %q", h1, h2, h3)
+	}
+}
+
+// TestRecoveryNudges_EscalateHintOnStrongTierOnly asserts that the
+// escalate(reason) hint only appears on the strong (second-recovery) tier of
+// each detector's nudge text, never on the mild (first-recovery) tier — a
+// single recovery is often harmless and self-corrects; suggesting escalation
+// that early would be premature.
+func TestRecoveryNudges_EscalateHintOnStrongTierOnly(t *testing.T) {
+	pairs := []struct {
+		name   string
+		mild   string
+		strong string
+	}{
+		{"loop streak / text loop", recoveryNudgeMild, recoveryNudgeStrong},
+		{"duplicate tool call", recoveryDuplicateToolMild, recoveryDuplicateToolStrong},
+		{"reasoning n-gram", recoveryNgramRemind, recoveryNgramReplan},
+	}
+	for _, p := range pairs {
+		t.Run(p.name, func(t *testing.T) {
+			if strings.Contains(p.mild, "escalate(") {
+				t.Errorf("mild nudge must not mention escalate(), got: %s", p.mild)
+			}
+			if !strings.Contains(p.strong, "escalate(reason)") {
+				t.Errorf("strong nudge must mention escalate(reason), got: %s", p.strong)
+			}
+		})
 	}
 }
