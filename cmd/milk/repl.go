@@ -561,6 +561,8 @@ type model struct {
 	tabBeforeCursor string   // beforeCursor snapshot at session start; used for clean cycling
 	tabAfterCursor  string   // afterCursor snapshot at session start
 	tabSubcmdMode   bool     // true when tabMatches holds full sigs (subcommand/trailing-space mode)
+	tabValueMode    bool     // true when tabMatches are concrete parameter values (#166): replace/append the token under the cursor
+	tabNsLabel      string   // name-space shown beside value hints (value mode only)
 	tabHints        []string // hint lines shown below viewport (may have one entry highlighted)
 	tabHintsBase    []string // same lines without any highlight; source of truth for highlightHint
 	hintIdx         int      // selected inline hint (-1 = none)
@@ -2441,6 +2443,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.tabAfterCursor = ""
 			m.tabPrefix = ""
 			m.tabSubcmdMode = false
+			m.tabValueMode = false
+			m.tabNsLabel = ""
 			m.tabHints = nil
 			m.tabHintsBase = nil
 			m.hintIdx = -1
@@ -2758,6 +2762,8 @@ func (m model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.tabAfterCursor = ""
 		m.tabPrefix = ""
 		m.tabSubcmdMode = false
+		m.tabValueMode = false
+		m.tabNsLabel = ""
 		m.tabHints = nil
 		m.tabHintsBase = nil
 		m.refreshPrompt()
