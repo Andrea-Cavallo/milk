@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/oversight"
 	"github.com/scoutme/milk/internal/session"
@@ -77,17 +80,57 @@ func TestNotify_RecordsHistoryTimestampAndVisible(t *testing.T) {
 
 func TestNotify_CapsVisibleAndQueuesTheRest(t *testing.T) {
 	m := layoutTestModel(t, 120, 40)
-	for i := range 5 {
+	limit := maxVisibleToastsFor(m.viewportHeight())
+	for i := range limit + 2 {
 		m.notify(strings.Repeat("event ", 1)+string(rune('a'+i)), "")
 	}
-	if len(m.toastVisible) != maxVisibleToasts {
-		t.Errorf("visible = %d, want %d", len(m.toastVisible), maxVisibleToasts)
+	if len(m.toastVisible) != limit {
+		t.Errorf("visible = %d, want %d", len(m.toastVisible), limit)
 	}
-	if len(m.toastQueue) != 5-maxVisibleToasts {
-		t.Errorf("queue = %d, want %d", len(m.toastQueue), 5-maxVisibleToasts)
+	if len(m.toastQueue) != 2 {
+		t.Errorf("queue = %d, want 2", len(m.toastQueue))
 	}
-	if len(m.toastHistory) != 5 {
-		t.Errorf("history = %d, want 5 (all events recorded)", len(m.toastHistory))
+	if len(m.toastHistory) != limit+2 {
+		t.Errorf("history = %d, want %d (all events recorded)", len(m.toastHistory), limit+2)
+	}
+}
+
+// TestHandleNotificationsCmd_LastNoteMatchesShownCount pins a real bug: the
+// "(last N)" note was built from the history's full length *before* slicing
+// down to toastHistoryShow, so a 68-entry history printing only 20 lines
+// claimed "(last 68)" instead of "(last 20)".
+func TestHandleNotificationsCmd_LastNoteMatchesShownCount(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	for i := range toastHistoryShow + 5 {
+		m.notify(strings.Repeat("event ", 1)+string(rune('a'+i%26)), "")
+	}
+	if len(m.toastHistory) != toastHistoryShow+5 {
+		t.Fatalf("setup: history = %d, want %d", len(m.toastHistory), toastHistoryShow+5)
+	}
+
+	got := m.handleNotificationsCmd("")
+	out := got.transcript.String()
+
+	want := "(last " + strconv.Itoa(toastHistoryShow) + ")"
+	if !strings.Contains(out, want) {
+		t.Errorf("expected %q in output, got %q", want, out)
+	}
+	if shown := strings.Count(out, "/notifications"); shown != toastHistoryShow {
+		t.Errorf("printed %d entries, want %d (toastHistoryShow)", shown, toastHistoryShow)
+	}
+}
+
+// TestMaxVisibleToastsFor_FloorsAtMinimum pins the "min 3" floor for short
+// terminals and the proportional growth for taller ones.
+func TestMaxVisibleToastsFor_FloorsAtMinimum(t *testing.T) {
+	if got := maxVisibleToastsFor(0); got != minVisibleToasts {
+		t.Errorf("height 0: got %d, want floor %d", got, minVisibleToasts)
+	}
+	if got := maxVisibleToastsFor(10); got != minVisibleToasts {
+		t.Errorf("height 10: got %d, want floor %d", got, minVisibleToasts)
+	}
+	if got, want := maxVisibleToastsFor(100), 10; got != want {
+		t.Errorf("height 100: got %d, want %d", got, want)
 	}
 }
 
@@ -212,10 +255,14 @@ func TestView_ToastOverlayFloating(t *testing.T) {
 	baseline := m.View()
 	baselineLines := strings.Count(baseline, "\n")
 
-	m.notify("background agents panel: on", "/panel background")
+	// Message kept short: the box's halfway clamp (overlayToasts) truncates
+	// the free-form message before dropping hint/dismiss, so a long message
+	// is not guaranteed to survive intact — that trade-off has its own
+	// dedicated coverage below. This test only pins the overlay mechanics.
+	m.notify("panel on", "/panel background")
 	view := m.View()
 
-	if !strings.Contains(view, "background agents panel: on") {
+	if !strings.Contains(view, "panel on") {
 		t.Errorf("view must contain the toast text, got:\n%s", view)
 	}
 	if !strings.Contains(view, "/panel background") {
@@ -227,11 +274,291 @@ func TestView_ToastOverlayFloating(t *testing.T) {
 	if !regexp.MustCompile(`\d{2}:\d{2}`).MatchString(view) {
 		t.Errorf("view must show the current time on the toast, got:\n%s", view)
 	}
-	if strings.Contains(m.transcript.String(), "background agents panel: on") {
+	if strings.Contains(m.transcript.String(), "panel on") {
 		t.Errorf("toast text must never enter the transcript, got %q", m.transcript.String())
 	}
 	if got := strings.Count(view, "\n"); got != baselineLines {
 		t.Errorf("toast overlay changed the view height: %d -> %d lines (must consume zero rows)", baselineLines, got)
+	}
+}
+
+// TestPadToastRow_StartsContentAtLeftPad pins padToastRow's contract: content
+// starts exactly at column leftPad (leading spaces), and the row is padded
+// out to width regardless of how short the content is.
+func TestPadToastRow_StartsContentAtLeftPad(t *testing.T) {
+	content, plainW := toastContent(toastEvent{at: time.Now(), text: "hi"}, 50)
+	row := padToastRow(content, plainW, 50, 10)
+	plain := stripANSI(row)
+	if w := utf8.RuneCountInString(plain); w != 50 {
+		t.Fatalf("width = %d, want 50", w)
+	}
+	if !strings.HasPrefix(plain, strings.Repeat(" ", 10)) {
+		t.Errorf("expected content to start at column 10, got %q", plain)
+	}
+	if strings.TrimSpace(plain) == "" {
+		t.Fatalf("expected non-blank content, got %q", plain)
+	}
+}
+
+// firstNonSpace returns the index of the first non-space rune in r, or -1.
+func firstNonSpace(r []rune) int {
+	for i, c := range r {
+		if c != ' ' {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestOverlayToasts_DismissGetsOwnRow pins requirement: "ctrl+g dismiss"
+// renders on its own row right after the last visible toast, not folded
+// into that toast's message row — it applies to every open toast, not just
+// one message.
+func TestOverlayToasts_DismissGetsOwnRow(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	m.notify("short", "")
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	// mainArea row i is at line index i+1 (see margin test above); with one
+	// visible toast, row 0 is its message and row 1 is the dismiss footer.
+	messageRow := lines[1]
+	dismissRow := lines[2]
+
+	if strings.Contains(messageRow, "ctrl+g dismiss") {
+		t.Errorf("dismiss affordance must not be folded into the message row, got %q", stripANSI(messageRow))
+	}
+	if !strings.Contains(messageRow, "short") {
+		t.Errorf("expected the message on its own row, got %q", stripANSI(messageRow))
+	}
+	if !strings.Contains(dismissRow, "ctrl+g dismiss") {
+		t.Errorf("expected the dismiss affordance on its own footer row, got %q", stripANSI(dismissRow))
+	}
+
+	plain := []rune(stripANSI(dismissRow))
+	if firstNonSpace(plain[toastSideMargin:]) <= 0 {
+		t.Errorf("expected leading padding before the dismiss row's content (right-aligned, not flush left), got %q", string(plain))
+	}
+}
+
+// TestOverlayToasts_PendingCountOnDismissRow pins the "N more pending"
+// prefix: when events are still waiting in toastQueue beyond what's
+// currently visible, the dismiss footer row names the count, dot-separated
+// from the dismiss affordance itself.
+func TestOverlayToasts_PendingCountOnDismissRow(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	limit := maxVisibleToastsFor(m.viewportHeight())
+	for i := range limit + 2 {
+		m.notify(strings.Repeat("event ", 1)+string(rune('a'+i)), "")
+	}
+	if len(m.toastQueue) != 2 {
+		t.Fatalf("setup: queue = %d, want 2", len(m.toastQueue))
+	}
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	dismissRow := lines[limit+1] // messages occupy rows 1..limit, footer is next
+
+	if !strings.Contains(dismissRow, "2 more pending · ctrl+g dismiss") {
+		t.Errorf("expected the pending count dot-separated before the dismiss affordance, got %q", stripANSI(dismissRow))
+	}
+}
+
+// TestOverlayToasts_RowsShareStartColumn pins requirement: every painted
+// row — visible toast messages and the dismiss footer alike — starts at the
+// same column regardless of each one's own content length, instead of each
+// row individually right-aligning to a different column.
+//
+// Checks the character exactly at the computed bandStart, rather than
+// scanning for the first non-space from the margin: a row's *untouched*
+// prefix (left of the band, by design — see TestOverlayToasts_BandStartsAtSharedColumn)
+// can itself be non-blank underlying content (e.g. the welcome screen's own
+// text), which would otherwise read as a false "earlier start".
+func TestOverlayToasts_RowsShareStartColumn(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	m.notify("a very long notification message to measure the shared column", "/notifications")
+	m.notify("short", "")
+	m.notify("mid length message", "")
+	if got := maxVisibleToastsFor(m.viewportHeight()); len(m.toastVisible) != got {
+		t.Fatalf("setup: visible = %d, want %d (all 3 promoted)", len(m.toastVisible), got)
+	}
+
+	width := m.mainWidth()
+	boxWidth := width - 2*toastSideMargin
+	contentCap := boxWidth - 2*toastContentPadding
+	maxLen := 0
+	for _, ev := range m.toastVisible {
+		if _, l := toastContent(ev, contentCap); l > maxLen {
+			maxLen = l
+		}
+	}
+	if _, l := toastDismissLine(len(m.toastQueue), contentCap); l > maxLen {
+		maxLen = l
+	}
+	sharedCol := max(boxWidth/2, boxWidth-(maxLen+2*toastContentPadding))
+	// +toastContentPadding: the band's own leading blank column (this
+	// change) sits before the content, which starts right after it.
+	contentStart := toastSideMargin + sharedCol + toastContentPadding
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	// mainArea row i is at line index i+1 (see margin test above); the
+	// dismiss footer follows immediately after the last visible toast.
+	for i := 0; i <= len(m.toastVisible); i++ {
+		row := lines[i+1]
+		atContent := ansi.Cut(row, contentStart, contentStart+1)
+		if stripANSI(atContent) == " " || stripANSI(atContent) == "" {
+			t.Errorf("row %d: expected content starting exactly at column %d, got blank there in %q", i, contentStart, stripANSI(row))
+		}
+	}
+}
+
+// TestOverlayToasts_PreservesSideMargins pins the toastSideMargin inset: the
+// toast band must not touch either edge of the confined mainWidth() span —
+// the margin columns must still show whatever was underneath, untouched.
+func TestOverlayToasts_PreservesSideMargins(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	width := m.mainWidth()
+
+	// View() = headerBar + "\n" + mainArea + "\n" + statusBar: mainArea's own
+	// row 0 (where the first toast paints) is line index 1 of the full view.
+	before := m.View()
+	beforeRow := strings.Split(before, "\n")[1]
+
+	m.notify("margin check", "")
+	after := m.View()
+	afterRow := strings.Split(after, "\n")[1]
+
+	beforeLeft := stripANSI(ansi.Truncate(beforeRow, toastSideMargin, ""))
+	afterLeft := stripANSI(ansi.Truncate(afterRow, toastSideMargin, ""))
+	if beforeLeft != afterLeft {
+		t.Errorf("left margin changed: %q -> %q", beforeLeft, afterLeft)
+	}
+
+	beforeRight := stripANSI(ansi.Cut(beforeRow, width-toastSideMargin, width))
+	afterRight := stripANSI(ansi.Cut(afterRow, width-toastSideMargin, width))
+	if beforeRight != afterRight {
+		t.Errorf("right margin changed: %q -> %q", beforeRight, afterRight)
+	}
+
+	if !strings.Contains(afterRow, "margin check") {
+		t.Errorf("expected toast text in the overlaid row, got %q", stripANSI(afterRow))
+	}
+}
+
+// TestOverlayToasts_BandStartsAtSharedColumn pins the least-area overlay:
+// everything left of the shared column must stay byte-for-byte untouched
+// (same as the pre-toast baseline) — the painted band starts at the shared
+// column, not at toastSideMargin, instead of painting the whole box width
+// (most of it blank filler) regardless of how short the message is.
+func TestOverlayToasts_BandStartsAtSharedColumn(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	width := m.mainWidth()
+	boxWidth := width - 2*toastSideMargin
+
+	before := m.View()
+	rowIdx := strings.Count(m.headerBar(), "\n") + 1
+	beforeRow := strings.Split(before, "\n")[rowIdx]
+
+	m.notify("hi", "")
+	// Mirror overlayToasts' own calculation: the shared column is driven by
+	// the longer of the message row and the dismiss footer row, plus the
+	// toastContentPadding column reserved on each side.
+	contentCap := boxWidth - 2*toastContentPadding
+	_, msgLen := toastContent(m.toastVisible[0], contentCap)
+	_, dismissLen := toastDismissLine(len(m.toastQueue), contentCap)
+	sharedCol := max(boxWidth/2, boxWidth-(max(msgLen, dismissLen)+2*toastContentPadding))
+	bandStart := toastSideMargin + sharedCol
+
+	after := m.View()
+	afterRow := strings.Split(after, "\n")[rowIdx]
+
+	beforePrefix := ansi.Truncate(beforeRow, bandStart, "")
+	afterPrefix := ansi.Truncate(afterRow, bandStart, "")
+	if beforePrefix != afterPrefix {
+		t.Errorf("expected everything before the shared column to stay untouched by the toast:\nbefore=%q\nafter=%q", beforePrefix, afterPrefix)
+	}
+	if !strings.Contains(afterRow, "hi") {
+		t.Errorf("expected the toast text within the painted band, got %q", stripANSI(afterRow))
+	}
+}
+
+// TestOverlayToasts_ContentHasPaddingColumns pins toastContentPadding: the
+// band reserves one blank column before the content and (for whichever row
+// defines the shared width) exactly one blank column after it, before the
+// band's own right edge — content never touches either edge of its band.
+func TestOverlayToasts_ContentHasPaddingColumns(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	width := m.mainWidth()
+	boxWidth := width - 2*toastSideMargin
+	contentCap := boxWidth - 2*toastContentPadding
+
+	m.notify("hi", "")
+	_, msgLen := toastContent(m.toastVisible[0], contentCap)
+	_, dismissLen := toastDismissLine(len(m.toastQueue), contentCap)
+	maxLen := max(msgLen, dismissLen)
+	sharedCol := max(boxWidth/2, boxWidth-(maxLen+2*toastContentPadding))
+	bandStart := toastSideMargin + sharedCol
+	bandEnd := width - toastSideMargin
+
+	rowIdx := strings.Count(m.headerBar(), "\n") + 1
+	row := strings.Split(m.View(), "\n")[rowIdx]
+
+	leading := ansi.Cut(row, bandStart, bandStart+toastContentPadding)
+	if stripANSI(leading) != strings.Repeat(" ", toastContentPadding) {
+		t.Errorf("expected %d blank column(s) at the start of the band, got %q", toastContentPadding, stripANSI(leading))
+	}
+
+	// The message row defines maxLen here (longer than the dismiss footer's
+	// fixed "ctrl+g dismiss"), so its own trailing gap is exactly one column.
+	trailing := ansi.Cut(row, bandEnd-toastContentPadding, bandEnd)
+	if stripANSI(trailing) != strings.Repeat(" ", toastContentPadding) {
+		t.Errorf("expected %d trailing blank column(s) before the band's right edge, got %q", toastContentPadding, stripANSI(trailing))
+	}
+}
+
+// TestView_ToastOverlayPreservesPanelHeader guards against the overlay
+// confining itself to mainWidth() for *sizing* the toast but then truncating
+// against the full joined-panel line width, which used to blank out an open
+// panel's title row (row 0) and leave that one row narrower than the rest.
+func TestView_ToastOverlayPreservesPanelHeader(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+
+	m := layoutTestModel(t, 120, 40)
+	m.panelTasks = true
+	m.syncLayout()
+
+	before := m.View()
+	if !strings.Contains(before, "tasks") {
+		t.Fatalf("setup: expected tasks panel title in view, got:\n%s", before)
+	}
+
+	// Short message: see the comment on TestView_ToastOverlayFloating — the
+	// halfway clamp can truncate a long message before dropping hint/dismiss,
+	// which isn't what this test is about.
+	m.notify("panel open", "/panel tasks")
+	after := m.View()
+
+	if !strings.Contains(after, "tasks") {
+		t.Errorf("toast overlay must not blank out the open panel's title row, got:\n%s", after)
+	}
+	if !strings.Contains(after, "panel open") {
+		t.Errorf("view must still show the toast text, got:\n%s", after)
+	}
+
+	beforeLines := strings.Split(before, "\n")
+	afterLines := strings.Split(after, "\n")
+	if len(beforeLines) != len(afterLines) {
+		t.Fatalf("line count changed: %d -> %d", len(beforeLines), len(afterLines))
+	}
+	for i := range beforeLines {
+		bw := utf8.RuneCountInString(stripANSI(beforeLines[i]))
+		aw := utf8.RuneCountInString(stripANSI(afterLines[i]))
+		if bw != aw {
+			t.Errorf("line %d width changed from %d to %d cells — toast overlay must not shrink a row that has a side panel", i, bw, aw)
+		}
 	}
 }
 
@@ -322,6 +649,59 @@ func TestNotificationsCmd(t *testing.T) {
 	}
 	if !strings.Contains(got.transcript.String(), "notification history cleared") {
 		t.Errorf("clear must confirm in the transcript, got %q", got.transcript.String())
+	}
+}
+
+// TestNotificationsListCmd covers the `list [count]` subcommand: older
+// history than toastHistoryShow is unreachable from the bare command alone,
+// so `list` with no count must show everything unfiltered, and `list
+// <count>` must show exactly the last <count> entries.
+func TestNotificationsListCmd(t *testing.T) {
+	m := layoutTestModel(t, 120, 40)
+	total := toastHistoryShow + 10
+	for i := range total {
+		m.notify(strings.Repeat("event ", 1)+strconv.Itoa(i), "")
+	}
+	if len(m.toastHistory) != total {
+		t.Fatalf("setup: history = %d, want %d", len(m.toastHistory), total)
+	}
+
+	// transcript is a shared *strings.Builder across model copies — reset it
+	// before each call below so each check sees only that call's output.
+	runList := func(rest string) string {
+		m.transcript.Reset()
+		updated, _ := m.handleSlashInput("/notifications", rest)
+		return updated.(model).transcript.String()
+	}
+
+	// Bare "list" (no count): entire history, unfiltered, no "(last N)" note.
+	out := runList("list")
+	if !strings.Contains(out, "event 0") {
+		t.Errorf("list with no count must show the oldest entry too, got %q", out)
+	}
+	if shown := strings.Count(out, "/notifications"); shown != total {
+		t.Errorf("list with no count: printed %d entries, want all %d", shown, total)
+	}
+	if strings.Contains(out, "(last ") {
+		t.Errorf("list with no count must not claim a truncated count, got %q", out)
+	}
+
+	// "list <count>": exactly the last <count> entries, with the note.
+	out = runList("list 5")
+	if !strings.Contains(out, "(last 5)") {
+		t.Errorf("list 5 must note the truncated count, got %q", out)
+	}
+	if shown := strings.Count(out, "/notifications"); shown != 5 {
+		t.Errorf("list 5: printed %d entries, want 5", shown)
+	}
+	if strings.Contains(out, "event 0") {
+		t.Errorf("list 5 must only show the most recent entries, got %q", out)
+	}
+
+	// Invalid count: a clear error, nothing printed as history.
+	out = runList("list abc")
+	if !strings.Contains(out, "count must be a positive number") {
+		t.Errorf("list abc must report an error, got %q", out)
 	}
 }
 

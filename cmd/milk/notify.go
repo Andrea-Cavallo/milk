@@ -29,9 +29,21 @@ const (
 	// toastTTL is how long a toast stays visible once promoted from the
 	// queue to the visible set.
 	toastTTL = 6 * time.Second
-	// maxVisibleToasts caps how many toasts render simultaneously (stacked
-	// top-right); further events wait in toastQueue.
-	maxVisibleToasts = 3
+	// minVisibleToasts is the floor on how many toasts render simultaneously
+	// (stacked top-right) — see maxVisibleToastsFor, which scales this up
+	// for taller terminals; further events wait in toastQueue.
+	minVisibleToasts = 3
+	// toastVisibleRowDivisor controls how fast the visible cap grows with
+	// chat height: one extra slot per this many rows, see maxVisibleToastsFor.
+	toastVisibleRowDivisor = 10
+	// toastSideMargin keeps the toast band off both edges of the confined
+	// transcript+separator span (m.mainWidth()) — a floating card, not a
+	// band flush against the viewport's own edges.
+	toastSideMargin = 2
+	// toastContentPadding reserves one blank column before and after each
+	// row's content, inside the painted band itself — breathing room so
+	// text never touches the band's own left/right edge.
+	toastContentPadding = 1
 	// toastQueueCap bounds the waiting queue — beyond it the oldest *waiting*
 	// toast is dropped (it is still recorded in history either way).
 	toastQueueCap = 50
@@ -40,6 +52,14 @@ const (
 	// toastHistoryShow is how many entries a bare /notifications prints.
 	toastHistoryShow = 20
 )
+
+// maxVisibleToastsFor returns how many toasts may render at once for a chat
+// area of the given height (m.viewportHeight()): proportional to the
+// available space so a tall terminal can surface more at once without a
+// short one being swamped, floored at minVisibleToasts.
+func maxVisibleToastsFor(chatHeight int) int {
+	return max(minVisibleToasts, chatHeight/toastVisibleRowDivisor)
+}
 
 // toastEvent is one notification: either queued, visible (expiresAt set), or
 // historical (expiresAt zeroed once recorded).
@@ -97,7 +117,8 @@ func (m *model) notify(text, hint string) {
 // promoteToasts fills the visible window from the queue, stamping each newly
 // visible toast with a fresh TTL so queued events never expire unseen.
 func (m *model) promoteToasts(now time.Time) {
-	for len(m.toastVisible) < maxVisibleToasts && len(m.toastQueue) > 0 {
+	limit := maxVisibleToastsFor(m.viewportHeight())
+	for len(m.toastVisible) < limit && len(m.toastQueue) > 0 {
 		ev := m.toastQueue[0]
 		m.toastQueue = m.toastQueue[1:]
 		ev.expiresAt = now.Add(toastTTL)
@@ -176,29 +197,18 @@ func toastBackgroundCode() string {
 	return "\033[48;2;217;228;245m" // #D9E4F5
 }
 
-// renderToast builds one full-width toast line: dim time, message, related
-// slash-command hint, and — on the last visible line — the dismiss
-// affordance. The plain-text budget is computed first so the styled result
-// fits `width` without wrapping; withPanelBackground then re-applies the
-// band background after every embedded reset so dim/blue spans don't punch
-// holes in it.
-func renderToast(ev toastEvent, width int, showDismiss bool) string {
+// toastContent builds the styled time + message + slash-command hint for one
+// toast, truncating the free-form message so the whole thing fits within
+// width. Returns the styled string and its plain-text cell width — the
+// latter drives both the shared start-column calculation and the per-row
+// padding in overlayToasts.
+func toastContent(ev toastEvent, width int) (string, int) {
 	timeStr := ev.at.Format("15:04")
 	hint := ev.hintOrFallback()
-	dismiss := ""
-	if showDismiss {
-		dismiss = " · ctrl+g dismiss"
-	}
-
 	hintPart := "  " + hint
-	dismissPart := dismiss
 
 	// Budget for the free-form message: everything else is fixed width.
-	budget := width - (len(timeStr) + 1 + len([]rune(hintPart)) + len([]rune(dismissPart)))
-	if budget < 8 && dismissPart != "" {
-		dismissPart = ""
-		budget = width - (len(timeStr) + 1 + len([]rune(hintPart)))
-	}
+	budget := width - (len(timeStr) + 1 + len([]rune(hintPart)))
 	if budget < 6 && hintPart != "" {
 		hintPart = ""
 		budget = width - (len(timeStr) + 1)
@@ -212,29 +222,79 @@ func renderToast(ev toastEvent, width int, showDismiss bool) string {
 	if hintPart != "" {
 		line += hintPart[:2] + blue(hint)
 	}
-	if dismissPart != "" {
-		line += dim(dismissPart)
+	plainW := len(timeStr) + 1 + len([]rune(text)) + len([]rune(hintPart))
+	return line, plainW
+}
+
+// toastDismissLine builds the standalone dismiss-row content: "N more
+// pending · ctrl+g dismiss" (dot separated) when the waiting queue is
+// non-empty, or just "ctrl+g dismiss" when nothing is queued. Degrades by
+// dropping the pending count before ever touching the dismiss affordance
+// itself, since that's this row's entire purpose.
+func toastDismissLine(pending, width int) (string, int) {
+	const dismiss = "ctrl+g dismiss"
+	full := dismiss
+	if pending > 0 {
+		full = strconv.Itoa(pending) + " more pending · " + dismiss
 	}
-	plainW := len(timeStr) + 1 + len([]rune(text)) + len([]rune(hintPart)) + len([]rune(dismissPart))
-	if pad := width - plainW; pad > 0 {
-		line += strings.Repeat(" ", pad)
+	if len([]rune(full)) > width {
+		full = dismiss
 	}
+	if w := len([]rune(full)); w > width {
+		full = string([]rune(full)[:max(width, 0)])
+	}
+	return dim(full), len([]rune(full))
+}
+
+// padToastRow pads pre-built toast content (plainW cells wide) to exactly
+// width cells, starting at column leftPad, and applies the toast band
+// background. Leading reset first: the transcript line underneath may have
+// been cut mid-SGR during truncation, and its state would otherwise bleed
+// into the toast text.
+func padToastRow(content string, plainW, width, leftPad int) string {
+	trailing := max(width-leftPad-plainW, 0)
+	line := strings.Repeat(" ", leftPad) + content + strings.Repeat(" ", trailing)
 
 	bg := toastBackgroundCode()
 	if bg == "" {
 		return line
 	}
-	// Leading reset first: the transcript line underneath may have been cut
-	// mid-SGR during truncation, and its state would otherwise bleed into
-	// the toast text.
 	return ansiReset + withPanelBackground(line, bg)
 }
 
 // overlayToasts paints the visible toasts over the top-right corner of the
-// already-rendered main-area block (viewport+panels, attach view, or PTY
-// screen). Because it operates purely at render time it consumes no layout
-// rows: viewportHeight, panel geometry, PTY sizing, and the attach view all
-// stay untouched — the toast genuinely floats over whatever is underneath.
+// transcript+separator column of the already-rendered main-area block
+// (viewport+panels, attach view, or PTY screen). Because it operates purely
+// at render time it consumes no layout rows: viewportHeight, panel geometry,
+// PTY sizing, and the attach view all stay untouched — the toast genuinely
+// floats over whatever is underneath.
+//
+// The overlay is confined to m.mainWidth() — the viewport+separator span —
+// rather than the full block width. Any side panel joined to the right of
+// that (memory/tasks/background/workflow) lives beyond mainWidth and is cut
+// off intact as `tail` below, then reattached untouched: row 0 of an open
+// panel is its title line (panelTitleLine), and sizing/truncating against
+// the full block width here used to blank that title out from under a toast
+// instead of floating only over the transcript.
+//
+// Within that span, the painted toast band is inset by toastSideMargin
+// columns from the right edge, and its *left* edge sits at the shared start
+// column (sharedCol below) rather than toastSideMargin: everything left of
+// that — including what would otherwise be blank, background-tinted filler —
+// is left as the original underlying content untouched, so the overlay
+// covers the least area needed instead of painting the whole box width.
+//
+// The dismiss affordance gets its own row, right after the last visible
+// toast, instead of being folded into that toast's message row: it applies
+// to every open toast, not just one message, so it reads better as a
+// footer. That row shows "N more pending · ctrl+g dismiss" when toastQueue
+// is non-empty (events waiting beyond what's currently visible), or just
+// "ctrl+g dismiss" otherwise. Every row — the messages and the dismiss
+// footer alike — shares one start column: computed just far enough left to
+// fit the longest of them (plus one toastContentPadding column reserved on
+// each side), but never left of the box's halfway point, so the block
+// reads as a consistent ragged-right list instead of each row individually
+// right-aligning to its own, different, start column.
 func (m *model) overlayToasts(block string) string {
 	if len(m.toastVisible) == 0 {
 		return block
@@ -243,44 +303,109 @@ func (m *model) overlayToasts(block string) string {
 	if width < 20 {
 		return block
 	}
-	lines := strings.Split(block, "\n")
+	boxWidth := width - 2*toastSideMargin
+	n := len(m.toastVisible)
+	contentCap := max(boxWidth-2*toastContentPadding, 0)
+
+	contents := make([]string, n)
+	plainLens := make([]int, n)
+	maxLen := 0
 	for i, ev := range m.toastVisible {
-		if i >= len(lines) {
-			break
+		contents[i], plainLens[i] = toastContent(ev, contentCap)
+		if plainLens[i] > maxLen {
+			maxLen = plainLens[i]
 		}
-		toast := renderToast(ev, width, i == len(m.toastVisible)-1)
-		toastW := ansi.StringWidth(toast)
-		keep := width - toastW
-		if keep <= 0 {
-			lines[i] = ansi.Truncate(toast, width, "")
-			continue
-		}
-		head := ansi.Truncate(lines[i], keep, "")
-		pad := keep - ansi.StringWidth(head)
-		lines[i] = head + strings.Repeat(" ", pad) + toast
 	}
+	dismissContent, dismissLen := toastDismissLine(len(m.toastQueue), contentCap)
+	if dismissLen > maxLen {
+		maxLen = dismissLen
+	}
+	sharedCol := max(boxWidth/2, boxWidth-(maxLen+2*toastContentPadding))
+	avail := boxWidth - sharedCol // == the painted band's width
+	availCap := max(avail-2*toastContentPadding, 0)
+
+	lines := strings.Split(block, "\n")
+	paint := func(row int, content string, plainW int) {
+		if row >= len(lines) {
+			return
+		}
+		line := ansi.Truncate(lines[row], width, "")
+		tail := ansi.TruncateLeft(lines[row], width, "")
+
+		untouched := ansi.Truncate(line, toastSideMargin+sharedCol, "")
+		rightMargin := ansi.TruncateLeft(line, width-toastSideMargin, "")
+
+		toast := padToastRow(content, plainW, avail, toastContentPadding)
+		lines[row] = untouched + toast + rightMargin + tail
+	}
+
+	for i, ev := range m.toastVisible {
+		content, plainW := contents[i], plainLens[i]
+		if plainW > availCap {
+			// The halfway clamp left less room than this row's natural
+			// (full-boxWidth-budgeted) length: re-budget against the
+			// smaller avail width so the message truncates further rather
+			// than the already-built string getting blindly chopped.
+			content, plainW = toastContent(ev, availCap)
+		}
+		paint(i, content, plainW)
+	}
+	if dismissLen > availCap {
+		dismissContent, dismissLen = toastDismissLine(len(m.toastQueue), availCap)
+	}
+	paint(n, dismissContent, dismissLen)
+
 	return strings.Join(lines, "\n")
 }
 
-// handleNotificationsCmd implements `/notifications [clear]` — the history
-// view required by issue #162. Output goes to the transcript like every
-// other explicit query (/history, /export…): the user asked for it.
+// handleNotificationsCmd implements `/notifications [list [count] | clear]` —
+// the history view required by issue #162, extended with an explicit `list`
+// subcommand so history older than toastHistoryShow stays reachable: a bare
+// `/notifications` is exactly `list toastHistoryShow`, `list` with no count
+// shows the entire history unfiltered, and `list <count>` shows the last
+// <count> entries. Output goes to the transcript like every other explicit
+// query (/history, /export…): the user asked for it.
 func (m model) handleNotificationsCmd(sub string) model {
-	switch strings.TrimSpace(sub) {
+	args := strings.Fields(sub)
+	if len(args) == 0 {
+		return m.listNotifications(strconv.Itoa(toastHistoryShow))
+	}
+	switch args[0] {
 	case "clear":
 		m.toastHistory = nil
 		m.appendTranscript(milkTag() + " notification history cleared\n")
 		return m
+	case "list":
+		if len(args) > 1 {
+			return m.listNotifications(args[1])
+		}
+		return m.listNotifications("")
 	}
+	m.appendTranscript(milkTag() + " unknown /notifications subcommand: " + args[0] + " (try: list [count], clear)\n")
+	return m
+}
+
+// listNotifications prints the last count entries of toastHistory, or the
+// entire history unfiltered when count is "". Older-than-toastHistoryShow
+// events would otherwise be unreachable once rotation drops them from the
+// default view.
+func (m model) listNotifications(count string) model {
 	if len(m.toastHistory) == 0 {
 		m.appendTranscript(milkTag() + " no notifications recorded\n")
 		return m
 	}
 	entries := m.toastHistory
 	note := ""
-	if len(entries) > toastHistoryShow {
-		note = " (last " + strconv.Itoa(len(entries)) + ")"
-		entries = entries[len(entries)-toastHistoryShow:]
+	if count != "" {
+		n, err := strconv.Atoi(count)
+		if err != nil || n <= 0 {
+			m.appendTranscript(milkTag() + " /notifications list: count must be a positive number, got " + count + "\n")
+			return m
+		}
+		if n < len(entries) {
+			entries = entries[len(entries)-n:]
+			note = " (last " + strconv.Itoa(len(entries)) + ")"
+		}
 	}
 	var b strings.Builder
 	b.WriteString(milkTag() + " notification history" + note + ":\n")

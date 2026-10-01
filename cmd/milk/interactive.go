@@ -175,8 +175,10 @@ const interactiveHelp = `
   /history               show current history navigation mode
   /history global        navigate global input history
   /history session       navigate session input history (default)
-  /notifications         show notification/event history (timestamps + hints)
-  /notifications clear   clear notification history
+  /notifications               show last 20 notifications (timestamps + hints)
+  /notifications list          show the full notification history, unfiltered
+  /notifications list <count>  show the last <count> notifications
+  /notifications clear         clear notification history
 
 ── Observability ────────────────────────────────────────────────────────
   /usage                 token usage report for this session and all-time totals
