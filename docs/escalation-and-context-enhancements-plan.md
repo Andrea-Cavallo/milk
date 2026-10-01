@@ -180,6 +180,33 @@ tool more likely to actually get used, without adding any new forced-escalation 
 
 ## Track A, Phase 5 — Long-but-not-looping turns: make `token_velocity` actionable
 
+**Status: landed** (branch `feat/token-velocity-actionable`). The product question was asked
+directly: suggestion-only, confirmed — no auto-escalation. Implementation notes:
+
+- `token_velocity` is only ever computed once a turn has already finished (`Detector.Feed` is
+  called from `handleAgentDone` after the turn's final token counts are known — there is no
+  mid-stream path for it), so this can only ever inform the *next* turn, exactly as planned.
+- `autoStickyEscalate` turned out not to be cleanly reusable for a mere suggestion — it's defined
+  as a side effect of the router having *actually* escalated that turn, not a standalone flag. The
+  implementation just checks `!m.st.stickyEscalate && !m.st.autoStickyEscalate` (nothing new to
+  suggest if the session is already headed to escalation) and otherwise appends `" — consider
+  /escalate"` to the verdict's message — no new session state needed.
+- `token_velocity`'s confidence is always ≥ 0.8 (ratio-scaled, capped at 0.9 — see
+  `checkTokenVelocity`), which in the existing `handleAgentDone` branch structure meant it never
+  reached `m.loopWarning` (the actual status-bar field) at all — only the transcript line. Fixed
+  as part of this change: the token_velocity case now also populates `m.loopWarning`, which is
+  what the plan's "status-bar hint" actually required.
+- **Testing boundary, disclosed rather than skipped:** `token_velocity` is a TUI-only signal
+  (`cmd/milk/repl.go`'s `handleAgentDone`, part of the bubbletea `Update` cycle) — unlike the
+  agent-internal detectors Phases 1/3/4 touched, it has no code path reachable from single-prompt
+  CLI mode at all, and each single-prompt CLI invocation is a fresh OS process with a brand-new,
+  empty-history `loop.Detector` anyway, so the cross-turn window this signal depends on can never
+  accumulate that way. A true interactive-TUI live test (scripted keystrokes across multiple
+  real turns) was not attempted. Verified instead by driving the actual production
+  `(model).handleAgentDone` function directly with a real `loop.Detector` and the real
+  `internal/obs` token accumulator (not mocks) — the full test suite passes, but this is not the
+  same as a human (or scripted) multi-turn TUI session.
+
 **Why:** the analysis doc's 2h21m turn never triggered any loop/duplicate detector (it was
 legitimate incremental progress, not repetition) — the only signal that fired was the **existing**
 TUI-level `token_velocity` cross-turn signal (`internal/loop/detector.go`), and only *after* the

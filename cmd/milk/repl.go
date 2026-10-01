@@ -1164,13 +1164,32 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 			IsUserTurn:    false,
 		})
 		for _, v := range verdicts {
+			msg := v.Message
+			// token_velocity is the one cross-turn signal with no mid-turn
+			// equivalent to act on (it's only ever known once the turn that
+			// triggered it has already finished — see internal/loop/detector.go's
+			// Feed) and no auto-interrupt (high consumption can be
+			// perfectly legitimate for real work). The only lever available
+			// is suggesting escalation for the *next* turn, and only when
+			// the session isn't already headed there — a sticky-escalated
+			// session has nothing new to suggest.
+			if v.Signal == loop.SignalTokenVelocity && !m.st.stickyEscalate && !m.st.autoStickyEscalate {
+				msg += " — consider /escalate"
+			}
 			if v.Confidence >= 0.8 {
-				m.appendTranscript(yellow(fmt.Sprintf("[⚠ loop detected: %s (confidence %.0f%%)]\n", v.Message, v.Confidence*100)))
+				m.appendTranscript(yellow(fmt.Sprintf("[⚠ loop detected: %s (confidence %.0f%%)]\n", msg, v.Confidence*100)))
 				if m.loopDetector != nil && v.ShouldInterrupt {
 					m.loopInterrupt = true
 				}
+				if v.Signal == loop.SignalTokenVelocity && m.loopWarning == "" {
+					// token_velocity's own confidence (0.9) is always >= 0.8,
+					// so without this it would only ever reach the transcript
+					// line above — never the status bar the escalate
+					// suggestion is actually meant to surface in.
+					m.loopWarning = fmt.Sprintf("⚠ %s", msg)
+				}
 			} else if v.Confidence >= 0.5 && m.loopWarning == "" {
-				m.loopWarning = fmt.Sprintf("⚠ %s", v.Message)
+				m.loopWarning = fmt.Sprintf("⚠ %s", msg)
 			}
 		}
 		_ = turnDelta // used for future velocity display
