@@ -151,3 +151,38 @@ func TestDoomLoopGate_DifferentToolCalls_NeverFires(t *testing.T) {
 		t.Errorf("expected the turn to complete normally, got %q", last.Content)
 	}
 }
+
+// TestDoomLoopGate_SessionIDIsLoggingOnly guards the ctx/sessionID parameters
+// threaded into loopRecoveryAction (and the doom-loop gate's own logging) for
+// observability — a session ID must only ever be attributed on a log/metric
+// line, never change the gate's actual allow/deny/terminate decision. A real
+// (non-empty) session ID here must behave identically to the ""-ID case
+// covered by TestDoomLoopGate_InteractiveDeny_Terminates.
+func TestDoomLoopGate_SessionIDIsLoggingOnly(t *testing.T) {
+	srv, requests := doomLoopServer(10)
+	defer srv.Close()
+
+	var asked int32
+	agent := New(srv.URL, "test-model").WithMemConfig(MemConfig{MaxToolIterations: 15})
+	agent = agent.WithPermissions(nil, func(tool, summary string) bool {
+		atomic.AddInt32(&asked, 1)
+		return false // deny
+	})
+	sess := &session.Session{ID: "sess-with-a-real-id"}
+	var out strings.Builder
+
+	history, err := agent.Run(context.Background(), nil, "do the thing", &out, sess, nil)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if atomic.LoadInt32(&asked) != 1 {
+		t.Errorf("expected exactly one doom_loop ask, got %d", asked)
+	}
+	last := history[len(history)-1]
+	if !strings.Contains(last.Content, "the user declined to let it continue") {
+		t.Errorf("expected a user-declined termination message, got %q", last.Content)
+	}
+	if got := atomic.LoadInt32(requests); got != 3 {
+		t.Errorf("expected exactly 3 requests before stopping, got %d", got)
+	}
+}
