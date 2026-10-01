@@ -441,6 +441,14 @@ type Agent struct {
 	// When the marshaled chatRequest exceeds this limit, message history
 	// is trimmed further before sending. 0 means no limit.
 	maxPayloadBytes int
+	// payloadCompactionThreshold is how many consecutive payload-size trims
+	// within a single turn trigger compactForPayloadSize's one-shot
+	// summarizing compaction instead of continuing to only hard-drop oldest
+	// content on every request. Mirrors maxPayloadBytes' convention: the
+	// default (config.DefaultPayloadTrimCompactionThreshold) is baked in at
+	// construction (New/NewFromConfig), and <= 0 disables the compaction
+	// fallback (the per-request hard-drop trim keeps running unmodified).
+	payloadCompactionThreshold int
 	// systemPromptTier selects the verbosity level of the system prompt.
 	// Valid values: "minimal", "standard" (default), "full". Empty = "standard".
 	systemPromptTier string
@@ -640,6 +648,15 @@ func (a *Agent) WithMaxPayloadBytes(n int) *Agent {
 	return &copy
 }
 
+// WithPayloadCompactionThreshold sets how many consecutive payload-size
+// trims within a single turn trigger a one-shot summarizing compaction. See
+// payloadCompactionThreshold's field doc.
+func (a *Agent) WithPayloadCompactionThreshold(n int) *Agent {
+	copy := *a
+	copy.payloadCompactionThreshold = n
+	return &copy
+}
+
 // SystemOverheadChars returns an estimate of the character overhead that Run
 // will add as system messages on top of the history slice: the role system
 // prompt and the memory instruction block (when re-injection is due). Callers
@@ -724,6 +741,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 			promptCaching:              ac.PromptCaching,
 			supportsVision:             ac.Vision,
 			maxPayloadBytes:            config.DefaultMaxPayloadBytes,
+			payloadCompactionThreshold: config.DefaultPayloadTrimCompactionThreshold,
 		}
 	}
 
@@ -748,6 +766,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 		bashAllowedPatterns:        ac.BashAllowedPatterns,
 		supportsVision:             ac.Vision,
 		maxPayloadBytes:            config.DefaultMaxPayloadBytes,
+		payloadCompactionThreshold: config.DefaultPayloadTrimCompactionThreshold,
 	}
 }
 
@@ -1350,6 +1369,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	var textLoopRecoveryCount int
 	var lastToolCallSignature string
 	var consecutiveIdenticalToolCalls int
+	var payloadTrimCountThisTurn int
 	ngram := newReasoningNgramMonitor()
 	ngramRecoveryCount := 0
 	a.reasoningNgram = ngram
@@ -1368,6 +1388,25 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			msgs = append(msgs, Message{Role: "user", Content: maxIterSummaryReminder})
 			tools = nil
 		}
+
+		// Proactive payload-size compaction: streamCompletionOnce's own
+		// per-request trim only ever shrinks a throwaway copy of msgs for
+		// one outgoing HTTP call — it never shrinks msgs itself, so the same
+		// oversized condition recurs every iteration for the rest of a long
+		// turn (see docs/session-2026-10-01-primary-overload-analysis.md).
+		// messagesContentBytes is a cheap heuristic for *whether to check at
+		// all*; the exact marshaled-byte trim in streamCompletionOnce still
+		// runs on every request regardless, as the final safety net.
+		if a.maxPayloadBytes > 0 && messagesContentBytes(msgs) > a.maxPayloadBytes {
+			payloadTrimCountThisTurn++
+			if a.payloadCompactionThreshold > 0 && payloadTrimCountThisTurn >= a.payloadCompactionThreshold {
+				if compacted, ok := a.compactForPayloadSize(ctx, sess, msgs, userMsgIdx); ok {
+					msgs = compacted
+					payloadTrimCountThisTurn = 0
+				}
+			}
+		}
+
 		resp, fallbackRaw, toolCalls, emptyFallback, reasoningText, err := a.streamCompletion(ctx, msgs, tools, out, userMsgIdx)
 		if err != nil {
 			return msgs, err
@@ -2574,32 +2613,165 @@ func toolArgSummary(args map[string]any) string {
 //     assistant+tool round at a time, and protectedIdx itself is never in
 //     either dropped range.
 func dropOldestDroppableUnit(msgs []Message, protectedIdx int) ([]Message, bool) {
-	if protectedIdx < 0 || protectedIdx >= len(msgs) || msgs[protectedIdx].Role != "user" {
+	start, end, ok := oldestDroppableSpan(msgs, protectedIdx)
+	if !ok {
 		return msgs, false
 	}
-	var priorUserIdxs []int
+	return append(append([]Message{}, msgs[:start]...), msgs[end:]...), true
+}
+
+// priorUserIndices returns the indices of every "user"-role message strictly
+// before protectedIdx — i.e. every earlier turn's starting point. Shared by
+// oldestDroppableSpan (one-unit-at-a-time drop) and compactForPayloadSize
+// (collapse-everything-at-once compaction), which use the same prior-turn
+// detection but different end boundaries.
+func priorUserIndices(msgs []Message, protectedIdx int) []int {
+	var idxs []int
 	for i := 0; i < protectedIdx; i++ {
 		if msgs[i].Role == "user" {
-			priorUserIdxs = append(priorUserIdxs, i)
+			idxs = append(idxs, i)
 		}
 	}
+	return idxs
+}
+
+// oldestDroppableSpan computes the [start, end) span dropOldestDroppableUnit
+// would remove, without actually removing it — the span-only half of that
+// function's logic, factored out so compactForPayloadSize can summarize the
+// span's content instead of discarding it. See dropOldestDroppableUnit's own
+// doc comment above for the precedence rules (whole prior turns first, then
+// one assistant+tool round of the current turn at a time) this mirrors.
+func oldestDroppableSpan(msgs []Message, protectedIdx int) (start, end int, ok bool) {
+	if protectedIdx < 0 || protectedIdx >= len(msgs) || msgs[protectedIdx].Role != "user" {
+		return 0, 0, false
+	}
+	priorUserIdxs := priorUserIndices(msgs, protectedIdx)
 	if len(priorUserIdxs) > 0 {
-		start := priorUserIdxs[0]
-		end := protectedIdx
+		start = priorUserIdxs[0]
+		end = protectedIdx
 		if len(priorUserIdxs) > 1 {
 			end = priorUserIdxs[1]
 		}
-		return append(append([]Message{}, msgs[:start]...), msgs[end:]...), true
+		return start, end, true
 	}
 	p := protectedIdx + 1
 	if p >= len(msgs) {
-		return msgs, false
+		return 0, 0, false
 	}
-	end := p + 1
+	end = p + 1
 	for end < len(msgs) && msgs[end].Role == "tool" {
 		end++
 	}
-	return append(append([]Message{}, msgs[:p]...), msgs[end:]...), true
+	return p, end, true
+}
+
+// payloadCompactionMinSpan is the minimum number of messages a span must
+// contain before compactForPayloadSize bothers summarizing it — a tiny span
+// isn't worth an extra inference round-trip, and the existing per-request
+// hard-drop trim already handles it adequately on its own.
+const payloadCompactionMinSpan = 6
+
+// messagesContentBytes approximates a message slice's wire size by summing
+// Content lengths only (ignoring ToolCalls/ContentParts/role overhead) — the
+// same simplification cmd/milk/main.go's turn-boundary compaction already
+// uses for its char-count budget. It's a cheap proactive heuristic for
+// deciding *whether to bother compacting*, not the authoritative size check;
+// the exact marshaled-byte check in streamCompletionOnce remains the final
+// enforcement, run on every request regardless of this heuristic's result.
+func messagesContentBytes(msgs []Message) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(m.Content)
+	}
+	return n
+}
+
+// compactForPayloadSize summarizes the oldest droppable span of msgs (via
+// Summarize) into a single system message, in one shot, instead of letting
+// the per-request hard-drop trim in streamCompletionOnce keep discarding
+// oldest content piecemeal on every subsequent request for the rest of the
+// turn. Called from runToolLoop after payload-size trims have fired
+// a.payloadCompactionThreshold times in a row within the current
+// turn — see docs/escalation-and-context-enhancements-plan.md Track B Phase 2
+// for why a request-local trim alone can't fix the thrashing it was
+// originally meant to describe: that trim builds a smaller copy for one
+// outgoing request only and never shrinks runToolLoop's own, ever-growing
+// msgs, so the same oversized condition recurs every single iteration. This
+// method is the one place that persists an actual reduction back into the
+// turn's own history.
+//
+// Mirrors oldestDroppableSpan's precedence (whole prior turns first; once
+// none remain, the current turn's own tool-call tail) but, in the
+// no-prior-turns case, compacts the OLDER HALF of that tail in one shot
+// rather than a single assistant+tool round — one call to Summarize
+// that meaningfully shrinks the turn, instead of many tiny ones. The more
+// recent half is always left untouched: that's the context the model
+// actually needs moment-to-moment.
+//
+// Returns ok=false (msgs unchanged) when there's nothing worth summarizing,
+// when the only droppable span is below payloadCompactionMinSpan, or when
+// Summarize itself fails — a failed compaction attempt must never block the
+// turn; the per-request hard-drop trim remains the fallback safety net
+// either way.
+func (a *Agent) compactForPayloadSize(ctx context.Context, sess *session.Session, msgs []Message, userMsgIdx int) ([]Message, bool) {
+	if userMsgIdx < 0 || userMsgIdx >= len(msgs) || msgs[userMsgIdx].Role != "user" {
+		return msgs, false
+	}
+	var start, end int
+	if priorUserIdxs := priorUserIndices(msgs, userMsgIdx); len(priorUserIdxs) > 0 {
+		// Collapse every prior turn in one shot — unlike
+		// oldestDroppableSpan's one-unit-at-a-time precedence (meant for a
+		// loop that calls it repeatedly), a single compaction pass should
+		// make a meaningful dent, not fire once per prior turn.
+		start, end = priorUserIdxs[0], userMsgIdx
+	} else {
+		// No prior turns left — the bloat is this turn's own tool-call
+		// tail. Compact its OLDER HALF, protecting the most recent
+		// iterations: that's the context the model actually needs
+		// moment-to-moment.
+		start = userMsgIdx + 1
+		if start >= len(msgs) {
+			return msgs, false
+		}
+		end = start + (len(msgs)-start)/2
+		for end < len(msgs) && msgs[end].Role == "tool" {
+			end++
+		}
+	}
+	if end-start < payloadCompactionMinSpan {
+		return msgs, false
+	}
+
+	var b strings.Builder
+	for _, m := range msgs[start:end] {
+		if m.Content == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "[%s]: %s\n", m.Role, m.Content)
+	}
+	if b.Len() == 0 {
+		return msgs, false
+	}
+
+	summary, usage, err := a.Summarize(ctx, b.String())
+	if err != nil || summary == "" {
+		return msgs, false
+	}
+	sess.AddTokens(a.model, a.logRole()+":compaction", usage.Prompt, usage.Completion)
+	role := agentRoleForMetrics(a.escalationName)
+	a.logWarn("payload compaction: summarized span instead of hard-dropping",
+		append([]any{"model", a.model, "agent", role, "messages_summarized", end - start}, sessionLogAttrs(sess.ID)...)...)
+	obs.Inc(ctx, inferenceScope, "milk.inference.payload_compacted",
+		attribute.String("model", a.model),
+		attribute.String("agent", role),
+	)
+
+	summaryMsg := Message{
+		Role:    "system",
+		Content: "[Summary of earlier conversation this turn, compacted to save context]\n" + summary,
+	}
+	compacted := append(append([]Message{}, msgs[:start]...), summaryMsg)
+	return append(compacted, msgs[end:]...), true
 }
 
 // imageRetryAttempts caps how many times streamCompletion retries a request

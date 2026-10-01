@@ -391,6 +391,15 @@ var DefaultOpenQuestionPrefixes = []string{
 // trimmed further before sending.
 const DefaultMaxPayloadBytes = 900 * 1024
 
+// DefaultPayloadTrimCompactionThreshold is how many times in a row a single
+// turn's per-request payload-size trim (DefaultMaxPayloadBytes) must fire
+// before milk reaches for a one-shot summarizing compaction of the turn's
+// own accumulated history, instead of continuing to only hard-drop oldest
+// content on every subsequent request. See internal/agent/local.Agent's
+// compactForPayloadSize and docs/escalation-and-context-enhancements-plan.md
+// Track B Phase 2.
+const DefaultPayloadTrimCompactionThreshold = 3
+
 // OtelConfig controls OpenTelemetry signal collection and file management.
 type OtelConfig struct {
 	Enabled             bool   `json:"enabled"`
@@ -657,6 +666,12 @@ type AgentLimits struct {
 	// from reverse proxies (e.g. openresty/nginx).
 	// Default: 900KB (conservative margin below typical 1MB proxy limits).
 	MaxPayloadBytes *int `json:"max_payload_bytes,omitempty"`
+
+	// PayloadTrimCompactionThreshold overrides how many consecutive
+	// payload-size trims within a single turn trigger a one-shot
+	// summarizing compaction instead of continuing to hard-drop oldest
+	// content on every request. Default: DefaultPayloadTrimCompactionThreshold (3).
+	PayloadTrimCompactionThreshold *int `json:"payload_trim_compaction_threshold,omitempty"`
 
 	// IncludedTools is a whitelist of tool names exposed to this agent. When
 	// non-empty, only the listed names are included in the outgoing request
@@ -1431,6 +1446,19 @@ func (c Config) AgentMaxPayloadBytes(a AgentConfig) int {
 		return v
 	}
 	return DefaultMaxPayloadBytes
+}
+
+// AgentPayloadTrimCompactionThreshold returns how many consecutive
+// payload-size trims within a single turn trigger a one-shot summarizing
+// compaction for the given agent, falling back to
+// DefaultPayloadTrimCompactionThreshold. A value <= 0 disables the
+// compaction fallback (the per-request hard-drop trim keeps running
+// unmodified, same as before this feature existed).
+func (c Config) AgentPayloadTrimCompactionThreshold(a AgentConfig) int {
+	if a.Limits != nil && a.Limits.PayloadTrimCompactionThreshold != nil {
+		return *a.Limits.PayloadTrimCompactionThreshold
+	}
+	return DefaultPayloadTrimCompactionThreshold
 }
 
 // NeedExpiryHours returns the configured need expiry threshold in hours.

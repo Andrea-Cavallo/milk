@@ -345,6 +345,32 @@ func TestAgentMemoryResultMaxByteCount_Negative_Unlimited(t *testing.T) {
 	}
 }
 
+func TestAgentPayloadTrimCompactionThreshold_NilLimits(t *testing.T) {
+	cfg := Config{}
+	ac := AgentConfig{}
+	if got := cfg.AgentPayloadTrimCompactionThreshold(ac); got != DefaultPayloadTrimCompactionThreshold {
+		t.Errorf("expected default %d, got %d", DefaultPayloadTrimCompactionThreshold, got)
+	}
+}
+
+func TestAgentPayloadTrimCompactionThreshold_Override(t *testing.T) {
+	cfg := Config{}
+	ac := AgentConfig{Limits: &AgentLimits{PayloadTrimCompactionThreshold: intPtr(5)}}
+	if got := cfg.AgentPayloadTrimCompactionThreshold(ac); got != 5 {
+		t.Errorf("expected 5, got %d", got)
+	}
+}
+
+func TestAgentPayloadTrimCompactionThreshold_ZeroOrNegative_Disables(t *testing.T) {
+	cfg := Config{}
+	for _, v := range []int{0, -1} {
+		ac := AgentConfig{Limits: &AgentLimits{PayloadTrimCompactionThreshold: intPtr(v)}}
+		if got := cfg.AgentPayloadTrimCompactionThreshold(ac); got != v {
+			t.Errorf("expected explicit %d to pass through unchanged, got %d", v, got)
+		}
+	}
+}
+
 func TestAgentPerceptInjectMaxCount_NilLimits(t *testing.T) {
 	cfg := Config{PerceptInjectMax: 10}
 	ac := AgentConfig{}
