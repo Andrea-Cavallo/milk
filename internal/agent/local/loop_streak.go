@@ -1,12 +1,15 @@
 package local
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"regexp"
 	"sort"
 	"strings"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/scoutme/milk/internal/obs"
 )
@@ -187,10 +190,17 @@ type streakState struct {
 // crop+nudge+terminate independently) removes the risk of detectors drifting
 // out of sync — see the ngramRecoveryCount history in the caller for a case
 // where that already happened.
-func (a *Agent) loopRecoveryAction(msgs []Message, userMsgIdx int, recoveryCount, maxRecovery int, mildNudge, strongNudge, terminateReason, detectorName, reasoningText string) (newMsgs []Message, terminated bool) {
+func (a *Agent) loopRecoveryAction(ctx context.Context, msgs []Message, userMsgIdx int, recoveryCount, maxRecovery int, mildNudge, strongNudge, terminateReason, detectorName, reasoningText, sessionID string) (newMsgs []Message, terminated bool) {
+	role := agentRoleForMetrics(a.escalationName)
 	if recoveryCount > maxRecovery {
-		obs.Warn(detectorName+": max recovery exceeded, terminating turn",
-			"model", a.model, "agent", agentRoleForMetrics(a.escalationName))
+		a.logWarn(detectorName+": max recovery exceeded, terminating turn",
+			append([]any{"model", a.model, "agent", role}, sessionLogAttrs(sessionID)...)...)
+		obs.Inc(ctx, inferenceScope, "milk.loop.recovery",
+			attribute.String("model", a.model),
+			attribute.String("agent", role),
+			attribute.String("detector", detectorName),
+			attribute.String("outcome", "terminated"),
+		)
 		loopMsg := "[turn terminated: " + terminateReason + "]"
 		resp := summarizeToolTrail(msgs, loopMsg)
 		if a.onResponseSegment != nil && resp != "" {
@@ -201,18 +211,22 @@ func (a *Agent) loopRecoveryAction(msgs []Message, userMsgIdx int, recoveryCount
 	}
 	cropped := cropLoopingMessages(msgs, userMsgIdx)
 	if len(cropped) < len(msgs) {
-		obs.Warn(detectorName+": cropped looping messages",
-			"model", a.model, "agent", agentRoleForMetrics(a.escalationName),
-			"before", len(msgs), "after", len(cropped))
+		a.logWarn(detectorName+": cropped looping messages",
+			append([]any{"model", a.model, "agent", role, "before", len(msgs), "after", len(cropped)}, sessionLogAttrs(sessionID)...)...)
 		msgs = cropped
 	}
 	nudge := mildNudge
 	if recoveryCount >= 2 {
 		nudge = strongNudge
 	}
-	obs.Warn(detectorName+" detected, injecting recovery nudge",
-		"model", a.model, "agent", agentRoleForMetrics(a.escalationName),
-		"recovery", recoveryCount)
+	a.logWarn(detectorName+" detected, injecting recovery nudge",
+		append([]any{"model", a.model, "agent", role, "recovery", recoveryCount}, sessionLogAttrs(sessionID)...)...)
+	obs.Inc(ctx, inferenceScope, "milk.loop.recovery",
+		attribute.String("model", a.model),
+		attribute.String("agent", role),
+		attribute.String("detector", detectorName),
+		attribute.String("outcome", "recovered"),
+	)
 	msgs = append(msgs, Message{Role: "user", Content: nudge})
 	return msgs, false
 }

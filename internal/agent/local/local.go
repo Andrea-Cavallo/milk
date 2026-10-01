@@ -292,6 +292,20 @@ func (a *Agent) jobAttrs() []any {
 	return []any{"job", a.jobID}
 }
 
+// sessionLogAttrs returns obs key/value attributes tagging the originating
+// session ID for a plain-text log line, or nil when sessionID is empty (e.g.
+// a background job's synthetic session, which has no real session to
+// attribute to — jobAttrs covers that case instead). Deliberately not used
+// as an OTel *metric* attribute: a session ID is unbounded cardinality
+// (one new value per session, forever), which would make a counter's time
+// series grow without bound — fine for a text log line, not for a metric.
+func sessionLogAttrs(sessionID string) []any {
+	if sessionID == "" {
+		return nil
+	}
+	return []any{"session_id", sessionID}
+}
+
 // logWarn, logDebug and logInfo mirror obs.Warn/Debug/Info but splice in
 // this agent's job-tagging attrs (see jobAttrs). Go forbids mixing literal
 // variadic arguments with a trailing slice spread, so log calls that carry
@@ -1374,10 +1388,10 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			ngram.Reset()
 			ngramRecoveryCount++
 			var terminated bool
-			msgs, terminated = a.loopRecoveryAction(msgs, userMsgIdx, ngramRecoveryCount, ngramMaxRecovery,
+			msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, ngramRecoveryCount, ngramMaxRecovery,
 				recoveryNgramRemind, recoveryNgramReplan,
 				"the model was stuck in a reasoning repetition loop and could not self-recover after multiple attempts",
-				"reasoning n-gram", reasoningText)
+				"reasoning n-gram", reasoningText, sess.ID)
 			if terminated {
 				return msgs, nil
 			}
@@ -1426,13 +1440,26 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		lastToolCallSignature = sig
 		if consecutiveIdenticalToolCalls >= doomLoopThreshold {
 			failClosed := a.workflowRole || a.jobID != "" || a.permAsk == nil
-			var finalResp string
+			var finalResp, outcome string
 			switch {
 			case failClosed:
 				finalResp = "[turn terminated: the model repeated the exact same tool call 3 times in a row and this context has no way to ask for confirmation, so the turn was stopped instead of risking an unattended runaway loop]"
+				outcome = "terminated_fail_closed"
 			case !a.permAsk("doom_loop", "the model has repeated the exact same tool call 3 times in a row — allow it to continue?"):
 				finalResp = "[turn terminated: the model repeated the exact same tool call 3 times in a row and the user declined to let it continue]"
+				outcome = "terminated_denied"
+			default:
+				outcome = "approved"
 			}
+			doomLoopRole := agentRoleForMetrics(a.escalationName)
+			a.logWarn("doom loop gate fired",
+				append([]any{"model", a.model, "agent", doomLoopRole, "outcome", outcome}, sessionLogAttrs(sess.ID)...)...)
+			obs.Inc(ctx, inferenceScope, "milk.loop.recovery",
+				attribute.String("model", a.model),
+				attribute.String("agent", doomLoopRole),
+				attribute.String("detector", "doom_loop"),
+				attribute.String("outcome", outcome),
+			)
 			if finalResp != "" {
 				if a.onResponseSegment != nil {
 					a.onResponseSegment(finalResp)
@@ -1477,10 +1504,10 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		if allSeen {
 			duplicateRecoveryCount++
 			var terminated bool
-			msgs, terminated = a.loopRecoveryAction(msgs, userMsgIdx, duplicateRecoveryCount, duplicateToolMaxRecovery,
+			msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, duplicateRecoveryCount, duplicateToolMaxRecovery,
 				recoveryDuplicateToolMild, recoveryDuplicateToolStrong,
 				"the model kept repeating the same tool call and could not self-recover after multiple attempts",
-				"duplicate tool call", reasoningText)
+				"duplicate tool call", reasoningText, sess.ID)
 			if terminated {
 				return msgs, nil
 			}
@@ -1523,10 +1550,10 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			if key := stepKeyFromIteration(reasoningText, toolCalls); streak.tracker.recordStep(key) {
 				streak.recoveryCount++
 				var terminated bool
-				msgs, terminated = a.loopRecoveryAction(msgs, userMsgIdx, streak.recoveryCount, 2,
+				msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, streak.recoveryCount, 2,
 					recoveryNudgeMild, recoveryNudgeStrong,
 					"the model was stuck repeating the same reasoning/tool-call pattern and could not self-recover after multiple attempts",
-					"loop streak", reasoningText)
+					"loop streak", reasoningText, sess.ID)
 				if terminated {
 					return msgs, nil
 				}
@@ -1557,10 +1584,10 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			if textLoop.recordStep(resp) {
 				textLoopRecoveryCount++
 				var terminated bool
-				msgs, terminated = a.loopRecoveryAction(msgs, userMsgIdx, textLoopRecoveryCount, textLoopMaxRecovery,
+				msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, textLoopRecoveryCount, textLoopMaxRecovery,
 					recoveryNudgeMild, recoveryNudgeStrong,
 					"the model kept repeating identical output text and could not self-recover after multiple attempts",
-					"text loop", reasoningText)
+					"text loop", reasoningText, sess.ID)
 				if terminated {
 					return msgs, nil
 				}
@@ -2701,6 +2728,10 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 		}
 		a.logWarn("payload after trimming",
 			"size_bytes", len(body), "messages_after", len(msgs))
+		obs.Inc(ctx, inferenceScope, "milk.inference.payload_trimmed",
+			attribute.String("model", a.model),
+			attribute.String("agent", agentRoleForMetrics(a.escalationName)),
+		)
 	}
 	if a.onRequestSize != nil {
 		a.onRequestSize(int64(len(body)))
