@@ -197,8 +197,25 @@ type streakState struct {
 // crop+nudge+terminate independently) removes the risk of detectors drifting
 // out of sync — see the ngramRecoveryCount history in the caller for a case
 // where that already happened.
-func (a *Agent) loopRecoveryAction(ctx context.Context, msgs []Message, userMsgIdx int, recoveryCount, maxRecovery int, mildNudge, strongNudge, terminateReason, detectorName, reasoningText, sessionID string) (newMsgs []Message, terminated bool) {
+func (a *Agent) loopRecoveryAction(ctx context.Context, msgs []Message, userMsgIdx int, recoveryCount, maxRecovery int, mildNudge, strongNudge, terminateReason, detectorName, reasoningText, sessionID string, totalRecoveryCount int) (newMsgs []Message, terminated, escalate bool) {
 	role := agentRoleForMetrics(a.escalationName)
+	// Escalating is strictly better than either continuing to nudge an
+	// already-struggling model or giving up on the turn entirely, so this
+	// check runs before (and takes priority over) the max-recovery-exceeded
+	// terminate check below — the two conditions can coincide (e.g. one
+	// detector's own recoveryCount is still low, but the turn's aggregate
+	// across all detector types already crossed the escalate threshold).
+	if a.escalateAfterRecoveries > 0 && a.canEscalate() && totalRecoveryCount >= a.escalateAfterRecoveries {
+		a.logWarn(detectorName+": recovery threshold reached, escalating instead of nudging",
+			append([]any{"model", a.model, "agent", role, "total_recoveries", totalRecoveryCount}, sessionLogAttrs(sessionID)...)...)
+		obs.Inc(ctx, inferenceScope, "milk.loop.recovery",
+			attribute.String("model", a.model),
+			attribute.String("agent", role),
+			attribute.String("detector", detectorName),
+			attribute.String("outcome", "escalated"),
+		)
+		return msgs, false, true
+	}
 	if recoveryCount > maxRecovery {
 		a.logWarn(detectorName+": max recovery exceeded, terminating turn",
 			append([]any{"model", a.model, "agent", role}, sessionLogAttrs(sessionID)...)...)
@@ -214,7 +231,7 @@ func (a *Agent) loopRecoveryAction(ctx context.Context, msgs []Message, userMsgI
 			a.onResponseSegment(resp)
 		}
 		msgs = append(msgs, Message{Role: "assistant", Content: resp, ReasoningContent: reasoningText})
-		return msgs, true
+		return msgs, true, false
 	}
 	cropped := cropLoopingMessages(msgs, userMsgIdx)
 	if len(cropped) < len(msgs) {
@@ -235,7 +252,7 @@ func (a *Agent) loopRecoveryAction(ctx context.Context, msgs []Message, userMsgI
 		attribute.String("outcome", "recovered"),
 	)
 	msgs = append(msgs, Message{Role: "user", Content: nudge})
-	return msgs, false
+	return msgs, false, false
 }
 
 // cropLoopingMessages removes consecutive assistant+tool-result message

@@ -258,6 +258,22 @@ func agentRoleForMetrics(escalationName string) string {
 	return "primary"
 }
 
+// canEscalate reports whether this agent instance has a real escalation path
+// to hand off to: a background job's run closure just records *local.EscalationSignal
+// as a plain job failure (ADR-0043 deliberately gives background jobs no
+// escalation path at all — "escalate" is excluded from their tool schema
+// for the same reason); a stateless tool-agent call (RunToolCall) has no
+// session/runner behind it to escalate into either (see its own defense-in-depth
+// comment in cmd/milk/runner.go); and a workflow step's EscalationSignal
+// would reach the interpreter without any handling for it. Forced escalation
+// (loopRecoveryAction, the doom-loop gate) must check this before ever
+// returning an EscalationSignal, or it would silently degrade to a confusing
+// result in all three of those contexts instead of the plain
+// crop/nudge/terminate ladder those contexts already handle correctly.
+func (a *Agent) canEscalate() bool {
+	return !a.workflowRole && a.jobID == "" && !a.isToolAgent
+}
+
 // logRole returns the OTel "agent" label for this instance: the plain
 // primary/escalation role tag, suffixed ":subagent" on a background-job
 // clone — so a job's inference traffic is attributed to the job, not to the
@@ -449,6 +465,15 @@ type Agent struct {
 	// construction (New/NewFromConfig), and <= 0 disables the compaction
 	// fallback (the per-request hard-drop trim keeps running unmodified).
 	payloadCompactionThreshold int
+	// escalateAfterRecoveries is how many loop-recovery events, summed
+	// across all detector types within a single turn, force an escalation
+	// instead of continuing to nudge the same model. Mirrors
+	// payloadCompactionThreshold's convention: default baked in at
+	// construction, <= 0 disables. Never takes effect for a workflow-role
+	// turn, a background job, or a stateless tool-agent call — none of
+	// those have a real escalation path to hand off to (see
+	// loopRecoveryAction's canEscalate).
+	escalateAfterRecoveries int
 	// systemPromptTier selects the verbosity level of the system prompt.
 	// Valid values: "minimal", "standard" (default), "full". Empty = "standard".
 	systemPromptTier string
@@ -657,6 +682,14 @@ func (a *Agent) WithPayloadCompactionThreshold(n int) *Agent {
 	return &copy
 }
 
+// WithEscalateAfterRecoveries sets how many loop-recovery events within a
+// single turn force an escalation. See escalateAfterRecoveries' field doc.
+func (a *Agent) WithEscalateAfterRecoveries(n int) *Agent {
+	copy := *a
+	copy.escalateAfterRecoveries = n
+	return &copy
+}
+
 // SystemOverheadChars returns an estimate of the character overhead that Run
 // will add as system messages on top of the history slice: the role system
 // prompt and the memory instruction block (when re-injection is due). Callers
@@ -742,6 +775,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 			supportsVision:             ac.Vision,
 			maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 			payloadCompactionThreshold: config.DefaultPayloadTrimCompactionThreshold,
+			escalateAfterRecoveries:    config.DefaultEscalateAfterRecoveries,
 		}
 	}
 
@@ -767,6 +801,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 		supportsVision:             ac.Vision,
 		maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 		payloadCompactionThreshold: config.DefaultPayloadTrimCompactionThreshold,
+		escalateAfterRecoveries:    config.DefaultEscalateAfterRecoveries,
 	}
 }
 
@@ -1370,6 +1405,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	var lastToolCallSignature string
 	var consecutiveIdenticalToolCalls int
 	var payloadTrimCountThisTurn int
+	var totalRecoveryCount int // aggregate across all detector types, for forced escalation (see loopRecoveryAction)
 	ngram := newReasoningNgramMonitor()
 	ngramRecoveryCount := 0
 	a.reasoningNgram = ngram
@@ -1426,11 +1462,15 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			a.reasoningNgramTriggered = false
 			ngram.Reset()
 			ngramRecoveryCount++
-			var terminated bool
-			msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, ngramRecoveryCount, ngramMaxRecovery,
+			totalRecoveryCount++
+			var terminated, escalate bool
+			msgs, terminated, escalate = a.loopRecoveryAction(ctx, msgs, userMsgIdx, ngramRecoveryCount, ngramMaxRecovery,
 				recoveryNgramRemind, recoveryNgramReplan,
 				"the model was stuck in a reasoning repetition loop and could not self-recover after multiple attempts",
-				"reasoning n-gram", reasoningText, sess.ID)
+				"reasoning n-gram", reasoningText, sess.ID, totalRecoveryCount)
+			if escalate {
+				return msgs, &EscalationSignal{Reason: fmt.Sprintf("primary model required %d loop recoveries in a single turn (last: reasoning n-gram)", totalRecoveryCount)}
+			}
 			if terminated {
 				return msgs, nil
 			}
@@ -1480,13 +1520,27 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		if consecutiveIdenticalToolCalls >= doomLoopThreshold {
 			failClosed := a.workflowRole || a.jobID != "" || a.permAsk == nil
 			var finalResp, outcome string
+			escalateDenied := false
 			switch {
 			case failClosed:
+				// No real escalation path exists for any fail-closed
+				// context (background job, workflow step, or no permAsk at
+				// all) — see canEscalate's doc comment — so this stays a
+				// plain termination regardless of canEscalate().
 				finalResp = "[turn terminated: the model repeated the exact same tool call 3 times in a row and this context has no way to ask for confirmation, so the turn was stopped instead of risking an unattended runaway loop]"
 				outcome = "terminated_fail_closed"
 			case !a.permAsk("doom_loop", "the model has repeated the exact same tool call 3 times in a row — allow it to continue?"):
-				finalResp = "[turn terminated: the model repeated the exact same tool call 3 times in a row and the user declined to let it continue]"
-				outcome = "terminated_denied"
+				// A denial is itself a strong signal that the primary model
+				// isn't handling this task well — escalate to a more
+				// capable agent instead of just giving up, when a real
+				// escalation path exists for this turn.
+				if a.canEscalate() {
+					escalateDenied = true
+					outcome = "escalated"
+				} else {
+					finalResp = "[turn terminated: the model repeated the exact same tool call 3 times in a row and the user declined to let it continue]"
+					outcome = "terminated_denied"
+				}
 			default:
 				outcome = "approved"
 			}
@@ -1499,6 +1553,9 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 				attribute.String("detector", "doom_loop"),
 				attribute.String("outcome", outcome),
 			)
+			if escalateDenied {
+				return msgs, &EscalationSignal{Reason: "the model repeated the exact same tool call 3 times in a row and the user declined to let it continue"}
+			}
 			if finalResp != "" {
 				if a.onResponseSegment != nil {
 					a.onResponseSegment(finalResp)
@@ -1542,11 +1599,15 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		}
 		if allSeen {
 			duplicateRecoveryCount++
-			var terminated bool
-			msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, duplicateRecoveryCount, duplicateToolMaxRecovery,
+			totalRecoveryCount++
+			var terminated, escalate bool
+			msgs, terminated, escalate = a.loopRecoveryAction(ctx, msgs, userMsgIdx, duplicateRecoveryCount, duplicateToolMaxRecovery,
 				recoveryDuplicateToolMild, recoveryDuplicateToolStrong,
 				"the model kept repeating the same tool call and could not self-recover after multiple attempts",
-				"duplicate tool call", reasoningText, sess.ID)
+				"duplicate tool call", reasoningText, sess.ID, totalRecoveryCount)
+			if escalate {
+				return msgs, &EscalationSignal{Reason: fmt.Sprintf("primary model required %d loop recoveries in a single turn (last: duplicate tool call)", totalRecoveryCount)}
+			}
 			if terminated {
 				return msgs, nil
 			}
@@ -1588,11 +1649,15 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		if !a.workflowRole {
 			if key := stepKeyFromIteration(reasoningText, toolCalls); streak.tracker.recordStep(key) {
 				streak.recoveryCount++
-				var terminated bool
-				msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, streak.recoveryCount, 2,
+				totalRecoveryCount++
+				var terminated, escalate bool
+				msgs, terminated, escalate = a.loopRecoveryAction(ctx, msgs, userMsgIdx, streak.recoveryCount, 2,
 					recoveryNudgeMild, recoveryNudgeStrong,
 					"the model was stuck repeating the same reasoning/tool-call pattern and could not self-recover after multiple attempts",
-					"loop streak", reasoningText, sess.ID)
+					"loop streak", reasoningText, sess.ID, totalRecoveryCount)
+				if escalate {
+					return msgs, &EscalationSignal{Reason: fmt.Sprintf("primary model required %d loop recoveries in a single turn (last: loop streak)", totalRecoveryCount)}
+				}
 				if terminated {
 					return msgs, nil
 				}
@@ -1622,11 +1687,15 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		if !a.workflowRole && resp != "" {
 			if textLoop.recordStep(resp) {
 				textLoopRecoveryCount++
-				var terminated bool
-				msgs, terminated = a.loopRecoveryAction(ctx, msgs, userMsgIdx, textLoopRecoveryCount, textLoopMaxRecovery,
+				totalRecoveryCount++
+				var terminated, escalate bool
+				msgs, terminated, escalate = a.loopRecoveryAction(ctx, msgs, userMsgIdx, textLoopRecoveryCount, textLoopMaxRecovery,
 					recoveryNudgeMild, recoveryNudgeStrong,
 					"the model kept repeating identical output text and could not self-recover after multiple attempts",
-					"text loop", reasoningText, sess.ID)
+					"text loop", reasoningText, sess.ID, totalRecoveryCount)
+				if escalate {
+					return msgs, &EscalationSignal{Reason: fmt.Sprintf("primary model required %d loop recoveries in a single turn (last: text loop)", totalRecoveryCount)}
+				}
 				if terminated {
 					return msgs, nil
 				}

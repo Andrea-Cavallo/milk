@@ -195,7 +195,8 @@ func (r *localRunner) Execute(
 		MaxToolIterations:    cfg.AgentMaxToolIterations(ac),
 	}).WithToolTimeout(cfg.AgentToolTimeout(ac)).
 		WithMaxPayloadBytes(cfg.AgentMaxPayloadBytes(ac)).
-		WithPayloadCompactionThreshold(cfg.AgentPayloadTrimCompactionThreshold(ac))
+		WithPayloadCompactionThreshold(cfg.AgentPayloadTrimCompactionThreshold(ac)).
+		WithEscalateAfterRecoveries(cfg.AgentEscalateAfterRecoveries(ac))
 
 	// Apply custom prompt (prompt / prompt_file in agent config) when set.
 	if ac.Prompt != "" || ac.PromptFile != "" {
