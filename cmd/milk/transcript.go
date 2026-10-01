@@ -399,7 +399,9 @@ func quitPendingClearCmd() tea.Cmd {
 // 500ms.  Scheduled on mouse press, rescheduled on every motion event, and
 // cancelled on release.  If the release is dropped by the terminal (pointer
 // outside viewport bounds), the timeout resets the mouse-tracking mode to
-// basic (1000) so wheel-scroll keeps working.
+// basic (1000) so wheel-scroll keeps working — but only when the pointer
+// actually left the drag area (dragSawOutside); a mid-drag pause keeps mode
+// 1002 and reschedules the timer instead.
 //
 // gen is the scheduling-generation counter; the returned message carries it so
 // the handler can discard stale timeouts from earlier scheduling calls.

@@ -656,6 +656,7 @@ type model struct {
 	selText          string // plain text of the selected range (populated after release)
 	dragResetPending bool   // true while a drag-timeout cmd is outstanding
 	dragResetGen     uint64 // generation counter; stale dragResetMsgs are ignored
+	dragSawOutside   bool   // true if the last drag motion/release left the drag's own area (dropped-release evidence, see dragResetMsg)
 
 	// click-to-select state for the memory/workflow side panels (panel-local
 	// coordinates; -1 = none). Kept separate from the transcript selection above
@@ -1244,6 +1245,27 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	ev := tea.MouseEvent(msg)
 	region, regionX := m.regionAt(ev.X)
+	// Drag-outside evidence (see dragResetMsg): a motion/release that lands
+	// outside the active drag's own area means the pointer drifted out of the
+	// viewport/panel — the situation where terminals commonly drop the release
+	// event. An in-area event clears it again. The drag-timeout uses this to
+	// tell a genuinely dropped release (reset mouse mode back to 1000) apart
+	// from a mid-drag pause (keep mode 1002 so motion keeps updating the
+	// highlight while the button is still held).
+	switch ev.Action {
+	case tea.MouseActionPress:
+		m.dragSawOutside = false // a press starts a fresh interaction
+	case tea.MouseActionMotion, tea.MouseActionRelease:
+		switch {
+		case m.selAnchorLine >= 0 && m.selDragging:
+			m.dragSawOutside = region != regionNone || ev.Y < 2 || ev.Y >= m.height-2
+		case m.panelSelAnchorLine >= 0 && m.panelSelDragging:
+			// handlePanelMouse applies no row bounds check of its own — only
+			// region routing decides whether an event reaches it — so for a
+			// panel drag "outside" means a different region, not extra rows.
+			m.dragSawOutside = region != m.panelSelRegion
+		}
+	}
 	var dragCmd tea.Cmd // set by press/motion; returned at the end
 	switch ev.Button {
 	case tea.MouseButtonWheelUp:
@@ -1333,6 +1355,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// A drag whose release was dropped can leave mouse mode stuck at 1002;
 			// any subsequent click reliably arrives, so reset it defensively here.
 			m.dragResetPending = false
+			m.dragSawOutside = false
 			setMouseDragMode(false)
 			// Finalize any in-progress drag selection that lost its release event
 			// (release can be dropped when pointer drifts outside viewport bounds).
@@ -1983,7 +2006,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.dragResetPending {
 			return m, nil // already cancelled by a release event
 		}
+		if msg.gen != m.dragResetGen {
+			return m, nil // stale timeout from an earlier scheduling generation
+		}
+		// An interaction is live (press seen, no release yet) and the pointer
+		// never left the drag's own area: the user paused mid-drag, the button
+		// is still held. Keep mode 1002 so motion keeps updating the highlight
+		// when the pointer resumes, and reschedule the timeout — finalizing
+		// here would freeze the selection until release (#168).
+		if (m.selAnchorLine >= 0 || m.panelSelAnchorLine >= 0) && !m.dragSawOutside {
+			m.dragResetGen++
+			return m, dragResetCmd(m.dragResetGen)
+		}
 		m.dragResetPending = false
+		m.dragSawOutside = false
 		// The release was dropped — finalize any in-progress selection so the
 		// model state stays consistent, then reset the terminal to basic
 		// mouse tracking (mode 1000) where wheel-scroll works reliably.
