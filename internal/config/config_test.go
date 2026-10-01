@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/scoutme/milk/internal/loop"
 )
 
 func TestActiveAgent_ByName(t *testing.T) {
@@ -1148,7 +1150,7 @@ func TestLoad_RecoversFromBackupEndToEnd(t *testing.T) {
 // --- DeepMerge tests ---
 
 func TestDeepMerge_ScalarsOverride(t *testing.T) {
-	global := Config{Agent: "global-agent", DefaultRoute: "local", ContextBudgetChars: 5000}
+	global := Config{Agent: "global-agent", Colorization: "balanced", ContextBudgetChars: 5000}
 	local := Config{Agent: "local-agent", ContextBudgetChars: 8000}
 	merged := DeepMerge(global, local)
 	if merged.Agent != "local-agent" {
@@ -1158,8 +1160,8 @@ func TestDeepMerge_ScalarsOverride(t *testing.T) {
 		t.Errorf("expected 8000, got %d", merged.ContextBudgetChars)
 	}
 	// Unset local field should keep global.
-	if merged.DefaultRoute != "local" {
-		t.Errorf("expected global DefaultRoute preserved, got %q", merged.DefaultRoute)
+	if merged.Colorization != "balanced" {
+		t.Errorf("expected global Colorization preserved, got %q", merged.Colorization)
 	}
 }
 
@@ -1389,5 +1391,63 @@ func TestSaveScope_Local(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".milk", "config.json")); err != nil {
 		t.Fatal("local config file not created")
+	}
+}
+
+// TestLoopDetectionCfg_ConvertsEveryField guards against the class of bug
+// where a documented, implemented loop-detection knob (ReasoningChunkFloodThreshold
+// — real signal in internal/loop, shown in CLAUDE.md's example config) had no
+// corresponding field on config.LoopDetectionConfig, so any value a user set
+// for it in config.json was silently dropped by json.Unmarshal and the
+// detector always fell back to its hardcoded default. One assertion per
+// field so a future field added to loop.Config without a matching line here
+// (and in LoopDetectionCfg itself) fails loudly instead of silently.
+func TestLoopDetectionCfg_ConvertsEveryField(t *testing.T) {
+	enabled := true
+	similarity := 0.42
+	velocityThreshold := int64(123)
+	silentBurn := int64(456)
+	autoInterrupt := true
+
+	cfg := Config{
+		LoopDetection: &LoopDetectionConfig{
+			Enabled:                                 &enabled,
+			MaxConsecutiveSimilarResponses:          11,
+			ResponseSimilarityThreshold:             &similarity,
+			TokenVelocityWindowSeconds:              22,
+			TokenVelocityThreshold:                  &velocityThreshold,
+			MaxSilentBurnTokens:                     &silentBurn,
+			MaxConsecutiveTurnsWithoutUser:          33,
+			ToolEchoThreshold:                       44,
+			ChunkRepetitionThreshold:                55,
+			ChunkWindowSize:                         66,
+			ReasoningChunkFloodThreshold:            77,
+			ReasoningChunkRepetitionThreshold:       88,
+			ChunkRepetitionMinScatteredLength:       99,
+			ReasoningMaxConsecutiveSimilarResponses: 111,
+			AutoInterrupt:                           &autoInterrupt,
+		},
+	}
+
+	got := cfg.LoopDetectionCfg()
+	want := loop.Config{
+		Enabled:                                 true,
+		MaxConsecutiveSimilarResponses:          11,
+		ResponseSimilarityThreshold:             0.42,
+		TokenVelocitySeconds:                    22,
+		TokenVelocityThreshold:                  123,
+		MaxSilentBurnTokens:                     456,
+		MaxConsecutiveTurnsWithoutUser:          33,
+		ToolEchoThreshold:                       44,
+		ChunkRepetitionThreshold:                55,
+		ChunkWindowSize:                         66,
+		ReasoningChunkFloodThreshold:            77,
+		ReasoningChunkRepetitionThreshold:       88,
+		ChunkRepetitionMinScatteredLength:       99,
+		ReasoningMaxConsecutiveSimilarResponses: 111,
+		AutoInterrupt:                           true,
+	}
+	if got != want {
+		t.Errorf("LoopDetectionCfg() = %+v, want %+v", got, want)
 	}
 }

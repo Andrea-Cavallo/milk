@@ -75,9 +75,6 @@ func DeepMerge(dst, src Config) Config {
 	if src.EscalationAgent != "" {
 		dst.EscalationAgent = src.EscalationAgent
 	}
-	if src.DefaultRoute != "" {
-		dst.DefaultRoute = src.DefaultRoute
-	}
 	if src.Colorization != "" {
 		dst.Colorization = src.Colorization
 	}
@@ -849,9 +846,8 @@ type Config struct {
 	// internal/agent/local's defaultJobTimeout doc comment).
 	BackgroundAgentTimeoutMinutes int `json:"background_agent_timeout_minutes,omitempty"`
 
-	DefaultRoute string     `json:"default_route,omitempty"`
-	Rules        Rules      `json:"rules"`
-	Otel         OtelConfig `json:"otel"`
+	Rules Rules      `json:"rules"`
+	Otel  OtelConfig `json:"otel"`
 
 	// Colorization controls transcript syntax highlighting.
 	// "off"      — no colorization
@@ -1125,6 +1121,11 @@ type LoopDetectionConfig struct {
 	// window for intra-turn repetition detection. Default: 50.
 	ChunkWindowSize int `json:"chunk_window_size,omitempty"`
 
+	// ReasoningChunkFloodThreshold is how many reasoning chunks without any
+	// content output trigger the intra-turn reasoning-chunk-flood signal.
+	// Default: 5000.
+	ReasoningChunkFloodThreshold int `json:"reasoning_chunk_flood_threshold,omitempty"`
+
 	// ReasoningChunkRepetitionThreshold is how many consecutive identical
 	// reasoning/thinking chunks must appear to trigger the intra-turn
 	// reasoning repetition signal. Default: 10 (2x ChunkRepetitionThreshold).
@@ -1147,7 +1148,6 @@ type LoopDetectionConfig struct {
 
 func defaults() Config {
 	return Config{
-		DefaultRoute: "local",
 		Colorization: "balanced",
 		Otel: OtelConfig{
 			Enabled:             true,
@@ -2261,8 +2261,8 @@ func providerDisplay(p string) string {
 }
 
 // InitConfig builds a minimal valid Config from one primary agent entry and an
-// optional escalation agent entry. It sets sensible defaults (default_route,
-// otel) and selects the primary agent by name. The result is ready to Save().
+// optional escalation agent entry. It sets sensible defaults (rules, otel)
+// and selects the primary agent by name. The result is ready to Save().
 func InitConfig(primary AgentConfig, escalation *AgentConfig) Config {
 	cfg := defaults()
 	cfg.Agents = []AgentConfig{primary}
@@ -2331,6 +2331,9 @@ func (c Config) LoopDetectionCfg() loop.Config {
 		}
 		if ld.ChunkWindowSize > 0 {
 			cfg.ChunkWindowSize = ld.ChunkWindowSize
+		}
+		if ld.ReasoningChunkFloodThreshold > 0 {
+			cfg.ReasoningChunkFloodThreshold = ld.ReasoningChunkFloodThreshold
 		}
 		if ld.ReasoningChunkRepetitionThreshold > 0 {
 			cfg.ReasoningChunkRepetitionThreshold = ld.ReasoningChunkRepetitionThreshold
