@@ -258,7 +258,6 @@ Same commands on the CLI as `milk config`, `milk config init`, `milk config open
   "agent": "local",
   "agents": [ { "name": "local", "url": "http://localhost:8080", "model": "qwen2.5-coder", "provider": "local" } ],
   "escalation_agent": "claude",
-  "default_route": "local",
   "colorization": "balanced",
   "show_reasoning": true,
   "sticky_escalation": true,
