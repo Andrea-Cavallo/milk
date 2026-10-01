@@ -153,6 +153,11 @@ func (m model) handlePTYKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.ptyPane == nil {
 		return m, nil
 	}
+	// Toast dismissal (issue #162) works in shell mode too — ctrl+g is not
+	// in ptyKeyToBytes (it would be dropped anyway), so intercept it first.
+	if msg.String() == "ctrl+g" && m.dismissToasts() {
+		return m, nil
+	}
 	if raw := ptyKeyToBytes(msg); len(raw) > 0 {
 		m.ptyPane.ptm.Write(raw) //nolint:errcheck
 	}

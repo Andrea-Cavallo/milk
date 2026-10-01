@@ -44,6 +44,9 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	if cmd == cmdThink {
 		return m.handleThinkCmd(strings.TrimSpace(rest)), nil
 	}
+	if cmd == cmdNotifications {
+		return m.handleNotificationsCmd(strings.TrimSpace(rest)), nil
+	}
 	if cmd == cmdSetup {
 		return m.handleSetupCmd(strings.TrimSpace(rest))
 	}
@@ -321,26 +324,30 @@ func (m model) handleColorizeCmd(arg string) model {
 // With no arg: shows the current reasoning visibility. With on/off: toggles it.
 // The toggle is retroactive — switching between transcript variants is instantaneous
 // because both are maintained in parallel during streaming.
+//
+// State *changes* are turn-unrelated informational events → notification
+// toasts (issue #162); the bare query response stays in the transcript like
+// every other explicit query answer.
 func (m model) handleThinkCmd(arg string) model {
 	switch arg {
 	case "on":
 		if m.showThinking {
-			m.appendTranscript(milkTag() + " reasoning visibility: already on\n")
+			m.notify("reasoning visibility: already on", "/think off")
 			return m
 		}
 		m.showThinking = true
 		m.colorizeForce = true // switch transcript variant — invalidate cache
 		m.colorizeTransLen = 0
-		m.appendTranscript(milkTag() + " reasoning visibility: on\n")
+		m.notify("reasoning visibility: on", "/think off")
 	case "off":
 		if !m.showThinking {
-			m.appendTranscript(milkTag() + " reasoning visibility: already off\n")
+			m.notify("reasoning visibility: already off", "/think on")
 			return m
 		}
 		m.showThinking = false
 		m.colorizeForce = true // switch transcript variant — invalidate cache
 		m.colorizeTransLen = 0
-		m.appendTranscript(milkTag() + " reasoning visibility: off — thinking blocks hidden ([thinking…])\n")
+		m.notify("reasoning visibility: off — thinking blocks hidden ([thinking…])", "/think on")
 	default:
 		state := "off"
 		if m.showThinking {
@@ -351,7 +358,7 @@ func (m model) handleThinkCmd(arg string) model {
 	return m
 }
 
-// toggleThinking flips reasoning visibility and appends a status line.
+// toggleThinking flips reasoning visibility and posts a notification toast.
 // Works at any time including while the agent is responding, since it only
 // mutates showThinking and the colorize cache — no input submission needed.
 func (m model) toggleThinking() model {
@@ -359,9 +366,9 @@ func (m model) toggleThinking() model {
 	m.colorizeForce = true
 	m.colorizeTransLen = 0
 	if m.showThinking {
-		m.appendTranscript(milkTag() + " reasoning visibility: on\n")
+		m.notify("reasoning visibility: on", "/think off")
 	} else {
-		m.appendTranscript(milkTag() + " reasoning visibility: off\n")
+		m.notify("reasoning visibility: off", "/think on")
 	}
 	return m
 }
@@ -1439,10 +1446,10 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		m.syncLayout()
 		var tick tea.Cmd
 		if m.panelMemory {
-			m.appendTranscript(milkTag() + " memory panel: on\n")
+			m.notify("memory panel: on", "/panel memory")
 			tick = memoryPollTick()
 		} else {
-			m.appendTranscript(milkTag() + " memory panel: off\n")
+			m.notify("memory panel: off", "/panel memory")
 		}
 		return m, tick
 	case "tasks":
@@ -1451,9 +1458,9 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		m.refreshPrompt()
 		m.syncLayout()
 		if m.panelTasks {
-			m.appendTranscript(milkTag() + " tasks panel: on\n")
+			m.notify("tasks panel: on", "/panel tasks")
 		} else {
-			m.appendTranscript(milkTag() + " tasks panel: off\n")
+			m.notify("tasks panel: off", "/panel tasks")
 		}
 		return m, nil
 	case "workflow":
@@ -1461,9 +1468,9 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		m.workflowPanelOpen = !m.workflowPanelOpen
 		m.syncLayout()
 		if m.workflowPanelOpen {
-			m.appendTranscript(milkTag() + " workflow panel: on\n")
+			m.notify("workflow panel: on", "/panel workflow")
 		} else {
-			m.appendTranscript(milkTag() + " workflow panel: off\n")
+			m.notify("workflow panel: off", "/panel workflow")
 		}
 		return m, nil
 	case "background":
@@ -1471,9 +1478,9 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		m.panelBackground = !m.panelBackground
 		m.syncLayout()
 		if m.panelBackground {
-			m.appendTranscript(milkTag() + " background agents panel: on\n")
+			m.notify("background agents panel: on", "/panel background")
 		} else {
-			m.appendTranscript(milkTag() + " background agents panel: off\n")
+			m.notify("background agents panel: off", "/panel background")
 		}
 		return m, nil
 	default:

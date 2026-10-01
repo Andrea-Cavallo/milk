@@ -301,6 +301,8 @@ func (m model) View() string {
 		ptyContent := m.renderPTYPane(vpH, paneCols)
 		sep := m.renderSeparator(vpH)
 		mainArea := lipgloss.JoinHorizontal(lipgloss.Top, ptyContent, sep)
+		// Toasts float over the shell too (render-time overlay, no resize).
+		mainArea = m.overlayToasts(mainArea)
 		return m.headerBar() + "\n" + mainArea + "\n" + m.statusBar()
 	}
 	vpH := m.viewportHeight()
@@ -330,6 +332,9 @@ func (m model) View() string {
 		wbar := m.renderWorkflowPanelScrollbar(vpH)
 		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, wpanel, wbar)
 	}
+	// Notification toasts (issue #162) float over the top-right of the whole
+	// main area — pure render-time overlay, no layout rows consumed.
+	mainArea = m.overlayToasts(mainArea)
 	if len(m.tabHints) > 0 {
 		return m.headerBar() + "\n" + mainArea + "\n" + strings.Join(m.tabHints, "\n") + "\n" + m.statusBar()
 	}

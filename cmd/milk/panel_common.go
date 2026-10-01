@@ -74,10 +74,17 @@ func panelTitleLine(title string, region panelRegion, inner int) string {
 // saved, ...) — unless the user has explicitly shown or hidden that panel
 // via /panel or its F1-F4 shortcut this session (see panelManualOverride),
 // in which case their choice sticks and this is a no-op.
+//
+// A silent auto-open is exactly the kind of surprise event that should
+// explain itself: when the panel *transitions* closed→open (issue #162 /
+// ADR-0044's panel state changes), post a notification toast with the
+// command that closes it again. Repeated calls while already open — e.g.
+// every workflow chunk — stay silent.
 func (m *model) autoOpenPanel(region panelRegion) {
 	if m.panelManualOverride[region] {
 		return
 	}
+	wasOpen := m.panelOpen(region)
 	switch region {
 	case regionMemory:
 		m.panelMemory = true
@@ -88,6 +95,36 @@ func (m *model) autoOpenPanel(region panelRegion) {
 	case regionWorkflow:
 		m.workflowPanelOpen = true
 	}
+	if !wasOpen && m.panelOpen(region) {
+		m.notify(panelDisplayName(region)+" panel opened", "/panel "+panelSubName(region))
+	}
+}
+
+// panelSubName returns the /panel <name> argument for a region.
+func panelSubName(region panelRegion) string {
+	switch region {
+	case regionMemory:
+		return "memory"
+	case regionTasks:
+		return "tasks"
+	case regionBackground:
+		return "background"
+	case regionWorkflow:
+		return "workflow"
+	}
+	return ""
+}
+
+// panelDisplayName returns the human-readable panel name used in
+// notifications and confirmations ("background agents panel", ...).
+func panelDisplayName(region panelRegion) string {
+	switch region {
+	case regionBackground:
+		return "background agents"
+	case regionMemory, regionTasks, regionWorkflow:
+		return panelSubName(region)
+	}
+	return "side"
 }
 
 // panelOpen reports whether the given region's panel is currently part of

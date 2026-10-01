@@ -49,9 +49,10 @@ const cmdUpdate = "/update"
 const cmdServer = "/server"
 const cmdBash = "/bash"
 const cmdBg = "/bg"
+const cmdNotifications = "/notifications"
 
 var slashCommands = []string{
-	cmdEscalate, cmdPrimary, cmdPaste, cmdLearn, cmdOtel, cmdMetrics, cmdUsage, cmdMemory, cmdExport, cmdHistory, cmdPanel, cmdForget, cmdSkipPerms, cmdAgent, cmdColorize, cmdThink, cmdSetup, cmdConfig, cmdOpen, cmdMCP, cmdUpdate, cmdWorkflow, cmdServer, cmdReload, cmdTasks, cmdTask, cmdAttach, cmdBash, cmdBg,
+	cmdEscalate, cmdPrimary, cmdPaste, cmdLearn, cmdOtel, cmdMetrics, cmdUsage, cmdMemory, cmdExport, cmdHistory, cmdPanel, cmdForget, cmdSkipPerms, cmdAgent, cmdColorize, cmdThink, cmdSetup, cmdConfig, cmdOpen, cmdMCP, cmdUpdate, cmdWorkflow, cmdServer, cmdReload, cmdTasks, cmdTask, cmdAttach, cmdBash, cmdBg, cmdNotifications,
 	"/new", "/clear", "/drop", "/list", "/help", "/exit", "/quit",
 }
 
@@ -174,6 +175,10 @@ const interactiveHelp = `
   /history               show current history navigation mode
   /history global        navigate global input history
   /history session       navigate session input history (default)
+  /notifications               show last 20 notifications (timestamps + hints)
+  /notifications list          show the full notification history, unfiltered
+  /notifications list <count>  show the last <count> notifications
+  /notifications clear         clear notification history
 
 ── Observability ────────────────────────────────────────────────────────
   /usage                 token usage report for this session and all-time totals
@@ -248,6 +253,10 @@ const interactiveHelp = `
   Agent control
     Ctrl+C   interrupt current agent turn (or copy if selection is active)
     Ctrl+T   toggle thinking/reasoning visibility (works during streaming)
+
+  Notifications
+    Ctrl+G                      dismiss all open notification toasts
+                                (history stays: /notifications)
 
   Transcript selection
     Mouse drag                    select by line+column
@@ -467,18 +476,19 @@ var promptFriendly = map[string]bool{
 // (except /bg start, which spawns a background job — the same thing Ctrl+Enter
 // already does while busy — and /bg stop, which is an interrupt-style action).
 var busySafeCommands = map[string]bool{
-	"/help":     true,
-	cmdThink:    true,
-	cmdColorize: true,
-	cmdPanel:    true,
-	cmdHistory:  true,
-	cmdMemory:   true,
-	cmdUsage:    true,
-	cmdMetrics:  true,
-	cmdExport:   true,
-	cmdPaste:    true,
-	cmdMCP:      true,
-	cmdBg:       true,
+	"/help":          true,
+	cmdThink:         true,
+	cmdColorize:      true,
+	cmdPanel:         true,
+	cmdHistory:       true,
+	cmdNotifications: true,
+	cmdMemory:        true,
+	cmdUsage:         true,
+	cmdMetrics:       true,
+	cmdExport:        true,
+	cmdPaste:         true,
+	cmdMCP:           true,
+	cmdBg:            true,
 }
 
 // handleSlashCommand processes a slash command with optional surrounding prompt text.
@@ -561,6 +571,10 @@ func handleSlashCommand(cmd, prompt string, st *interactiveState) (exit bool, di
 		// execThink is handled in repl.go where it can toggle model.showThinking.
 		// This case is a no-op here; the TUI intercepts cmdThink before it reaches
 		// handleSlashCommand. Guard to prevent "unknown command" output.
+	case cmdNotifications:
+		// History lives on the TUI model; the TUI intercepts this in
+		// handleSlashInput (commands.go) before it reaches here. Guard to
+		// prevent "unknown command" output, mirroring cmdThink above.
 	case cmdSetup:
 		// Handled in repl.go (needs model state). No-op here.
 	case cmdConfig:
