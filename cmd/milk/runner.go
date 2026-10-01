@@ -194,7 +194,8 @@ func (r *localRunner) Execute(
 		RelevanceGateEnabled: cfg.AgentPerceptRelevanceGateEnabled(ac),
 		MaxToolIterations:    cfg.AgentMaxToolIterations(ac),
 	}).WithToolTimeout(cfg.AgentToolTimeout(ac)).
-		WithMaxPayloadBytes(cfg.AgentMaxPayloadBytes(ac))
+		WithMaxPayloadBytes(cfg.AgentMaxPayloadBytes(ac)).
+		WithPayloadCompactionThreshold(cfg.AgentPayloadTrimCompactionThreshold(ac))
 
 	// Apply custom prompt (prompt / prompt_file in agent config) when set.
 	if ac.Prompt != "" || ac.PromptFile != "" {

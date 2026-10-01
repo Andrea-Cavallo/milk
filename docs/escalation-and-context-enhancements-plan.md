@@ -69,6 +69,28 @@ behavior change — lowest risk, enables everything else to be measured.
 
 ## Track B, Phase 2 — Stop the byte-trim loop from thrashing on long turns
 
+**Status: landed** (branch `feat/payload-trim-compaction-fallback`). Implementation diverged
+from the sketch below in one load-bearing way, discovered mid-implementation: the per-request
+trim in `streamCompletionOnce` is *request-local* — it builds a trimmed copy of `msgs` for one
+outgoing HTTP call and never returns it to the caller, so `runToolLoop`'s own `msgs` (which
+grows every tool-call iteration) was never actually shrunk by it. A fix placed inside
+`streamCompletionOnce` (as originally sketched) would therefore have made exactly one outgoing
+request richer and changed nothing about trim *frequency* — the real bug. The actual fix lives in
+`runToolLoop` instead: a proactive, cheap char-count heuristic (`messagesContentBytes`) checked
+before each iteration's `streamCompletion` call, incrementing a local `payloadTrimCountThisTurn`
+counter; at `a.payloadCompactionThreshold` (config: `payload_trim_compaction_threshold`, default
+3, wired via `cmd/milk/runner.go`), it calls the new `(*Agent).compactForPayloadSize` — which
+collapses *all* prior turns in one shot when any exist, or the *older half* of the current turn's
+own accumulated tool-call tail when none do (protecting the most recent iterations) — and
+**reassigns `runToolLoop`'s own `msgs`**, persisting the reduction for every subsequent iteration
+instead of re-deriving a throwaway copy each time. `streamCompletionOnce`'s original per-request
+hard-drop trim is untouched and still runs as the final safety net on every request regardless.
+Verified safe to mutate mid-turn: `runToolLoop`'s returned `[]Message` only ever feeds
+`TurnResult.Text` (the last assistant message) — it is never written back into persisted session
+history, so a mid-turn compaction can only affect the rest of *this* turn, never future ones.
+Added `milk.inference.payload_compacted` counter + a `logWarn` line (both following Phase 1's
+convention) alongside the existing `milk.inference.payload_trimmed` one.
+
 **Why:** the analysis doc's 2h21m turn re-exceeded the 900KB cap and got re-trimmed on nearly
 every iteration for ~1h45m straight (02:05→03:50), each time hard-dropping oldest content with
 `dropOldestDroppableUnit` — no summarization, unlike the turn-boundary compaction path that
