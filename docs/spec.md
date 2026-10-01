@@ -54,7 +54,9 @@ cmd/milk/
   repl.go           bubbletea TUI — transcript viewport, textarea, status bar, /agent switch
   runner.go         TurnRunner interface + three implementations (localRunner, cliRunner, subprocessRunner)
   dispatch.go       runPrimary / runEscalation — role-specific session bookkeeping shared by single-shot and TUI
-  interactive.go    slash commands, tab completion, prompt label helpers
+  interactive.go    slash commands, help text (canonical command signatures), prompt label helpers
+  completion.go     tab completion: command/subcommand cycling, @-paths, value-mode insertion
+  namespaces.go     parameter name-space index for slash-command completion (agents, MCP, panels, …)
   ansi.go           ANSI colour helpers and activity spinner
   notify.go         notification toasts: queue/history, expiry tick, overlay render, /notifications (ADR-0048)
   panel_memory.go   right-side memory panel (/panel memory)
@@ -316,6 +318,13 @@ milk's own, not ports:
 - **[Claude Code](https://claude.com/claude-code)** — the escalation-agent subprocess milk drives via `claude --print`, and the reference for milk's own project-instruction loading (AGENTS.md/CLAUDE.md).
 - **[MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code)** (Xiaomi's fork of OpenCode) — compared for loop-detection thresholds (the doom-loop gate, n-gram repetition monitor), prompt-caching breakpoint strategy, and checkpoint/distillation memory design.
 - **[OpenCode](https://github.com/anomalyco/opencode)** — compared for `AGENTS.md` project-instruction loading, sub-agent context isolation (`ForkContext`), and prompt-caching strategy.
+
+The full comparison (findings, what was and wasn't adopted, and why) lives in a design analysis
+kept out of this published site — see the `prompt-context-management-review.md` doc in the
+repository root's `docs/` directory on [GitHub](https://github.com/scoutme/milk).
+
+repository root's `docs/` directory on [GitHub](https://github.com/scoutme/milk).
+Code](https://github.com/anomalyco/opencode)** — compared for `AGENTS.md` project-instruction loading, sub-agent context isolation (`ForkContext`), and prompt-caching strategy.
 
 The full comparison (findings, what was and wasn't adopted, and why) lives in a design analysis
 kept out of this published site — see the `prompt-context-management-review.md` doc in the

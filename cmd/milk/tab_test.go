@@ -61,15 +61,13 @@ func TestTabInputPrefix(t *testing.T) {
 }
 
 func TestBuildTabMatches_SlashCmd(t *testing.T) {
-	matches, idx, base := buildTabMatches("/mem", ".")
+	res := buildTabMatches("/mem", ".", nil)
+	matches := res.matches
 	if len(matches) == 0 {
 		t.Fatal("expected matches for /mem")
 	}
-	if idx != 0 {
-		t.Errorf("expected initial idx 0, got %d", idx)
-	}
-	if base != "" {
-		t.Errorf("expected empty replaceBase for top-level completion, got %q", base)
+	if res.replaceBase != "" {
+		t.Errorf("expected empty replaceBase for top-level completion, got %q", res.replaceBase)
 	}
 	for _, m := range matches {
 		if len(m) < 4 || m[:4] != "/mem" {
@@ -79,7 +77,7 @@ func TestBuildTabMatches_SlashCmd(t *testing.T) {
 }
 
 func TestBuildTabMatches_NoMatch(t *testing.T) {
-	matches, _, _ := buildTabMatches("/zzznomatch", ".")
+	matches := buildTabMatches("/zzznomatch", ".", nil).matches
 	if len(matches) != 0 {
 		t.Errorf("expected no matches, got %v", matches)
 	}
@@ -87,7 +85,8 @@ func TestBuildTabMatches_NoMatch(t *testing.T) {
 
 func TestBuildTabMatches_TrailingSpace(t *testing.T) {
 	// "/memory " → subcommand listing: all /memory variant sigs.
-	matches, _, base := buildTabMatches("/memory ", ".")
+	res := buildTabMatches("/memory ", ".", nil)
+	matches, base := res.matches, res.replaceBase
 	if len(matches) == 0 {
 		t.Fatal("expected subcommand matches for '/memory '")
 	}
@@ -103,7 +102,8 @@ func TestBuildTabMatches_TrailingSpace(t *testing.T) {
 
 func TestBuildTabMatches_SubcommandPartial(t *testing.T) {
 	// "/memory sh" → only variants whose subcommand starts with "sh".
-	matches, _, base := buildTabMatches("/memory sh", ".")
+	res := buildTabMatches("/memory sh", ".", nil)
+	matches, base := res.matches, res.replaceBase
 	if len(matches) == 0 {
 		t.Fatal("expected subcommand matches for '/memory sh'")
 	}
@@ -124,7 +124,7 @@ func TestBuildTabMatches_SubcommandPartial(t *testing.T) {
 
 func TestBuildTabMatches_SubcommandNoMatch(t *testing.T) {
 	// "/memory zzz" → no variants match.
-	matches, _, _ := buildTabMatches("/memory zzz", ".")
+	matches := buildTabMatches("/memory zzz", ".", nil).matches
 	if len(matches) != 0 {
 		t.Errorf("expected no matches for '/memory zzz', got %v", matches)
 	}
@@ -132,7 +132,7 @@ func TestBuildTabMatches_SubcommandNoMatch(t *testing.T) {
 
 func TestBuildTabMatches_UnknownCmdTrailingSpace(t *testing.T) {
 	// "/zzz " → unknown command, no variants → no matches.
-	matches, _, _ := buildTabMatches("/zzz ", ".")
+	matches := buildTabMatches("/zzz ", ".", nil).matches
 	if len(matches) != 0 {
 		t.Errorf("expected no matches for '/zzz ', got %v", matches)
 	}

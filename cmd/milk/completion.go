@@ -78,20 +78,31 @@ func (m model) handleTab(dir int) model {
 
 	// Build or reuse the match list.
 	if len(m.tabMatches) == 0 || curLine != m.tabLine {
-		var replaceBase string
-		m.tabMatches, m.tabIdx, replaceBase = buildTabMatches(beforeCursor, m.st.cwd)
+		res := buildTabMatches(beforeCursor, m.st.cwd, m.paramLookup)
+		m.tabMatches = res.matches
+		m.tabIdx = 0
 		m.tabLine = curLine
 		if len(m.tabMatches) == 0 {
+			m.tabValueMode = false
+			m.tabNsLabel = ""
 			return m
 		}
 		m.tabPrefix = tabInputPrefix(beforeCursor)
-		// For subcommand completions, replaceBase is the slash-command token (e.g.
-		// "/memory"). applyTabCompletion will replace from there, discarding any
-		// partial subcommand the user had typed. For normal completions it's "".
-		m.tabSubcmdMode = replaceBase != ""
-		if replaceBase != "" {
-			m.tabBeforeCursor = replaceBase
-		} else {
+		m.tabSubcmdMode = res.replaceBase != ""
+		m.tabValueMode = res.valueMode
+		m.tabNsLabel = res.nsLabel
+		switch {
+		case res.valueMode:
+			// Concrete parameter values (#166): apply against the full
+			// beforeCursor snapshot so the value replaces the token under the
+			// cursor (or is appended after whitespace).
+			m.tabBeforeCursor = beforeCursor
+		case res.replaceBase != "":
+			// Subcommand completions: replaceBase is the slash-command token
+			// (e.g. "/memory"). applyTabCompletion replaces from there,
+			// discarding any partial subcommand the user had typed.
+			m.tabBeforeCursor = res.replaceBase
+		default:
 			m.tabBeforeCursor = beforeCursor
 		}
 		m.tabAfterCursor = afterCursor
@@ -100,7 +111,7 @@ func (m model) handleTab(dir int) model {
 		if dir < 0 {
 			// Shift+Tab from scratch: start at the last entry of the last command.
 			m.tabCmdIdx = len(m.tabMatches) - 1
-			if !m.tabSubcmdMode {
+			if !m.tabSubcmdMode && !m.tabValueMode {
 				if vs, ok := cmdVariants[m.tabMatches[m.tabCmdIdx]]; ok && len(vs) > 0 {
 					m.tabVarIdx = len(vs) - 1
 				}
@@ -110,8 +121,10 @@ func (m model) handleTab(dir int) model {
 		// Advance within the current command's variants, then wrap to next command.
 		cmd := m.tabMatches[m.tabCmdIdx]
 		varCount := 1
-		if vs, ok := cmdVariants[cmd]; ok && len(vs) > 0 {
-			varCount = len(vs)
+		if !m.tabValueMode {
+			if vs, ok := cmdVariants[cmd]; ok && len(vs) > 0 {
+				varCount = len(vs)
+			}
 		}
 		m.tabVarIdx += dir
 		if m.tabVarIdx >= varCount {
@@ -121,7 +134,7 @@ func (m model) handleTab(dir int) model {
 		} else if m.tabVarIdx < 0 {
 			// Move to last variant of previous command.
 			m.tabCmdIdx = (m.tabCmdIdx - 1 + len(m.tabMatches)) % len(m.tabMatches)
-			if vs, ok := cmdVariants[m.tabMatches[m.tabCmdIdx]]; ok && len(vs) > 0 {
+			if vs, ok := cmdVariants[m.tabMatches[m.tabCmdIdx]]; !m.tabValueMode && ok && len(vs) > 0 {
 				m.tabVarIdx = len(vs) - 1
 			} else {
 				m.tabVarIdx = 0
@@ -134,14 +147,18 @@ func (m model) handleTab(dir int) model {
 	completed := m.tabMatches[m.tabCmdIdx]
 
 	// Insert the full variant sig into the textarea so the user sees the
-	// subcommand and parameter placeholders. Always apply against the original
-	// beforeCursor snapshot so cycling doesn't accumulate previous completions.
+	// subcommand and parameter placeholders — except in value mode (#166),
+	// where the match itself is the concrete parameter value to insert.
+	// Always apply against the original beforeCursor snapshot so cycling
+	// doesn't accumulate previous completions.
 	completionToken := completed
-	if vs, ok := cmdVariants[completed]; ok && len(vs) > 0 && m.tabVarIdx < len(vs) {
-		completionToken = vs[m.tabVarIdx].sig
+	if !m.tabValueMode {
+		if vs, ok := cmdVariants[completed]; ok && len(vs) > 0 && m.tabVarIdx < len(vs) {
+			completionToken = vs[m.tabVarIdx].sig
+		}
 	}
 
-	completedBefore := applyTabCompletion(m.tabBeforeCursor, completionToken)
+	completedBefore := m.applyCompletionToken(completionToken)
 	lines[curLine] = completedBefore + m.tabAfterCursor
 	m.ta.SetValue(strings.Join(lines, "\n"))
 	precedingLen := 0
@@ -173,6 +190,20 @@ func (m model) handleTab(dir int) model {
 	} else {
 		totalCmds := len(m.tabMatches)
 		for ci, cmd := range m.tabMatches {
+			if m.tabValueMode {
+				// Concrete parameter value (#166) — not a command. Show the
+				// value plus the name-space it came from so the user knows
+				// what is being completed.
+				line := " " + yellow(cmd)
+				if m.tabNsLabel != "" {
+					line += dim("  (" + m.tabNsLabel + ")")
+				}
+				if totalCmds > 1 {
+					line += dim(fmt.Sprintf(" [%d/%d]", ci+1, totalCmds))
+				}
+				m.tabHintsBase = append(m.tabHintsBase, line)
+				continue
+			}
 			vs := cmdVariants[cmd]
 			if len(vs) == 0 {
 				// No registered variants (e.g. @-path or unlisted command) — one entry.
@@ -203,7 +234,7 @@ func (m model) handleTab(dir int) model {
 		for ci, cmd := range m.tabMatches {
 			vs := cmdVariants[cmd]
 			count := 1
-			if len(vs) > 0 {
+			if !m.tabValueMode && len(vs) > 0 {
 				count = len(vs)
 			}
 			if ci == m.tabCmdIdx {
@@ -235,7 +266,7 @@ func (m *model) syncTabIdxFromHint() {
 	for ci, cmd := range m.tabMatches {
 		vs := cmdVariants[cmd]
 		count := 1
-		if len(vs) > 0 {
+		if !m.tabValueMode && len(vs) > 0 {
 			count = len(vs)
 		}
 		if flat < count {
@@ -257,7 +288,7 @@ func (m *model) syncTabIdxFromHint() {
 func (m model) insertActiveCompletion() model {
 	completed := m.tabMatches[m.tabCmdIdx]
 	completionToken := completed
-	if !m.tabSubcmdMode {
+	if !m.tabSubcmdMode && !m.tabValueMode {
 		if vs, ok := cmdVariants[completed]; ok && len(vs) > 0 && m.tabVarIdx < len(vs) {
 			completionToken = vs[m.tabVarIdx].sig
 		}
@@ -268,7 +299,7 @@ func (m model) insertActiveCompletion() model {
 	if curLine >= len(lines) {
 		curLine = len(lines) - 1
 	}
-	completedBefore := applyTabCompletion(m.tabBeforeCursor, completionToken)
+	completedBefore := m.applyCompletionToken(completionToken)
 	lines[curLine] = completedBefore + m.tabAfterCursor
 	m.ta.SetValue(strings.Join(lines, "\n"))
 	precedingLen := 0
@@ -317,6 +348,32 @@ func applyTabCompletion(input, completed string) string {
 		return result
 	}
 	return completed
+}
+
+// applyCompletionToken renders an accepted completion into m.tabBeforeCursor:
+// value mode (#166) replaces/appends the token under the cursor, every other
+// mode goes through applyTabCompletion (slash-token replacement).
+func (m model) applyCompletionToken(token string) string {
+	if m.tabValueMode {
+		return applyValueCompletion(m.tabBeforeCursor, token)
+	}
+	return applyTabCompletion(m.tabBeforeCursor, token)
+}
+
+// applyValueCompletion inserts a completed parameter value into line, which is
+// the current line up to the cursor: after whitespace the value is appended,
+// otherwise the partial token under the cursor is replaced.
+func applyValueCompletion(line, value string) string {
+	if line == "" {
+		return value
+	}
+	if c := line[len(line)-1]; c == ' ' || c == '\t' {
+		return line + value
+	}
+	if i := strings.LastIndexAny(line, " \t"); i >= 0 {
+		return line[:i+1] + value
+	}
+	return value
 }
 
 // stripCompletionPlaceholders removes tab-completion placeholder syntax from s:
@@ -836,15 +893,29 @@ func filterGitIgnored(paths []string, cwd string) []string {
 	return kept
 }
 
-// buildTabMatches returns (matches, initialIdx, replaceBase).
+// tabBuild is the result of buildTabMatches: what to complete, and how.
+type tabBuild struct {
+	matches     []string // candidate completions (sigs, values, or commands)
+	replaceBase string   // non-empty → subcommand mode: replace this slash token with the full sig
+	valueMode   bool     // matches are concrete parameter values (#166): replace/append last word
+	nsLabel     string   // name-space shown beside value hints (value mode only)
+}
+
+// paramLookup resolves a parameter name-space to its values (see
+// namespaces.go); nil means namespace completion is unavailable.
+type paramLookup func(ns string) []string
+
+// buildTabMatches returns the completion candidates for input (the current
+// line up to the cursor) plus how to apply them.
 // replaceBase is the portion of input that should be used as the snapshot for
 // applyTabCompletion: normally "" (caller uses beforeCursor as-is), but set to
 // the slash-command token (e.g. "/memory") for subcommand completions so that
-// the whole "/cmd sub…" sequence is replaced in one step.
-func buildTabMatches(input, cwd string) ([]string, int, string) {
+// the whole "/cmd sub…" sequence is replaced in one step. valueMode marks
+// concrete parameter-value completions (namespaces.go).
+func buildTabMatches(input, cwd string, lookup paramLookup) tabBuild {
 	words := strings.Fields(input)
 	if len(words) == 0 {
-		return nil, 0, ""
+		return tabBuild{}
 	}
 
 	// Trailing whitespace after a known slash command → subcommand listing.
@@ -858,10 +929,12 @@ func buildTabMatches(input, cwd string) ([]string, int, string) {
 				for i, v := range vs {
 					sigs[i] = v.sig
 				}
-				return sigs, 0, last
+				return tabBuild{matches: sigs, replaceBase: last}
 			}
 		}
-		return nil, 0, ""
+		// Trailing space after completed words → parameter values at the next
+		// position, e.g. "/agent switch " completes agent names.
+		return buildParamMatches(words, true, lookup)
 	}
 
 	// Only complete the last word — the token the cursor is actively on.
@@ -897,44 +970,46 @@ func buildTabMatches(input, cwd string) ([]string, int, string) {
 		for j, p := range matches {
 			atMatches[j] = "@" + p
 		}
-		return atMatches, 0, ""
+		return tabBuild{matches: atMatches}
 	}
 
 	// Partial subcommand: cursor is on a non-slash token and the preceding word
 	// is a known slash command with variants. e.g. "/memory sh" → filter to sigs
 	// whose subcommand portion starts with "sh".
-	if !isSlashCmdToken(last) && len(words) >= 2 {
-		prev := words[len(words)-2]
-		if isSlashCmdToken(prev) {
-			if vs := cmdVariants[prev]; len(vs) > 0 {
-				var sigs []string
-				lower := strings.ToLower(last)
-				for _, v := range vs {
-					// v.sig is "/cmd sub …" — compare the word after the command.
-					sigWords := strings.Fields(v.sig)
-					if len(sigWords) >= 2 && strings.HasPrefix(strings.ToLower(sigWords[1]), lower) {
-						sigs = append(sigs, v.sig)
+	if !isSlashCmdToken(last) {
+		if len(words) >= 2 {
+			prev := words[len(words)-2]
+			if isSlashCmdToken(prev) {
+				if vs := cmdVariants[prev]; len(vs) > 0 {
+					var sigs []string
+					lower := strings.ToLower(last)
+					for _, v := range vs {
+						// v.sig is "/cmd sub …" — compare the word after the command.
+						sigWords := strings.Fields(v.sig)
+						if len(sigWords) >= 2 && strings.HasPrefix(strings.ToLower(sigWords[1]), lower) {
+							sigs = append(sigs, v.sig)
+						}
 					}
-				}
-				if len(sigs) > 0 {
-					return sigs, 0, prev
+					if len(sigs) > 0 {
+						return tabBuild{matches: sigs, replaceBase: prev}
+					}
 				}
 			}
 		}
-		return nil, 0, ""
+		// Deeper positions and parameter placeholders: complete concrete
+		// values from the name-space index (#166), e.g. "/agent tool l" →
+		// "list", "/agent switch cl" → an agent name.
+		return buildParamMatches(words, false, lookup)
 	}
 
 	// Top-level slash command prefix completion. e.g. "/mem" → ["/memory", …]
-	if !isSlashCmdToken(last) {
-		return nil, 0, ""
-	}
 	var matches []string
 	for _, cmd := range slashCommands {
 		if strings.HasPrefix(strings.ToLower(cmd), strings.ToLower(last)) {
 			matches = append(matches, cmd)
 		}
 	}
-	return matches, 0, ""
+	return tabBuild{matches: matches}
 }
 
 // expandPath resolves @-path completions. limit<=0 means no limit.
