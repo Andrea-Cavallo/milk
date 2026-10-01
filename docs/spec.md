@@ -159,7 +159,7 @@ milk [flags] <prompt>         # single-prompt mode
 
 `milk` with no prompt argument starts a REPL built on charmbracelet/bubbletea. The input prompt uses `❯` as the prefix. The status bar reflects the current routing state and active agent.
 
-**Slash commands:** `/escalate`, `/primary`, `/new`, `/drop`, `/list`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/open`, `/update`, `/help`, `/exit`
+**Slash commands:** `/escalate`, `/primary`, `/new`, `/clear`, `/drop`, `/list`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/open`, `/update`, `/help`, `/exit`
 
 **Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [json|<path>]` — see [docs/operations.md — Memory](operations.md#memory).
 

@@ -86,7 +86,7 @@ Force a specific agent for one turn with `/primary <prompt>` or `/escalate <prom
 
 Once escalation fires — whether you asked for it or the primary agent called `escalate()` on its own — milk keeps subsequent turns on the escalation agent automatically (**auto-sticky**, shown as `<agent> (sticky)` in the status bar) until you type `/primary`. See [docs/workflows.md](workflows.md) for the full routing and session-state model.
 
-Manage sessions from inside the TUI with `/new` (start fresh), `/drop` (delete the current one), and `/list` (sessions for this directory). Type `/help` for the full command list, `/exit` or Ctrl-D to quit.
+Manage sessions from inside the TUI with `/new` (start fresh — alias `/clear`), `/drop` (delete the current one), and `/list` (sessions for this directory). Type `/help` for the full command list, `/exit` or Ctrl-D to quit.
 
 ### A realistic session
 
