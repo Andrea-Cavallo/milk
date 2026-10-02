@@ -114,7 +114,11 @@ func (m *model) statusBar() string {
 	if m.quitPending {
 		left += yellow(" [press ctrl+c again to exit]")
 	} else if m.loopInterrupt {
-		left += yellow(" [⚠ loop — auto-interrupted]")
+		label := m.loopInterruptLabel
+		if label == "" {
+			label = "loop"
+		}
+		left += yellow(" [⚠ " + label + " — auto-interrupted]")
 	} else if m.loopWarning != "" {
 		left += yellow(" [" + m.loopWarning + "]")
 	} else if m.busyHint != "" {

@@ -413,14 +413,18 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 			},
 		},
 	}
-	// Apply whitelist/blacklist filtering to the base built-in tool set.
-	// Dynamic tools (memory, otel, session, task, agent) are appended after
-	// filtering so they are always available when the backing store is present.
-	base = filterTools(base, limits)
-
+	// Apply whitelist/blacklist filtering to the base built-in tool set and
+	// the memory tools. Memory tools used to be appended after filterTools,
+	// bypassing limits.included_tools/excluded_tools entirely — they are now
+	// routed through the same filter so they can be scoped away from small
+	// models (issue #172 gap 4). Dynamic tools (otel, session, task, agent)
+	// are appended after filtering so they are always available when the
+	// backing store is present.
 	if mem != nil {
 		base = append(base, memory.Schemas()...)
 	}
+	base = filterTools(base, limits)
+
 	if otelDir != "" {
 		base = append(base, obs.ToolSchemas()...)
 	}
@@ -633,7 +637,7 @@ func exportSessionSchema() map[string]any {
 	}
 }
 
-func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Session, mem *memory.Store, otelDir string, ts TaskStore) (string, bool) {
+func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Session, mem *memory.Store, memCaller memory.Consumer, otelDir string, ts TaskStore) (string, bool) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return toolResult{Error: "invalid arguments: " + err.Error()}.String(), false
@@ -676,12 +680,12 @@ func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Sess
 		return toolResult{Error: errMemUnavailable}.String(), false
 	case "get_memory":
 		if mem != nil {
-			return memory.DispatchGetMemory(ctx, mem, argsJSON, memory.ConsumerLocal), false
+			return memory.DispatchGetMemory(ctx, mem, argsJSON, memCaller), false
 		}
 		return toolResult{Error: errMemUnavailable}.String(), false
 	case "list_memory":
 		if mem != nil {
-			return memory.DispatchListMemory(ctx, mem, argsJSON), false
+			return memory.DispatchListMemory(ctx, mem, argsJSON, memCaller), false
 		}
 		return toolResult{Error: errMemUnavailable}.String(), false
 	case "forget_memory":

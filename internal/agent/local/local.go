@@ -388,7 +388,13 @@ type Agent struct {
 	onNeed           func(string)
 	onPercept        func(content, consumerHint string)
 	memCfg           MemConfig
-	logContext       bool // when true, log full request payload at DEBUG level
+	// memCaller overrides the memory-visibility consumer used by this agent's
+	// memory tool calls (get_memory/list_memory): tool-agents and background
+	// clones inherit their invoker's visibility instead of role-deriving it —
+	// see memoryCaller()/WithMemoryCaller (issue #172 gap 2).
+	memCaller    memory.Consumer
+	memCallerSet bool // true when WithMemoryCaller was used — distinguishes an explicit ConsumerAll ("") override from "not set"
+	logContext   bool // when true, log full request payload at DEBUG level
 	// onTokens is an optional callback fired after each inference call with real
 	// token counts, including cache-read/cache-creation counts when the provider
 	// reports them. Used to persist usage into the session without coupling the
@@ -628,6 +634,33 @@ func (a *Agent) WithMemConfig(mc MemConfig) *Agent {
 	copy := *a
 	copy.memCfg = mc
 	return &copy
+}
+
+// WithMemoryCaller returns a shallow copy of the agent whose memory tool calls
+// use the given visibility consumer (own tag plus shared percepts) instead of
+// the role-derived default. Used by agent-as-tool tool-agents and background
+// subagent clones — see the memCaller field.
+func (a *Agent) WithMemoryCaller(c memory.Consumer) *Agent {
+	copy := *a
+	copy.memCaller = c
+	copy.memCallerSet = true
+	return &copy
+}
+
+// memoryCaller returns the memory-visibility consumer for this agent's memory
+// tool calls: the explicit override when set (tool-agents, background clones),
+// otherwise derived from the role — the escalation target sees
+// ConsumerEscalation + shared, everything else sees ConsumerLocal + shared.
+// This is what get_memory/list_memory visibility is computed from
+// (issue #172 gap 2 — previously hardcoded to ConsumerLocal).
+func (a *Agent) memoryCaller() memory.Consumer {
+	if a.memCallerSet {
+		return a.memCaller
+	}
+	if a.escalationName != "" {
+		return memory.ConsumerEscalation
+	}
+	return memory.ConsumerLocal
 }
 
 // WithCustomPrompt returns a shallow copy of the agent with a pre-rendered
@@ -1023,10 +1056,6 @@ const systemPromptShared = `Rules:
 - list_dir shows only the top level of a directory; never conclude that files or subdirectories are absent based solely on a list_dir result. To check whether files of a given type exist anywhere in the project, use find_files with the working directory as root.
 - After issuing a tool call, stop. Do not describe what the result might be. Wait for the actual output. Do not narrate or summarize between individual tool calls in a multi-step sequence — keep issuing tool calls silently until the task is done.
 - Once you have no more tool calls left to make for the current task, you MUST end the turn with a short text response for the user. Never let a turn end with only tool calls and no reply — always close out with at least a brief summary of what you did or found.
-**MANDATORY — memory tool actions**: The following require immediate tool calls with NO preamble or confirmation:
-  - User asks about past context or preferences → call get_memory NOW before responding.
-  - User states a preference, decision, or fact → call record_memory NOW. Omit "consumer" to share the fact with both agents (default); set consumer: "primary" or "escalation" only when it's relevant to just that agent.
-  - User says "forget", "remove", "delete" about a percept (by ID, #ID, or description) → call forget_memory NOW. Strip any leading "#" from the ID before passing it. Never say "done" or confirm the action without actually calling the tool.
 - Call get_metrics when the user asks about memory usage, percept counts, observability status, or metric values.
 **MANDATORY — current_need**: When the user states a new goal, task, or shifts focus to a new objective → call current_need NOW with a one-sentence summary. Do not wait, do not ask for confirmation. Update it again whenever the goal changes mid-session. Only summarize a goal the user actually stated in words — never invent or infer one from an image/attachment alone. If the user's turn has no accompanying text stating a goal (e.g. an image-only paste), leave current_need unchanged.
 - Do NOT reproduce history labels (e.g. "[name as role]", "[user]") in your responses. These labels exist in the conversation history as metadata to help you understand who said what.
@@ -1073,6 +1102,18 @@ const backgroundAgentGuidance = `spawn_background_agent's main value is keeping 
 // spells out the "when" as well as an explicit "skip it" case, to avoid
 // overcorrecting into creating a task for every trivial request.
 const taskToolGuidance = `create_task/update_task/list_tasks/complete_task track multi-step work outside your own context — unlike your conversation history, tasks survive context trimming, fresh-start resets, and hand-offs between primary and escalation. Use them for a request that will span several turns or tool calls: break the work into tasks up front, mark each in_progress/done as you go, and call list_tasks if you need to recover what's left. Skip them for anything you can finish in one turn — creating a task for a trivial, single-step request just adds noise.`
+
+// memoryToolGuidance is appended to the system prompt whenever the memory
+// tools are registered (mem != nil at the call site, checked the same way as
+// backgroundAgentGuidance/taskToolGuidance — see Run). It used to be baked
+// into systemPromptShared unconditionally, which mandated forget_memory et al.
+// even for tool-agents and background subagents that had no memory tools at
+// all — the exact "mandate without tool" incident from issue #172. The tool
+// contract described here must stay in sync with internal/memory.Schemas.
+const memoryToolGuidance = `**MANDATORY — memory tool actions**: The following require immediate tool calls with NO preamble or confirmation:
+  - User asks about past context or preferences → call get_memory NOW before responding.
+  - User states a preference, decision, or fact → call record_memory NOW. Omit "consumer" to share the fact with both agents (default); set consumer: "primary" or "escalation" only when it's relevant to just that agent.
+  - User says "forget", "remove", "delete" about a percept (by ID, #ID, or description) → call forget_memory NOW. It accepts id (an ID, "#"-prefixed ID, or a one-match description), ids (several such targets in one call), or pattern (deletes every matching percept) — the same matching as the /forget command. Never say "done" or confirm the action without actually calling the tool.`
 
 // buildSystemPrompt constructs the role-aware system prompt.
 // selfName is this agent's configured name (e.g. "gemma-local", "claude").
@@ -1309,12 +1350,38 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		return history, &EscalationSignal{Reason: "user repeated the same question without expressing satisfaction"}
 	}
 
+	effLimits := a.limits
+	if a.isToolAgent {
+		// Excludes start_workflow alongside escalate for the same reason: a
+		// stateless agent-as-tool call has no session/turn for
+		// WorkflowStartSignal's caller (cmd/milk's dispatch layer) to attach
+		// a launched workflow to.
+		effLimits = &config.AgentLimits{ExcludedTools: []string{"escalate", "start_workflow"}}
+		if a.limits != nil {
+			effLimits.IncludedTools = a.limits.IncludedTools
+			effLimits.ExcludedTools = append(append([]string{}, a.limits.ExcludedTools...), "escalate", "start_workflow")
+		}
+	}
+	tools := schemas(mem, a.otelDir, sess, a.toolAgentEntries, a.taskStore, effLimits)
+	if a.mcpToolSet != nil {
+		tools = append(tools, a.mcpToolSet.Schemas(ctx)...)
+	}
+	if a.backgroundManager != nil {
+		tools = append(tools, spawnBackgroundAgentSchema(), cancelBackgroundAgentSchema())
+	}
+
 	systemPrompt := buildSystemPrompt(sess.CWD, a.selfName, a.escalationName, a.workflowRole, a.systemPromptTier, a.disableProjectInstructions)
 	if a.backgroundManager != nil {
 		systemPrompt += "\n\n" + backgroundAgentGuidance
 	}
 	if a.taskStore != nil {
 		systemPrompt += "\n\n" + taskToolGuidance
+	}
+	// The memory-tool mandate is included only when the memory tools actually
+	// survived schema construction + limits filtering — never mandate a tool
+	// the agent doesn't have (issue #172).
+	if hasToolNamed(tools, "get_memory") {
+		systemPrompt += "\n\n" + memoryToolGuidance
 	}
 	if a.customPrompt != "" {
 		systemPrompt = a.customPrompt + "\n\n" + systemPrompt
@@ -1354,25 +1421,6 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 	}
 	msgs = append(msgs, userMsg)
 	userMsgIdx := len(msgs) - 1 // index of the user message that started this turn
-	effLimits := a.limits
-	if a.isToolAgent {
-		// Excludes start_workflow alongside escalate for the same reason: a
-		// stateless agent-as-tool call has no session/turn for
-		// WorkflowStartSignal's caller (cmd/milk's dispatch layer) to attach
-		// a launched workflow to.
-		effLimits = &config.AgentLimits{ExcludedTools: []string{"escalate", "start_workflow"}}
-		if a.limits != nil {
-			effLimits.IncludedTools = a.limits.IncludedTools
-			effLimits.ExcludedTools = append(append([]string{}, a.limits.ExcludedTools...), "escalate", "start_workflow")
-		}
-	}
-	tools := schemas(mem, a.otelDir, sess, a.toolAgentEntries, a.taskStore, effLimits)
-	if a.mcpToolSet != nil {
-		tools = append(tools, a.mcpToolSet.Schemas(ctx)...)
-	}
-	if a.backgroundManager != nil {
-		tools = append(tools, spawnBackgroundAgentSchema(), cancelBackgroundAgentSchema())
-	}
 
 	if a.tagNonce != "" {
 		if a.onNeed != nil {
@@ -1732,13 +1780,23 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 
 // backgroundSystemPrompt returns the system prompt for a background job
 // spawned via spawn_background_agent (ADR-0043): a scoped, self-contained
-// research task with no awareness of any parent conversation.
-func backgroundSystemPrompt(cwd string) string {
+// research task with no awareness of any parent conversation. hasMemoryTools
+// mirrors whether the job's schema list actually carries the memory tools
+// (mem != nil at the call site) — the prompt must never mandate tools the
+// agent doesn't have (issue #172).
+func backgroundSystemPrompt(cwd string, hasMemoryTools bool) string {
 	base := "You are a background research agent forked to answer one self-contained question. " +
 		"You have no knowledge of any parent conversation beyond the task given to you. " +
 		"Investigate using your tools and produce a concise, complete written answer — this is the only thing that will be reported back. " +
 		"Optionally, if it's useful for the caller to know at a glance, end your answer with a machine-readable tag on its own final line: " +
 		`<result status="ok|error|partial" files_touched="path1,path2"/> — omit it entirely when it doesn't add anything (e.g. a pure research/lookup task that touched no files).`
+	if hasMemoryTools {
+		base += "\n\n" +
+			"Memory tools (record_memory, get_memory, list_memory, forget_memory) are available: query memory before re-deriving already-known facts, " +
+			"and record_memory any durable fact this task establishes that future sessions would need. " +
+			"You see only percepts targeted at your role or shared with everyone. " +
+			"Never edit the memory store's files directly — always use the tools."
+	}
 	if cwd == "" {
 		return base
 	}
@@ -1784,9 +1842,9 @@ func ParseBackgroundResult(raw string) (text, status, filesTouched string) {
 // A retried attempt writes into the same out as the attempt(s) before it, so
 // an attached viewer sees the retry happen rather than losing the earlier
 // output — that's intentional, not an oversight.
-func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer) (string, session.TokenUsage, error) {
+func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer, mem *memory.Store) (string, session.TokenUsage, error) {
 	return retryBackgroundTask(ctx, jobID, a.model, func() (string, session.TokenUsage, error) {
-		return a.RunBackgroundTask(ctx, jobID, cwd, task, contextSummary, out)
+		return a.RunBackgroundTask(ctx, jobID, cwd, task, contextSummary, out, mem)
 	})
 }
 
@@ -1833,7 +1891,7 @@ func retryBackgroundTask(ctx context.Context, jobID, model string, fn func() (st
 // docs/prompt-context-management-review.md §9.3: this is inspired by that
 // mechanism, scoped down to fit milk's existing isolation-by-default safety
 // posture rather than a port of it.
-func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer) (string, session.TokenUsage, error) {
+func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer, mem *memory.Store) (string, session.TokenUsage, error) {
 	// Operate on an isolated clone, not a directly. A background job is
 	// spawned into its own goroutine (see Manager.Spawn) and can easily
 	// still be running when the parent agent starts its very next turn on
@@ -1870,12 +1928,12 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, context
 		bgLimits.ExcludedTools = append(append([]string{}, bg.limits.ExcludedTools...), "escalate", "start_workflow")
 	}
 	bgSess := &session.Session{CWD: cwd}
-	tools := schemas(nil, bg.otelDir, bgSess, nil, nil, bgLimits)
+	tools := schemas(mem, bg.otelDir, bgSess, nil, nil, bgLimits)
 	if bg.mcpToolSet != nil {
 		tools = append(tools, bg.mcpToolSet.Schemas(ctx)...)
 	}
 
-	msgs := []Message{{Role: "system", Content: backgroundSystemPrompt(cwd)}}
+	msgs := []Message{{Role: "system", Content: backgroundSystemPrompt(cwd, hasToolNamed(tools, "get_memory"))}}
 	if contextSummary != "" {
 		msgs = append(msgs, Message{
 			Role:    "system",
@@ -1885,7 +1943,7 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, context
 	msgs = append(msgs, Message{Role: "user", Content: task})
 	userMsgIdx := len(msgs) - 1
 
-	resultMsgs, err := bg.runToolLoop(ctx, msgs, tools, out, bgSess, nil, task, userMsgIdx, nil)
+	resultMsgs, err := bg.runToolLoop(ctx, msgs, tools, out, bgSess, mem, task, userMsgIdx, nil)
 	if err != nil {
 		// Preserve partial work: resultMsgs holds the whole tool trajectory
 		// up to the failure. Returning its best answer (instead of "") keeps
@@ -1976,6 +2034,11 @@ func (a *Agent) cloneForBackground() *Agent {
 		limits:          a.limits,
 		maxPayloadBytes: a.maxPayloadBytes,
 		promptCaching:   a.promptCaching,
+		// Resolve the memory-visibility consumer now: a background job is a
+		// fork of the spawning agent and sees the same percepts it does
+		// (issue #172).
+		memCaller:    a.memoryCaller(),
+		memCallerSet: true,
 	}
 }
 
@@ -2061,6 +2124,20 @@ func (a *Agent) checkPermission(tool, summary, commandArg string) (allowed bool,
 // wraps tool results in <tool_response> automatically.
 // isMemoryReadTool returns true for memory tools whose results are injected into
 // the local context and therefore subject to the byte-cap limit.
+// hasToolNamed reports whether a built tool-schema list contains the named
+// tool. Used to keep system-prompt mandates in lockstep with the tools the
+// agent actually got (post filterTools/limits) — issue #172.
+func hasToolNamed(tools []map[string]any, name string) bool {
+	for _, t := range tools {
+		if f, ok := t["function"].(map[string]any); ok {
+			if n, ok := f["name"].(string); ok && n == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func isMemoryReadTool(name string) bool {
 	return name == "get_memory" || name == "list_memory"
 }
@@ -2331,7 +2408,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 		role := agentRoleForMetrics(a.escalationName)
 		job := a.backgroundManager.Spawn(args.Label, args.Task, role, a.model,
 			func(jobCtx context.Context, jobID string, jobOut io.Writer) (string, session.TokenUsage, error) {
-				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, contextSummary, jobOut)
+				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, contextSummary, jobOut, mem)
 			})
 		result := toolResult{Output: fmt.Sprintf("Spawned background agent %s (%q). You will be notified when it completes.", job.ID, args.Label)}.String()
 		return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}
@@ -2431,7 +2508,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 	}
 
 	toolStart := time.Now()
-	result, escalate := dispatchTool(toolCtx, tc.Function.Name, tc.Function.Arguments, sess, mem, a.otelDir, a.taskStore)
+	result, escalate := dispatchTool(toolCtx, tc.Function.Name, tc.Function.Arguments, sess, mem, a.memoryCaller(), a.otelDir, a.taskStore)
 
 	// Surface per-tool timeout as a clear error message.
 	if toolCtx.Err() != nil && result == "" {
@@ -2476,7 +2553,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 	switch {
 	case isMemoryReadTool(tc.Function.Name):
 		if a.memCfg.RelevanceGateEnabled && tc.Function.Name == "list_memory" && mem != nil {
-			result = memory.DispatchListMemoryFiltered(ctx, mem, tc.Function.Arguments, userPrompt)
+			result = memory.DispatchListMemoryFiltered(ctx, mem, tc.Function.Arguments, userPrompt, a.memoryCaller())
 		}
 		result = capToolResult(result, a.memCfg.ResultMaxBytes)
 	case isSessionContextTool(tc.Function.Name):

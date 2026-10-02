@@ -175,10 +175,29 @@ func (s Signal) String() string {
 
 // Verdict is emitted when a detection signal fires.
 type Verdict struct {
-	Signal          Signal
-	Confidence      float64 // 0.0–1.0
+	Signal Signal
+	// Confidence is an internal severity score in [0,1] driving the
+	// warn-vs-auto-interrupt policy and log lines. It is a fixed per-signal
+	// constant (or, for token_velocity, a rough ratio heuristic) — NOT a
+	// measured probability — so it must never be rendered to the user as a
+	// "confidence N%" (issue #173). token_velocity's message carries a
+	// qualitative severity instead.
+	Confidence      float64
 	Message         string
-	ShouldInterrupt bool // true when confidence is high enough for auto-interrupt
+	ShouldInterrupt bool // true when the signal is strong enough for auto-interrupt
+}
+
+// IsConsumption reports whether s is a consumption/volume threshold crossing
+// (reasoning_chunk_flood, token_velocity, silent_burn, turn_flood) rather than
+// repetition-based loop evidence. A counter crossing a threshold is not
+// evidence of repetition: UI surfaces render these as "[⚠ consumption: …]",
+// distinct from "[⚠ loop detected: …]" (issue #173).
+func (s Signal) IsConsumption() bool {
+	switch s {
+	case SignalReasoningChunkFlood, SignalTokenVelocity, SignalSilentBurn, SignalTurnFlood:
+		return true
+	}
+	return false
 }
 
 // TurnSummary is the caller's description of one completed turn.
@@ -478,10 +497,11 @@ func (d *Detector) FeedReasoningChunk(text string) []Verdict {
 		d.reasonChunkCount >= d.cfg.ReasoningChunkFloodThreshold {
 		d.firedReasonFlood = true
 		v := Verdict{
-			Signal:          SignalReasoningChunkFlood,
-			Confidence:      0.85,
-			Message:         fmt.Sprintf("reasoning chunk flood: %d chunks in single turn", d.reasonChunkCount),
-			ShouldInterrupt: false, // medium confidence — warn only
+			Signal:     SignalReasoningChunkFlood,
+			Confidence: 0.85,
+			Message:    fmt.Sprintf("%d reasoning chunks this turn (limit %d)", d.reasonChunkCount, d.cfg.ReasoningChunkFloodThreshold),
+			// Consumption threshold crossing — warn only, never an interrupt.
+			ShouldInterrupt: false,
 		}
 		logger.Warn("loop: SIGNAL FIRED", "signal", v.Signal, "confidence", v.Confidence, "interrupt", v.ShouldInterrupt, "message", v.Message)
 		verdicts = append(verdicts, v)
@@ -511,19 +531,30 @@ func (d *Detector) checkTokenVelocity() *Verdict {
 		return nil
 	}
 
-	// Confidence scales with how far above threshold we are.
+	// Severity scales with how far above threshold we are — the one signal
+	// with a real heuristic score behind it, surfaced qualitatively (issue
+	// #173 keeps a severity only where the score is computed, never as a
+	// fake-precision percentage).
 	ratio := float64(totalTokens) / float64(d.cfg.TokenVelocityThreshold)
 	confidence := 0.5 + 0.1*(ratio-1.0) // 1x=0.5, 2x=0.6, 3x=0.7, ...
 	if confidence > 0.9 {
 		confidence = 0.9
 	}
+	severity := "low"
+	switch {
+	case confidence >= 0.8:
+		severity = "high"
+	case confidence >= 0.6:
+		severity = "moderate"
+	}
 
 	// Token velocity is warn-only — high consumption is normal for active work.
 	// Only auto-interrupt when the agent is clearly stuck (other signals).
 	return &Verdict{
-		Signal:          SignalTokenVelocity,
-		Confidence:      confidence,
-		Message:         "high token burn rate",
+		Signal:     SignalTokenVelocity,
+		Confidence: confidence,
+		Message: fmt.Sprintf("token burn %d in %v (limit %d) — severity: %s",
+			totalTokens, window, d.cfg.TokenVelocityThreshold, severity),
 		ShouldInterrupt: false,
 	}
 }
@@ -539,10 +570,11 @@ func (d *Detector) checkSilentBurn(turn TurnSummary) *Verdict {
 	}
 
 	return &Verdict{
-		Signal:          SignalSilentBurn,
-		Confidence:      0.6,
-		Message:         "high input tokens with minimal output",
-		ShouldInterrupt: false, // medium confidence — warn only
+		Signal:     SignalSilentBurn,
+		Confidence: 0.6,
+		Message: fmt.Sprintf("%d input tokens with minimal output (limit %d)",
+			turn.InputTokens, d.cfg.MaxSilentBurnTokens),
+		ShouldInterrupt: false, // warn only
 	}
 }
 
@@ -568,10 +600,11 @@ func (d *Detector) checkTurnFlood() *Verdict {
 	}
 
 	return &Verdict{
-		Signal:          SignalTurnFlood,
-		Confidence:      0.5,
-		Message:         "many turns without user input",
-		ShouldInterrupt: false, // low confidence — warn only
+		Signal:     SignalTurnFlood,
+		Confidence: 0.5,
+		Message: fmt.Sprintf("%d turns without user input (limit %d)",
+			streak, n),
+		ShouldInterrupt: false, // warn only
 	}
 }
 

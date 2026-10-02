@@ -18,9 +18,23 @@ milk keeps a **Percept store** — small remembered facts that survive across se
 | `/forget <pattern or #id>` | Delete matching percepts |
 | `/panel memory` | Toggle the right-side memory panel (open by default) |
 
-The `#id` form accepts a short hex prefix (4–64 chars); the `#` is optional. The primary agent can also call `get_memory`, `list_memory`, and `forget_memory` directly (same short-ID resolution).
+The `#id` form accepts a short hex prefix (4–64 chars); the `#` is optional.
 
-The memory panel is a 34-column right-side panel with SESSION / GLOBAL / GLOBAL (core) sections, polling every 5s. Each percept shows a `#<6hex>` ID, content wrapped to 2 lines, and a right-aligned weight; percepts updated in the last 60s are highlighted.
+### Memory tools
+
+Agents backed by an inference server (HTTP or Bedrock) get four memory tools with no configuration — the same store the slash commands above operate on (issue #172):
+
+| Tool | Parameters | Returns |
+|---|---|---|
+| `record_memory` | `content`, optional `subject`, `producer`, `consumer` | new percept ID, or a "skipped — similar percept exists" note |
+| `get_memory` | `query`, optional `min_confidence`, `max_results` | relevant percepts, best-first |
+| `list_memory` | optional `scope`, `producer`, `consumer`, `min_w`, `pattern` | percept table |
+| `forget_memory` | `id` and/or `ids` and/or `pattern` | deleted percepts — or an error |
+
+- **Who has them**: live primary and escalation turns, workflow roles, agent-as-tool peers (`agent_<name>` calls), and background subagents (`spawn_background_agent`) — the last two inherit their invoker's memory visibility. `claude-cli` and subprocess agents (aider, smolagents) don't use milk's tool loop and keep their existing write-path tags instead.
+- **`forget_memory` matching is the `/forget` contract**: `id`/`ids` accept a percept ID (leading `#` optional), an ID prefix, or a description that must match exactly one percept (several matches are ambiguous — an error listing them); `pattern` deletes every percept whose content contains the substring (the batch path). All targets resolve before anything is deleted — an unresolvable or ambiguous target returns an error-shaped result and the store is left untouched.
+- **Visibility is role-derived**: `get_memory`/`list_memory` see the calling agent's own consumer tag plus shared percepts — an escalation-role call also sees `consumer: "escalation"` percepts (it used to be hardcoded to the primary view). `list_memory`'s `consumer` argument narrows to a named tag explicitly.
+- **Limits apply**: `limits.included_tools`/`limits.excluded_tools` scope the memory tools like any other built-in. The system prompt's memory-tool mandate is only injected when the tools actually survived that filtering — a model is never told to call a tool it doesn't have.
 
 ### Tuning
 
@@ -114,9 +128,9 @@ Operates at the tool-execution layer. Catches the most common real-world loops:
 | `bash_retry` | Same failing bash command retried without success | 3 consecutive failures |
 | `action_streak` | Non-progressing actions of the same kind (edit or verify) | 4 consecutive failures |
 
-**Intra-turn** (the primary case): every streaming chunk passes through a ring buffer of the last 50 chunks, checked two ways — consecutive identical chunks, and (for longer chunks only) the same chunk recurring anywhere in the window without needing adjacency. Either fires at high confidence and auto-interrupts the turn. **Cross-turn**: after each turn, token velocity, silent burn, and turn count are checked. **Tool-level**: after each tool call, edit similarity, bash retries, and action streaks are checked.
+**Intra-turn** (the primary case): every streaming chunk passes through a ring buffer of the last 50 chunks, checked two ways — consecutive identical chunks, and (for longer chunks only) the same chunk recurring anywhere in the window without needing adjacency. Either one auto-interrupts the turn. **Cross-turn**: after each turn, token velocity, silent burn, and turn count are checked. **Tool-level**: after each tool call, edit similarity, bash retries, and action streaks are checked.
 
-Status bar shows `⚠ loop — auto-interrupting` (high confidence) or `⚠ <signal>` (warning); the transcript logs `[⚠ loop detected: <signal> (confidence N%)]`. A user turn resets all warnings and the turn-flood counter. Works identically across every provider — the intra-turn monitor sits at the TUI layer, not inside any specific agent driver.
+Transcript messages split two categories: `[⚠ loop detected: …]` for genuine repetition-based loop evidence (chunk/n-gram repetition, streaks, duplicate tool calls, doom loop) and `[⚠ consumption: …]` for consumption/volume threshold crossings (`reasoning_chunk_flood`, `token_velocity`, `silent_burn`, `turn_flood`) — a counter crossing a threshold is a burn-rate warning, not evidence of a loop. No numeric confidence percentage is shown anywhere: the internal severity score is a fixed per-signal constant, not a measured probability (`token_velocity`, the one signal with a computed heuristic, carries a qualitative `severity:` word instead). The status bar shows `[⚠ <category> — auto-interrupted]` when a signal auto-interrupts the turn, or `[⚠ <category>: <message>]` for warn-only signals. A user turn resets all warnings and the turn-flood counter. Works identically across every provider — the intra-turn monitor sits at the TUI layer, not inside any specific agent driver.
 
 ```json
 {

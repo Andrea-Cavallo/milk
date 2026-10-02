@@ -888,8 +888,11 @@ type model struct {
 
 	// loop detection
 	loopDetector  *loop.Detector
-	loopInterrupt bool   // true when a high-confidence loop signal fired
-	loopWarning   string // non-empty when a medium-confidence signal fired
+	loopInterrupt bool // true when an auto-interrupting loop signal fired
+	// loopInterruptLabel is the interrupting signal's category ("loop" or
+	// "consumption") for the status-bar badge — issue #173.
+	loopInterruptLabel string
+	loopWarning        string // non-empty when a warn-only signal fired
 
 	// injected dependencies
 	ctx    context.Context
@@ -1213,19 +1216,20 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 				msg += " — consider /escalate"
 			}
 			if v.Confidence >= 0.8 {
-				m.appendTranscript(yellow(fmt.Sprintf("[⚠ loop detected: %s (confidence %.0f%%)]\n", msg, v.Confidence*100)))
+				m.appendTranscript(yellow(loopSignalLine(v, msg)))
 				if m.loopDetector != nil && v.ShouldInterrupt {
 					m.loopInterrupt = true
+					m.loopInterruptLabel = loopSignalLabel(v)
 				}
 				if v.Signal == loop.SignalTokenVelocity && m.loopWarning == "" {
-					// token_velocity's own confidence (0.9) is always >= 0.8,
+					// token_velocity's own severity score is always >= 0.8,
 					// so without this it would only ever reach the transcript
 					// line above — never the status bar the escalate
 					// suggestion is actually meant to surface in.
-					m.loopWarning = fmt.Sprintf("⚠ %s", msg)
+					m.loopWarning = fmt.Sprintf("⚠ %s: %s", loopSignalLabel(v), msg)
 				}
 			} else if v.Confidence >= 0.5 && m.loopWarning == "" {
-				m.loopWarning = fmt.Sprintf("⚠ %s", msg)
+				m.loopWarning = fmt.Sprintf("⚠ %s: %s", loopSignalLabel(v), msg)
 			}
 		}
 		_ = turnDelta // used for future velocity display
@@ -1825,9 +1829,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Intra-turn loop detection: feed chunk and check for repetition.
 		if m.loopDetector != nil {
 			for _, v := range m.loopDetector.FeedChunk(msg.text) {
-				m.appendTranscript(yellow(fmt.Sprintf("\n[⚠ loop detected: %s (confidence %.0f%%)]\n", v.Message, v.Confidence*100)))
+				m.appendTranscript(yellow("\n" + loopSignalLine(v, v.Message)))
 				if v.ShouldInterrupt {
 					m.loopInterrupt = true
+					m.loopInterruptLabel = loopSignalLabel(v)
 					if m.cancelTurn != nil {
 						m.cancelTurn()
 					}
@@ -1844,9 +1849,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// repetition threshold — see internal/loop.
 		if m.loopDetector != nil {
 			for _, v := range m.loopDetector.FeedReasoningChunk(msg.text) {
-				m.appendTranscript(yellow(fmt.Sprintf("\n[⚠ loop detected: %s (confidence %.0f%%)]\n", v.Message, v.Confidence*100)))
+				m.appendTranscript(yellow("\n" + loopSignalLine(v, v.Message)))
 				if v.ShouldInterrupt {
 					m.loopInterrupt = true
+					m.loopInterruptLabel = loopSignalLabel(v)
 					if m.cancelTurn != nil {
 						m.cancelTurn()
 					}
@@ -2974,7 +2980,7 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	// of that channel and it is blocked waiting for Update to return.
 	return m, func() tea.Msg {
 		job := mgr.Spawn(label, task, "user", modelName, func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
-			return agent.RunBackgroundTask(ctx, jobID, cwd, task, "", out)
+			return agent.RunBackgroundTask(ctx, jobID, cwd, task, "", out, m.mem)
 		})
 		return backgroundSpawnedMsg{jobID: job.ID, label: label}
 	}
@@ -3049,6 +3055,7 @@ func (m model) submitInput(input, label string) (tea.Model, tea.Cmd) {
 			IsUserTurn: true,
 		})
 		m.loopInterrupt = false
+		m.loopInterruptLabel = ""
 		m.loopWarning = ""
 	}
 
@@ -3115,6 +3122,7 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 	m.currentTurnThinking.Reset()
 	m.thinkingActiveInTurn = false
 	m.loopInterrupt = false
+	m.loopInterruptLabel = ""
 	m.loopWarning = ""
 	if m.loopDetector != nil {
 		m.loopDetector.ResetTurn()
@@ -4093,4 +4101,26 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 		_ = mem.PruneGlobal(cfg.PerceptStoreSizeLimit())
 	}
 	return err
+}
+
+// loopSignalLabel returns the UI category label for a loop.Verdict:
+// "consumption" for consumption/volume threshold crossings (not evidence of
+// repetition) and "loop" for genuine repetition-based loop evidence — issue
+// #173.
+func loopSignalLabel(v loop.Verdict) string {
+	if v.Signal.IsConsumption() {
+		return "consumption"
+	}
+	return "loop"
+}
+
+// loopSignalLine renders a loop.Verdict line for the transcript. The numeric
+// confidence is deliberately never rendered — it is a per-signal constant (or
+// a rough heuristic), not a measured probability (issue #173).
+func loopSignalLine(v loop.Verdict, msg string) string {
+	cat := "loop detected"
+	if v.Signal.IsConsumption() {
+		cat = "consumption"
+	}
+	return fmt.Sprintf("[⚠ %s: %s]\n", cat, msg)
 }

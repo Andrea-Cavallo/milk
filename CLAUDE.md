@@ -212,8 +212,8 @@ Note: consecutive reasoning chunk repetition was removed from TUI signals — no
 3. **Duplicate tool calls**: After each iteration, tool calls are checked against previously executed calls. Exact matches trigger a nudge (not termination), similarly to MiMo-Code's approach (an independent implementation compared during a 2026-09-29 review, not a port — see docs/prompt-context-management-review.md).
 4. **Doom-loop gate**: A separate, independent tracker compares each iteration's full tool-call batch signature (order-sensitive, exact-match) to the immediately preceding iteration's. On the 3rd consecutive match, raises a `doom_loop` permission ask through the same interactive-ask plumbing ordinary tool permissions use — approving resets the streak and lets the model continue; denying, or having no one to ask (background job/workflow role), terminates the turn immediately.
 5. **TUI-level**: `FeedChunk()` is called for every streaming chunk. A ring buffer tracks the last 50 chunks. Cross-turn signals fire after each turn completes.
-6. **Status bar**: Shows `⚠ loop — auto-interrupted` or `⚠ <signal>` when a signal fires.
-7. **Transcript**: Shows `[⚠ loop detected: <signal> (confidence N%)]` for high-confidence signals.
+6. **Status bar**: Shows `[⚠ loop — auto-interrupted]` / `[⚠ consumption — auto-interrupted]` on an auto-interrupt, or `[⚠ <category>: <message>]` for warn-only signals.
+7. **Transcript**: Shows `[⚠ loop detected: …]` for repetition-based loop evidence and `[⚠ consumption: …]` for consumption/volume threshold crossings (`reasoning_chunk_flood`, `token_velocity`, `silent_burn`, `turn_flood`). No numeric confidence percentage is rendered anywhere — the internal severity score is a fixed per-signal constant, not a measured probability (issue #173).
 
 ### Configuration
 

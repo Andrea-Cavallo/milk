@@ -153,6 +153,13 @@ type TurnRunner interface {
 type localRunner struct {
 	agent *local.Agent
 	name  string
+	// mem is the memory store handle made available to this runner's
+	// stateless tool-agent calls (RunToolCall), so the four memory tools
+	// (record_memory, get_memory, list_memory, forget_memory) are registered
+	// and functional there too — issue #172: a tool-agent's system prompt
+	// mandates those tools, so it must actually have them. nil disables them
+	// (same as every other mem=nil call site).
+	mem *memory.Store
 }
 
 func newLocalRunner(agent *local.Agent, name string) *localRunner {
@@ -373,7 +380,7 @@ func (r *localRunner) RunToolCall(ctx context.Context, _ config.Config, prompt s
 		// pendingImageParts consumer.
 		r.agent.SetPendingImageParts(images)
 	}
-	updatedMsgs, err := r.agent.Run(ctx, nil, prompt, out, toolSess, nil)
+	updatedMsgs, err := r.agent.Run(ctx, nil, prompt, out, toolSess, r.mem)
 	if err != nil {
 		// Defense in depth: WithToolAgentRole already excludes the "escalate" tool,
 		// but if one somehow still fires (e.g. a stale schema list), degrade to a
