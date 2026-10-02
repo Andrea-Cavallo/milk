@@ -2,38 +2,30 @@ package acp
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
-// elicitation wiring (elicitation.go): elicitation/create +
-// elicitation/complete behind Host.Elicit, wish/willing confirmations.
+// elicitation wiring (elicitation.go): elicitation/create + elicitation/complete
+// behind Host.Elicit — generic structured user-input form/select prompts.
 
-func TestWishConfirmationRequestShape(t *testing.T) {
-	req := WishConfirmation("publish the wire contract")
-	if !strings.Contains(req.Message, "keep wish alive or mark fulfilled") {
-		t.Fatalf("message = %q", req.Message)
-	}
-	schema := req.Schema
-	if schema.Type != "object" {
-		t.Fatalf("schema type = %q", schema.Type)
-	}
-	prop, ok := schema.Properties["disposition"]
-	if !ok {
-		t.Fatalf("no disposition property: %+v", schema.Properties)
-	}
-	if prop.Type != "string" || len(prop.OneOf) != 2 {
-		t.Fatalf("disposition = %+v", prop)
-	}
-	byConst := map[string]string{}
-	for _, opt := range prop.OneOf {
-		byConst[opt.Const] = opt.Title
-	}
-	if byConst[WishKeepAlive] == "" || byConst[WishFulfilled] == "" {
-		t.Fatalf("enum options = %v", byConst)
-	}
-	if len(schema.Required) != 1 || schema.Required[0] != "disposition" {
-		t.Fatalf("required = %v", schema.Required)
+// exampleElicitationRequest builds a minimal, generic single-select prompt
+// for exercising ElicitSession/ACPHost.Elicit's mechanics — not tied to any
+// specific milk feature (Elicit has no production caller yet; see its doc
+// comment in acp.go).
+func exampleElicitationRequest(message string) ElicitationRequest {
+	return ElicitationRequest{
+		Message: message,
+		Schema: ElicitationSchema{
+			Type:  "object",
+			Title: "Confirm",
+			Properties: map[string]ElicitationProperty{
+				"choice": SelectProperty("Choice",
+					EnumOption{Const: "yes", Title: "Yes"},
+					EnumOption{Const: "no", Title: "No"},
+				),
+			},
+			Required: []string{"choice"},
+		},
 	}
 }
 
@@ -44,11 +36,11 @@ func TestElicitSessionRoundTrip(t *testing.T) {
 		}
 		return CreateElicitationResponse{
 			Action:  ElicitationAccept,
-			Content: map[string]any{"disposition": WishFulfilled},
+			Content: map[string]any{"choice": "yes"},
 		}, nil
 	}}
 	host := NewACPHost(conn, "sess-9")
-	res, err := host.Elicit(context.Background(), WishConfirmation("ship it"))
+	res, err := host.Elicit(context.Background(), exampleElicitationRequest("proceed?"))
 	if err != nil {
 		t.Fatalf("Elicit: %v", err)
 	}
@@ -83,13 +75,8 @@ func TestElicitSessionRoundTrip(t *testing.T) {
 		t.Fatalf("complete params = %v", done)
 	}
 
-	// Result + wish/willing parsing.
-	decision, err := ParseWishConfirmation(res)
-	if err != nil {
-		t.Fatalf("ParseWishConfirmation: %v", err)
-	}
-	if decision.Action != ElicitationAccept || decision.Disposition != WishFulfilled {
-		t.Fatalf("decision = %+v", decision)
+	if res.Action != ElicitationAccept || res.Content["choice"] != "yes" {
+		t.Fatalf("result = %+v", res)
 	}
 }
 
@@ -98,26 +85,12 @@ func TestElicitSessionDecline(t *testing.T) {
 		return CreateElicitationResponse{Action: ElicitationDecline}, nil
 	}}
 	host := NewACPHost(conn, "sess-9")
-	res, err := host.Elicit(context.Background(), WishConfirmation("keep going?"))
+	res, err := host.Elicit(context.Background(), exampleElicitationRequest("keep going?"))
 	if err != nil {
 		t.Fatalf("Elicit: %v", err)
 	}
-	decision, err := ParseWishConfirmation(res)
-	if err != nil {
-		t.Fatalf("ParseWishConfirmation: %v", err)
-	}
-	if decision.Action != ElicitationDecline || decision.Disposition != "" {
-		t.Fatalf("decision = %+v", decision)
-	}
-}
-
-func TestParseWishConfirmationUnknownDisposition(t *testing.T) {
-	_, err := ParseWishConfirmation(ElicitationResult{
-		Action:  ElicitationAccept,
-		Content: map[string]any{"disposition": "banana"},
-	})
-	if err == nil {
-		t.Fatal("expected error for unknown disposition")
+	if res.Action != ElicitationDecline {
+		t.Fatalf("result = %+v", res)
 	}
 }
 

@@ -38,7 +38,7 @@ const (
 	// a SessionConfigOption change (/think, /agent switch, /model).
 	MethodSessionSetConfigOption = "session/set_config_option"
 	// MethodElicitationCreate is the agent->client structured-input request
-	// (wish/willing confirmations and other form prompts).
+	// (form/select prompts).
 	MethodElicitationCreate = "elicitation/create"
 	// MethodElicitationComplete is the agent->client notification closing an
 	// elicitation once its result has been consumed.

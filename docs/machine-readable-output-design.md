@@ -168,7 +168,6 @@ To reach TUI parity an external host must reconstruct, live:
 | notification toasts (ADR-0048) | turn-unrelated notifications with command hints + history |
 | task panel (F2) / background agents (F3) / workflows (F4) | task lifecycle, live buffers, stage progress |
 | permission prompts (ADR-0013/0015) | **bidirectional**: request/response with the user |
-| wish/willing confirmations | **bidirectional**: structured user input |
 | memory panel (F1) | percept/current-need records written during the turn |
 | input completion | slash commands + tool names |
 | routing decisions | which agent won and why |
@@ -504,7 +503,7 @@ map (authoritative names from `schema/v2/meta.json`):
 | `system/commands` | `available_commands_update` (`availableCommands`, `TextCommandInput.hint`) | milk's slash commands become editor input completion, natively |
 | `system/config_option` | `config_option_update` + client calls `session/set_config_option` | `/think on|off`, `/agent switch`, `/model` as `SessionConfigOption`s (v2 replaced v1's `session/set_mode`) |
 | permission prompt (ADR-0013 suggestions) | `session/request_permission` (`title`, `description`, `subject` = tool call or command, `options[]` with `PermissionOptionKind` `allow_once|allow_always|reject_once|reject_always`) → outcome `selected(optionId)|cancelled` | maps field-for-field onto milk's structured permission records |
-| wish/willing confirmations, "keep wish alive or mark fulfilled" | `elicitation/create` (form/select schema: `ElicitationSchema`, `EnumOption`, `MultiSelectItems`) → `elicitation/complete` | ACP's structured-input mechanism; no custom dialog protocol needed |
+| structured user input prompts | `elicitation/create` (form/select schema: `ElicitationSchema`, `EnumOption`, `MultiSelectItems`) → `elicitation/complete` | ACP's structured-input mechanism; no custom dialog protocol needed |
 | interrupt | `session/cancel` (client→agent) | aborts the in-flight turn; terminal update carries `stopReason: cancelled`/`cancelled` |
 | PTY pane (ADR-0047-ish process output) | `terminal_update` + `terminal_output_chunk` (agent-owned terminals, v2) | v2's terminal model is agent-owned: milk runs the PTYs and streams output — exactly milk's `internal/livebuf` + `cmd/milk/attach.go` shape |
 | `result` (§6.4) | `session/prompt` response (`messageId`) + terminal `state_update` (`idle`, `stopReason`) + `usage_update` | v2 ends turns via state, not a result blob; `usage_update` carries `used`/`size` (context window) + `cost` (`amount`,`currency`) — milk maps `cache_read`→used-context accounting and emits `cost` only when a pricing table exists |
@@ -524,7 +523,7 @@ Coverage map (batch mode §6 forms in parentheses):
 | tasks/background agents/workflows | `tool_call_update` tree + `plan_update` (`task_*`, `background_tasks_changed`) | none |
 | live-attach view (ADR-0047) | `tool_call_content_chunk`, `terminal_output_chunk` (`task_progress`) | none |
 | permission prompts | `session/request_permission` (`--permission-mode` flags in batch) | none |
-| wish/willing prompts | `elicitation/create` (batch: not applicable) | none |
+| structured input prompts | `elicitation/create` (batch: not applicable) | none |
 | memory panel | `milk/memory` (`system/memory`) | none |
 | input completion | `available_commands_update` (`system/commands`) | none |
 | input history, selection/copy, welcome screen | — | intentionally out of scope (client chrome, not agent state) |
@@ -557,7 +556,7 @@ milk's interactive surfaces are currently TUI-shaped calls sprinkled through
 type Host interface {
     Notify(Event)                              // toasts, warnings, route, memory…
     RequestPermission(PermissionRequest) (PermissionOutcome, error)  // ADR-0013/0015
-    Elicit(ElicitationRequest) (ElicitationResult, error)            // wish/willing prompts
+    Elicit(ElicitationRequest) (ElicitationResult, error)            // structured input prompts
     State(StateUpdate)                         // running/idle/requires_action
 }
 ```
@@ -570,9 +569,9 @@ type Host interface {
 
 Concretely this extracts from `cmd/milk`: the permission prompt path
 (`main.go:859` writes a prompt to `os.Stdout` — becomes `Host.RequestPermission`),
-toast dispatch (ADR-0048), wish/willing confirmations, and the status-bar data
-feed. The turn loop, router, dispatch, agents and memory stay untouched above
-the interface.
+toast dispatch (ADR-0048), structured user-input prompts, and the status-bar
+data feed. The turn loop, router, dispatch, agents and memory stay untouched
+above the interface.
 
 ### 8.2 One emitter, zero direct writes
 
@@ -676,7 +675,7 @@ Provider normalization (applies to all transports once, at the model layer):
 3. **Phase 3 — parity surface.** `plan_update` (workflows → F4),
    background-agent tool trees + `tool_call_content_chunk` (F3/attach),
    `terminal_update|terminal_output_chunk` (PTY pane), `elicitation/create`
-   (wish/willing), `available_commands_update` + `session/set_config_option`
+   (structured input), `available_commands_update` + `session/set_config_option`
    (slash commands, `/think`, `/agent switch`, `/model`), `ExtNotification`s
    (toasts, warnings, memory, route), `session_info_update._meta`.
 4. **Phase 4 — batch mode + contract hardening.**

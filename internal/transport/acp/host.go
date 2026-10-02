@@ -19,8 +19,7 @@ type Host interface {
 	// (session/request_permission; ADR-0013/0015).
 	RequestPermission(ctx context.Context, req PermissionRequest) (PermissionOutcome, error)
 	// Elicit runs a structured user-input round trip
-	// (elicitation/create → elicitation/complete): wish/willing confirmations
-	// and other form prompts.
+	// (elicitation/create → elicitation/complete): form/select prompts.
 	Elicit(ctx context.Context, req ElicitationRequest) (ElicitationResult, error)
 	// State reports session state changes (state_update:
 	// running|idle|requires_action).
@@ -138,7 +137,7 @@ func (h *ACPHost) RequestPermission(ctx context.Context, req PermissionRequest) 
 	return PermissionOutcome{Cancelled: true}, nil
 }
 
-// Elicit implements Host (wish/willing confirmations and other form prompts).
+// Elicit implements Host (structured user-input form/select prompts).
 func (h *ACPHost) Elicit(ctx context.Context, req ElicitationRequest) (ElicitationResult, error) {
 	return h.elicit.Elicit(ctx, req)
 }

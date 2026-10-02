@@ -7,10 +7,9 @@ import (
 )
 
 // elicitation/create + elicitation/complete — ACP's structured user-input
-// round trip, wired behind Host.Elicit. milk's wish/willing confirmations
-// ("keep wish alive or mark fulfilled") are exactly the shape this mechanism
-// exists for: a form/select prompt with a typed result, no custom dialog
-// protocol (design §7.1).
+// round trip, wired behind Host.Elicit: a form/select prompt with a typed
+// result, no custom dialog protocol (design §7.1). No production caller
+// exists yet (see Host.Elicit's doc comment and cmd/milk/host_acp.go).
 
 // Elicitation actions reported by elicitation/create (open-set).
 const (
@@ -171,53 +170,4 @@ func (e *ElicitSession) allocateID() ElicitationID {
 	defer e.mu.Unlock()
 	e.next++
 	return ElicitationID(fmt.Sprintf("elicit-%d", e.next))
-}
-
-// --- wish/willing confirmations --------------------------------------------
-
-// Wish dispositions offered by a wish/willing confirmation.
-const (
-	// WishKeepAlive keeps the wish pending ("keep wish alive").
-	WishKeepAlive = "keep_alive"
-	// WishFulfilled marks the wish fulfilled.
-	WishFulfilled = "fulfilled"
-)
-
-// WishConfirmation builds the wish/willing confirmation prompt: "keep wish
-// alive or mark fulfilled", as a titled single-select form (design §7.1).
-func WishConfirmation(wish string) ElicitationRequest {
-	return ElicitationRequest{
-		Message: fmt.Sprintf("wish/willing confirmation: %s — keep wish alive or mark fulfilled?", wish),
-		Schema: ElicitationSchema{
-			Type:  "object",
-			Title: "Wish confirmation",
-			Properties: map[string]ElicitationProperty{
-				"disposition": SelectProperty("Disposition",
-					EnumOption{Const: WishKeepAlive, Title: "Keep wish alive"},
-					EnumOption{Const: WishFulfilled, Title: "Mark fulfilled"},
-				),
-			},
-			Required: []string{"disposition"},
-		},
-	}
-}
-
-// WishDecision is a parsed wish/willing confirmation result.
-type WishDecision struct {
-	Action      string // "accept" | "decline" | "cancel" (open-set)
-	Disposition string // WishKeepAlive | WishFulfilled when accepted
-}
-
-// ParseWishConfirmation validates a wish/willing confirmation result.
-func ParseWishConfirmation(res ElicitationResult) (WishDecision, error) {
-	if res.Action != ElicitationAccept {
-		return WishDecision{Action: res.Action}, nil
-	}
-	disp, _ := res.Content["disposition"].(string)
-	switch disp {
-	case WishKeepAlive, WishFulfilled:
-		return WishDecision{Action: ElicitationAccept, Disposition: disp}, nil
-	default:
-		return WishDecision{Action: res.Action}, fmt.Errorf("acp: wish confirmation: unknown disposition %q", disp)
-	}
 }
