@@ -572,12 +572,12 @@ func (r *cliRunner) Execute(
 	var askBuf bytes.Buffer
 	sw := &switchWriter{target: out}
 	prevOnToolUse := agent.OnToolUseCallback()
-	agent = agent.WithOnToolUse(func(name string) {
+	agent = agent.WithOnToolUse(func(id, name string) {
 		if name == "AskUserQuestion" {
 			sw.redirectTo(&askBuf)
 		}
 		if prevOnToolUse != nil {
-			prevOnToolUse(name)
+			prevOnToolUse(id, name)
 		}
 	})
 

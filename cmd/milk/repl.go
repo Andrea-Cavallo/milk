@@ -3283,10 +3283,10 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 			WithOAuthRequiredHandler(func(serverName, authURL string) {
 				send(oauthRequiredMsg{serverName: serverName, authURL: authURL})
 			}).
-			WithOnToolUse(func(name string) {
+			WithOnToolUse(func(id, name string) {
 				send(toolUseMsg{name: name})
 			}).
-			WithOnToolUseReady(func(name string, input map[string]any) {
+			WithOnToolUseReady(func(id, name string, input map[string]any) {
 				// AskUserQuestion is handled entirely by milk's selection prompt —
 				// suppress the ⚙ hint here to keep the transcript clean.
 				if name == "AskUserQuestion" {
@@ -3307,7 +3307,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 				}
 				send(chunkMsg{text: hint})
 			}).
-			WithOnToolResult(func(name, result string, isError bool) {
+			WithOnToolResult(func(id, name, result string, isError bool) {
 				if st.cfg.RemoteOversight.NotifyToolsEnabled() {
 					st.notifier.NotifyToolResult(context.Background(), name, result, isError)
 				}
@@ -3337,15 +3337,13 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		send(openFileMsg{path: path, respCh: respCh})
 		return <-respCh
 	}
-	localOnToolUse := func(name, summary string) {
+	localOnToolUse := func(id, name, summary string, rawInput map[string]any) {
 		if st.cfg.RemoteOversight.NotifyToolsEnabled() {
 			st.notifier.NotifyToolUse(context.Background(), name, summary)
 		}
 	}
-	localOnToolResult := func(name, result string) {
+	localOnToolResult := func(id, name, result string, isError bool) {
 		if st.cfg.RemoteOversight.NotifyToolsEnabled() {
-			// toolResult.String() omits the "error" key entirely when empty.
-			isError := strings.Contains(result, `"error":"`)
 			st.notifier.NotifyToolResult(context.Background(), name, result, isError)
 		}
 	}
