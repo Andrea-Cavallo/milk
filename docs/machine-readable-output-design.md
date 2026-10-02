@@ -15,16 +15,41 @@
 > ADR required for shape changes) with its machine-checkable form —
 > [docs/schema/stream-json.schema.json](schema/stream-json.schema.json) and the
 > golden recordings under `internal/transport/streamjson/testdata/` — and a
-> real consumer-in-waiting: `eval/adapter_milk.go` spawns `milk --output-format
-> stream-json` and decodes it via `streamjson.Decoder` — but `--output-format`
-> itself doesn't exist on the CLI yet (§11 Phase 4's CLI wiring), so today this
-> path only runs against a stub binary in tests, not the real one. The typed
-> event model + JSONL encoder/decoder live in `internal/transport/streamjson`
-> (with `internal/transport/acp` taking shape alongside, as ACP v2 payload
+> real consumer: `eval/adapter_milk.go` spawns `milk --output-format
+> stream-json` and decodes it via `streamjson.Decoder`. The typed event model
+> + JSONL encoder/decoder live in `internal/transport/streamjson` (with
+> `internal/transport/acp` taking shape alongside, as ACP v2 payload
 > vocabulary only — no JSON-RPC stdio loop yet); the §8.2 `internal/events`
-> emission model and the `milk serve --acp` / `--output-format` CLI wiring
-> land per the remaining §11 phases. This note records status only — the
-> contract below is unchanged.
+> emission model and the `milk serve --acp` CLI wiring land per the remaining
+> §11 phases. This note records status only — the contract below is
+> unchanged.
+>
+> **Status note (phase 4 — `--output-format` CLI wiring):** `text|json|
+> stream-json` landed (`cmd/milk/outputformat.go`, wired in `main.go`'s
+> one-shot `run()`), narrower than full §6 fidelity — see this note for what's
+> real vs. deferred. `text` is the exact pre-existing code path, provably
+> unchanged (no edits to `dispatch.go`/`runner.go`). `json`/`stream-json`
+> emit `system/init` first and a terminal `result` always last; the only
+> content event is one completed `assistant` message per turn (via the
+> existing `onResponse` tap). Deferred, not faked: `tool_use`/`tool_result`
+> events (`local.Agent`'s and `claude.Agent`'s tool-use callbacks don't expose
+> a stable tool-call ID today — a real API gap in two agent packages, not
+> `cmd/milk` plumbing; **accepted cost: every `stream-json` eval run reports
+> `tool_calls: 0` until that lands**, even for tool-heavy turns); `stream_event`
+> partial deltas (`OnResponseSegment`'s real contract is "once per tool call
+> boundary," not token-level streaming — wiring it in would overclaim
+> `partial_messages_v1`, so `capabilities` only ever advertises `stream_v1`);
+> `system/agent_switch` and multi-hop `route_history` (no role-aware signal
+> distinguishes primary's own response from one forwarded through a mid-run
+> self-escalation hand-off — `route_history` stays single-hop, `num_turns:1`,
+> `assistant.agent` is omitted rather than risked); `Tools`, `MCPServers`,
+> `system/state` (no cheap call site enumerates them at the `main.go`
+> boundary; both are optional on the wire and the eval adapter already
+> tolerates their absence). One accepted, intentional behavior change: a few
+> `fmt.Fprintf(out, ...)` diagnostic lines in `dispatch.go` (transient-retry,
+> self-escalation, unsupported-workflow notices) go silent under `json`/
+> `stream-json` since `out` becomes `io.Discard` — correct per §8.3 (stdout is
+> events-only), not a bug.
 >
 > **Status note (phase 1 — Host interface + internal/events):** landed
 > narrower than this doc's own §11 Phase 1 bullet reads literally, for
