@@ -873,6 +873,16 @@ type model struct {
 	workflowPanelOpen            bool
 	workflowPanelOffset          int
 	workflowState                *workflow.State
+	// workflowRunning is true from the moment a workflow goroutine is
+	// launched until its WorkflowDoneMsg lands — distinct from workflowState's
+	// mere presence, since workflowResumeCheckMsg also populates workflowState
+	// at startup for a dormant, not-yet-resumed checkpoint. launchGenericWorkflow
+	// uses this to refuse a second concurrent fresh launch (see its guard):
+	// without it, nothing stops start_workflow's tool-driven path (unlike the
+	// /workflow slash commands, which all consult workflow.CurrentWorkflowID)
+	// from starting a second interp.Runner goroutine that races the first one
+	// over the single m.workflowState/m.cancelTurn/m.busy fields.
+	workflowRunning              bool
 	pendingWorkflowWizard        *workflowWizardState
 	pendingGenericWorkflowExtend *genericWorkflowExtendState
 
@@ -2027,6 +2037,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case workflow.WorkflowDoneMsg:
 		m.busy = false
+		m.workflowRunning = false
 		m.cancelTurn = nil
 		m.busyHint = ""
 		obs.IncrementTurnCount()
