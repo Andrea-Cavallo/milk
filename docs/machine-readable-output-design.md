@@ -1,9 +1,13 @@
 # editor embedding & machine-readable output (ACP + `stream-json`) — design proposal
 
-> **Status: PROPOSAL — not implemented.** Target: an ADR once the wire
-> contract is ratified. This doc answers: *how should `milk` present itself to
-> a machine — rich enough that an editor (or any external UI) can host it and
-> reach parity with the TUI without embedding it?*
+> **Status: RATIFIED — the wire contract is locked in
+> [ADR-0049](adr/0049-machine-readable-wire-contract.md)** (ACP v2 as the
+> embedding wire; batch JSONL §6/§8.3 as the locked batch contract; §8.2
+> normalization-at-model-layer; the `MarshalIndent` whole-document rule).
+> Implementation proceeds per §11 phasing — the contract below holds
+> regardless of which phase is in flight. This doc answers: *how should `milk`
+> present itself to a machine — rich enough that an editor (or any external
+> UI) can host it and reach parity with the TUI without embedding it?*
 >
 > **Scope decision (recorded):** the primary target is **editor embedding** —
 > milk as a managed agent inside an editor ("GitHub Copilot inside VS Code" is
