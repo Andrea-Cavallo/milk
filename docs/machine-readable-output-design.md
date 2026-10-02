@@ -9,6 +9,20 @@
 > present itself to a machine — rich enough that an editor (or any external
 > UI) can host it and reach parity with the TUI without embedding it?*
 >
+> **Status note (phase 4b — contract hardening, docs, eval):** the batch
+> contract is additionally locked in [ADR-0050](adr/0050-batch-stream-json-contract.md)
+> (§6 catalog + §8.3 conventions, additive-only within `stream_v1`, superseding
+> ADR required for shape changes) with its machine-checkable form —
+> [docs/schema/stream-json.schema.json](schema/stream-json.schema.json) and the
+> golden recordings under `internal/transport/streamjson/testdata/` — and a
+> real consumer: the eval harness's `milk-tui` adapter drives
+> `--output-format stream-json` and parses the JSONL (session-file scraping is
+> gone). The typed event model + JSONL encoder/decoder live in
+> `internal/transport/streamjson` (with `internal/transport/acp` taking shape
+> alongside); the §8.2 `internal/events` emission model and the
+> `milk serve --acp` / `--output-format` CLI wiring land per the remaining §11
+> phases. This note records status only — the contract below is unchanged.
+>
 > **Scope decision (recorded):** the primary target is **editor embedding** —
 > milk as a managed agent inside an editor ("GitHub Copilot inside VS Code" is
 > exactly this shape: the editor owns the UI, the agent owns the turn loop).

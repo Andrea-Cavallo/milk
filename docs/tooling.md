@@ -300,7 +300,7 @@ Attachment data is never stored verbatim. The session records a compact placehol
 
 ## Machine-readable output
 
-milk can present itself to machines — an editor hosting it as a managed agent, or a CI script parsing a one-shot run — through one canonical event model with two wire shapes. The wire contract is **ratified** in [ADR-0049](adr/0049-machine-readable-wire-contract.md); the full normative catalog lives in [docs/machine-readable-output-design.md](machine-readable-output-design.md) (§5 CLI surface, §6 event catalog, §8.2 model-layer normalization, §8.3 batch conventions). The summary below is contractual but abbreviated.
+milk can present itself to machines — an editor hosting it as a managed agent, or a CI script parsing a one-shot run — through one canonical event model with two wire shapes. The wire contract is **ratified** in [ADR-0049](adr/0049-machine-readable-wire-contract.md); the full normative catalog lives in [docs/machine-readable-output-design.md](machine-readable-output-design.md) (§5 CLI surface, §6 event catalog, §8.2 model-layer normalization, §8.3 batch conventions). The batch JSONL catalog is additionally locked in [ADR-0050](adr/0050-batch-stream-json-contract.md) — additive-only within capability `stream_v1`, shape changes require a superseding ADR — and its machine-checkable form is [`docs/schema/stream-json.schema.json`](schema/stream-json.schema.json), which validates every `stream-json` line (recorded goldens with expected-parse companions live under `internal/transport/streamjson/testdata/`). The summary below is contractual but abbreviated.
 
 ### CLI surface (design §5)
 
