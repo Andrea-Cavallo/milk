@@ -22,6 +22,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/scoutme/milk/internal/ansi"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/diff"
 	"github.com/scoutme/milk/internal/escalation"
@@ -2371,7 +2372,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 			// if this guess is wrong too.
 			agentName = tc.Function.Name[len("agent_"):]
 		}
-		fmt.Fprintf(out, "\n\033[2m⚙ calling agent %s…\033[0m\n", agentName)
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim(fmt.Sprintf("⚙ calling agent %s…", agentName)))
 		result, err := a.toolAgentDispatcher(ctx, agentName, reqArgs.Request, pendingImages, out)
 		if err != nil {
 			obs.Inc(ctx, inferenceScope, "milk.tools.tool_agent_errors",
@@ -2588,9 +2589,9 @@ func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 				summary = string(runes[:maxSummary-1]) + "…"
 			}
 		}
-		fmt.Fprintf(out, "\n%s\n", dimWrap("⚙ "+tc.Function.Name+": "+summary))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name+": "+summary))
 	} else {
-		fmt.Fprintf(out, "\n%s\n", dimWrap("⚙ "+tc.Function.Name))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name))
 	}
 }
 
@@ -2619,20 +2620,6 @@ func toolDiff(name, argsJSON string) string {
 		return diff.ForWrite(path, content, 3)
 	}
 	return ""
-}
-
-// dimWrap wraps s in ANSI dim, closing and reopening the escape at each embedded
-// newline so every output line is a self-contained dim span with no bleed.
-func dimWrap(s string) string {
-	const on, off = "\033[2m", "\033[0m"
-	if !strings.Contains(s, "\n") {
-		return on + s + off
-	}
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = on + l + off
-	}
-	return strings.Join(lines, "\n")
 }
 
 // summarizeToolTrail builds a fallback assistant message for a turn that

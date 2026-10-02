@@ -29,6 +29,7 @@ import (
 	"github.com/scoutme/milk/internal/agent/subprocess"
 	"github.com/scoutme/milk/internal/claudesettings"
 	"github.com/scoutme/milk/internal/config"
+	"github.com/scoutme/milk/internal/events"
 	"github.com/scoutme/milk/internal/loop"
 	"github.com/scoutme/milk/internal/mcp"
 	"github.com/scoutme/milk/internal/mcpauth"
@@ -394,6 +395,14 @@ type permRequestMsg struct {
 	respCh chan string
 }
 
+// notifyMsg is tuiHost's Notify bridge (events.Host) — sent from a turn's own
+// goroutine, consumed by one Update() case that calls the existing m.notify,
+// same async-bridge shape as permRequestMsg above.
+type notifyMsg struct {
+	text string
+	hint string
+}
+
 // oauthRequiredMsg is sent by the claude agent when stderr indicates an MCP
 // server requires OAuth authorization. serverName may be empty when not
 // detectable; authURL may be empty when no URL appeared in the error.
@@ -486,23 +495,22 @@ func (r *tuiInputReader) readLineLabeled(prompt, label string) (string, error) {
 	return <-respCh, nil
 }
 
-// makeLocalPermAsk returns the permAsk callback for the local agent.
-// It reuses the existing TUI permRequestMsg flow: the goroutine blocks on a
-// channel while the TUI displays a yellow permission prompt to the user.
+// makeLocalPermAsk returns the permAsk callback for the local agent, routed
+// through events.Host.RequestPermission (Phase 1's one real Host migration —
+// see docs/machine-readable-output-design.md). host is backed by tuiHost,
+// which reuses the existing TUI permRequestMsg flow unchanged: the goroutine
+// blocks while the TUI displays a yellow permission prompt to the user.
 // Grants are persisted to ps (may be nil). Session-level skipPermissions is
 // handled by the caller via WithSkipPermissions before this is ever called.
-func makeLocalPermAsk(ir *tuiInputReader, ps *local.PermStore) func(tool, summary string) bool {
+func makeLocalPermAsk(host events.Host, ps *local.PermStore) func(tool, summary string) bool {
 	return func(tool, summary string) bool {
 		prompt := fmt.Sprintf("\n%s permission request — primary agent tool: %s", milkTag(), bold(tool))
 		if summary != "" {
 			prompt += fmt.Sprintf("  (%s)", dim(summary))
 		}
 		prompt += fmt.Sprintf("\n%s Allow? [Y/n] ", milkTag())
-		yn, _ := ir.readLine(prompt)
-		if yn == "" || strings.EqualFold(yn, "y") {
-			return true
-		}
-		return false
+		outcome, _ := host.RequestPermission(context.Background(), events.PermissionRequest{Prompt: prompt})
+		return outcome.Allow
 	}
 }
 
@@ -870,9 +878,9 @@ type model struct {
 	updateTotal    int64
 
 	// workflow panel
-	workflowPanelOpen            bool
-	workflowPanelOffset          int
-	workflowState                *workflow.State
+	workflowPanelOpen   bool
+	workflowPanelOffset int
+	workflowState       *workflow.State
 	// workflowRunning is true from the moment a workflow goroutine is
 	// launched until its WorkflowDoneMsg lands — distinct from workflowState's
 	// mere presence, since workflowResumeCheckMsg also populates workflowState
@@ -1762,6 +1770,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case permRequestMsg:
 		return m.handlePermRequest(msg)
+
+	case notifyMsg:
+		m.notify(msg.text, msg.hint)
+		return m, nil
 
 	case oauthRequiredMsg:
 		name := "<server-name>"
@@ -3319,7 +3331,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 	// Both the primary and escalation-local agents share the same store and ask
 	// callback — they operate in the same cwd and grants should be shared.
 	localPermStore := st.localPerms
-	localPermAsk := makeLocalPermAsk(ir0, localPermStore)
+	localPermAsk := makeLocalPermAsk(newTUIHost(ir0), localPermStore)
 	localOpenFile := func(path string) error {
 		respCh := make(chan error, 1)
 		send(openFileMsg{path: path, respCh: respCh})

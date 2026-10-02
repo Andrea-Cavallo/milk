@@ -112,36 +112,36 @@ type Event struct {
 	Capabilities    []string        `json:"capabilities,omitempty"`
 
 	// system lifecycle payloads (design §6.3), keyed by subtype.
-	From        string          `json:"from,omitempty"`          // agent_switch
-	To          string          `json:"to,omitempty"`            // agent_switch
-	Reason      string          `json:"reason,omitempty"`        // agent_switch / permission_denied / route
-	ID          string          `json:"id,omitempty"`            // notification
-	Severity    string          `json:"severity,omitempty"`      // notification
-	CommandHint string          `json:"command_hint,omitempty"`  // notification
-	Body        string          `json:"body,omitempty"`          // notification
-	Category    string          `json:"category,omitempty"`      // warning
-	Count       int             `json:"count,omitempty"`         // warning
-	Limit       int             `json:"limit,omitempty"`         // warning
-	Message     json.RawMessage `json:"message,omitempty"`       // error: string; assistant/user: Message object
-	Recoverable *bool           `json:"recoverable,omitempty"`   // error (explicit boolean — false is meaningful and must round-trip)
-	Tool        string          `json:"tool,omitempty"`          // permission_denied
-	TaskID      string          `json:"task_id,omitempty"`       // task_*
-	Kind        string          `json:"kind,omitempty"`          // task_* (background_agent|workflow|tool_agent)
-	Status      string          `json:"status,omitempty"`        // task_*
-	RunningIDs  []string        `json:"running_ids,omitempty"`   // background_tasks_changed
-	FinishedIDs []string        `json:"finished_ids,omitempty"`  // background_tasks_changed
-	Op          string          `json:"op,omitempty"`            // memory
-	PerceptID   string          `json:"percept_id,omitempty"`    // memory
-	Subject     string          `json:"subject,omitempty"`       // memory
-	Commands    []Command       `json:"commands,omitempty"`      // commands
-	Option      string          `json:"option,omitempty"`        // config_option
-	Value       string          `json:"value,omitempty"`         // config_option
-	StopReason  string          `json:"stop_reason,omitempty"`   // state (on idle) / result
-	Task        json.RawMessage `json:"task,omitempty"`          // task_* free-form payload (stage node, buffer chunk, …)
-	IsError     *bool           `json:"is_error,omitempty"`      // error / result
+	From        string          `json:"from,omitempty"`         // agent_switch
+	To          string          `json:"to,omitempty"`           // agent_switch
+	Reason      string          `json:"reason,omitempty"`       // agent_switch / permission_denied / route
+	ID          string          `json:"id,omitempty"`           // notification
+	Severity    string          `json:"severity,omitempty"`     // notification
+	CommandHint string          `json:"command_hint,omitempty"` // notification
+	Body        string          `json:"body,omitempty"`         // notification
+	Category    string          `json:"category,omitempty"`     // warning
+	Count       int             `json:"count,omitempty"`        // warning
+	Limit       int             `json:"limit,omitempty"`        // warning
+	Message     json.RawMessage `json:"message,omitempty"`      // error: string; assistant/user: Message object
+	Recoverable *bool           `json:"recoverable,omitempty"`  // error (explicit boolean — false is meaningful and must round-trip)
+	Tool        string          `json:"tool,omitempty"`         // permission_denied
+	TaskID      string          `json:"task_id,omitempty"`      // task_*
+	Kind        string          `json:"kind,omitempty"`         // task_* (background_agent|workflow|tool_agent)
+	Status      string          `json:"status,omitempty"`       // task_*
+	RunningIDs  []string        `json:"running_ids,omitempty"`  // background_tasks_changed
+	FinishedIDs []string        `json:"finished_ids,omitempty"` // background_tasks_changed
+	Op          string          `json:"op,omitempty"`           // memory
+	PerceptID   string          `json:"percept_id,omitempty"`   // memory
+	Subject     string          `json:"subject,omitempty"`      // memory
+	Commands    []Command       `json:"commands,omitempty"`     // commands
+	Option      string          `json:"option,omitempty"`       // config_option
+	Value       string          `json:"value,omitempty"`        // config_option
+	StopReason  string          `json:"stop_reason,omitempty"`  // state (on idle) / result
+	Task        json.RawMessage `json:"task,omitempty"`         // task_* free-form payload (stage node, buffer chunk, …)
+	IsError     *bool           `json:"is_error,omitempty"`     // error / result
 
 	// Content (design §6.2).
-	Event         *StreamPayload  `json:"event,omitempty"`          // stream_event
+	Event         *StreamPayload  `json:"event,omitempty"`           // stream_event
 	ToolUseResult json.RawMessage `json:"tool_use_result,omitempty"` // user
 
 	// Terminal result payload (design §6.4).

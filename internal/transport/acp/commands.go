@@ -25,7 +25,7 @@ type AvailableCommandInput struct {
 
 // AvailableCommand is one advertised slash command.
 type AvailableCommand struct {
-	Name  string                `json:"name"`
+	Name  string                 `json:"name"`
 	Input *AvailableCommandInput `json:"input,omitempty"`
 }
 
@@ -41,9 +41,9 @@ func Command(name, hint string) AvailableCommand {
 // AvailableCommandsUpdate is the available_commands_update session update.
 // Later updates replace the whole list.
 type AvailableCommandsUpdate struct {
-	SessionUpdate     string            `json:"sessionUpdate"` // "available_commands_update"
+	SessionUpdate     string             `json:"sessionUpdate"` // "available_commands_update"
 	AvailableCommands []AvailableCommand `json:"availableCommands"`
-	Meta              map[string]any    `json:"_meta,omitempty"`
+	Meta              map[string]any     `json:"_meta,omitempty"`
 }
 
 func (AvailableCommandsUpdate) isSessionUpdate() {}
@@ -103,9 +103,10 @@ func MilkCommands() []AvailableCommand {
 
 // Session config option IDs. Each maps onto a slash command the TUI already
 // has (or, for model, the /agent-switch sibling config surface):
-//   think → /think on|off
-//   agent → /agent switch <name>
-//   model → /model <id>
+//
+//	think → /think on|off
+//	agent → /agent switch <name>
+//	model → /model <id>
 const (
 	ConfigIDThink SessionConfigID = "think"
 	ConfigIDAgent SessionConfigID = "agent"
@@ -136,11 +137,11 @@ type SessionConfigSelectOption struct {
 // (SessionConfigOption union: select or boolean; currentValue carries the
 // matching variant's value).
 type SessionConfigOption struct {
-	ConfigID     SessionConfigID          `json:"configId"`
-	Name         string                   `json:"name"`
-	Category     string                   `json:"category,omitempty"`
-	Type         string                   `json:"type"` // "select" | "boolean" (open-set)
-	CurrentValue any                      `json:"currentValue"`
+	ConfigID     SessionConfigID             `json:"configId"`
+	Name         string                      `json:"name"`
+	Category     string                      `json:"category,omitempty"`
+	Type         string                      `json:"type"` // "select" | "boolean" (open-set)
+	CurrentValue any                         `json:"currentValue"`
 	Options      []SessionConfigSelectOption `json:"options,omitempty"`
 }
 
@@ -235,9 +236,9 @@ type SetSessionConfigOptionResponse struct {
 // the agent pushes proactively; the response to set_config_option carries the
 // same shape).
 type ConfigOptionUpdate struct {
-	SessionUpdate string               `json:"sessionUpdate"` // "config_option_update"
+	SessionUpdate string                `json:"sessionUpdate"` // "config_option_update"
 	ConfigOptions []SessionConfigOption `json:"configOptions"`
-	Meta          map[string]any       `json:"_meta,omitempty"`
+	Meta          map[string]any        `json:"_meta,omitempty"`
 }
 
 func (ConfigOptionUpdate) isSessionUpdate() {}
@@ -252,9 +253,9 @@ type ConfigSetter func(value any) error
 // slash-command side effects (/think, /agent switch, /model) stay in sync
 // with the option surface.
 type ConfigState struct {
-	mu       sync.Mutex
-	options  []SessionConfigOption
-	setters  map[SessionConfigID]ConfigSetter
+	mu      sync.Mutex
+	options []SessionConfigOption
+	setters map[SessionConfigID]ConfigSetter
 }
 
 // NewConfigState seeds the option surface and its setters. Options without a

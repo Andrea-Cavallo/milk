@@ -34,13 +34,13 @@ type TerminalExitStatus struct {
 // TerminalUpdate is the terminal_update session update: created-or-updated
 // terminal state (command, cwd, full output snapshot, exit status).
 type TerminalUpdate struct {
-	SessionUpdate string            `json:"sessionUpdate"` // "terminal_update"
-	TerminalID    TerminalID        `json:"terminalId"`
-	Command       string            `json:"command,omitempty"`
-	Cwd           string            `json:"cwd,omitempty"`
-	Output        *TerminalOutput   `json:"output,omitempty"`
+	SessionUpdate string              `json:"sessionUpdate"` // "terminal_update"
+	TerminalID    TerminalID          `json:"terminalId"`
+	Command       string              `json:"command,omitempty"`
+	Cwd           string              `json:"cwd,omitempty"`
+	Output        *TerminalOutput     `json:"output,omitempty"`
 	ExitStatus    *TerminalExitStatus `json:"exitStatus,omitempty"`
-	Meta          map[string]any    `json:"_meta,omitempty"`
+	Meta          map[string]any      `json:"_meta,omitempty"`
 }
 
 func (TerminalUpdate) isSessionUpdate() {}

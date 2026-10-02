@@ -15,13 +15,47 @@
 > ADR required for shape changes) with its machine-checkable form —
 > [docs/schema/stream-json.schema.json](schema/stream-json.schema.json) and the
 > golden recordings under `internal/transport/streamjson/testdata/` — and a
-> real consumer: the eval harness's `milk-tui` adapter drives
-> `--output-format stream-json` and parses the JSONL (session-file scraping is
-> gone). The typed event model + JSONL encoder/decoder live in
-> `internal/transport/streamjson` (with `internal/transport/acp` taking shape
-> alongside); the §8.2 `internal/events` emission model and the
-> `milk serve --acp` / `--output-format` CLI wiring land per the remaining §11
-> phases. This note records status only — the contract below is unchanged.
+> real consumer-in-waiting: `eval/adapter_milk.go` spawns `milk --output-format
+> stream-json` and decodes it via `streamjson.Decoder` — but `--output-format`
+> itself doesn't exist on the CLI yet (§11 Phase 4's CLI wiring), so today this
+> path only runs against a stub binary in tests, not the real one. The typed
+> event model + JSONL encoder/decoder live in `internal/transport/streamjson`
+> (with `internal/transport/acp` taking shape alongside, as ACP v2 payload
+> vocabulary only — no JSON-RPC stdio loop yet); the §8.2 `internal/events`
+> emission model and the `milk serve --acp` / `--output-format` CLI wiring
+> land per the remaining §11 phases. This note records status only — the
+> contract below is unchanged.
+>
+> **Status note (phase 1 — Host interface + internal/events):** landed
+> narrower than this doc's own §11 Phase 1 bullet reads literally, for
+> concrete reasons found while implementing it — see the Phase 1 plan's
+> rationale (preserved in git history on the branch this landed on) for the
+> full list. In short: `internal/events` (`internal/events/host.go`) ships
+> minimal — just the `Host` interface and its four methods' payload types,
+> not the §6 content-event catalog, which has no consumer yet. `Host` is
+> implemented by `cmd/milk/host_tui.go`'s `tuiHost`, wrapping the TUI's
+> existing `tuiInputReader`/`m.notify` machinery unchanged. Exactly one
+> production call site is migrated (`makeLocalPermAsk`, the local-agent
+> permission ask) — every other permission/elicitation call site
+> (`makeTUIPermissionHandler`, `makePermissionHandler`,
+> `buildAskUserQuestionAnswers`) stays on its current path, since those are
+> protocol handlers for claude-cli's own control-request wire format (one
+> racing a live remote-oversight call), not host-presentation calls; forcing
+> them through `Host` now would mean rewriting daily-exercised logic with no
+> immediate payoff. `Host.State` is wired to nothing — `m.busy` alone is not a
+> clean running/idle signal (at least 4 overlapping gates exist, plus
+> `WorkflowQuestionsMsg` sets `busy=false` while actually awaiting input), so
+> getting the classification right is deferred as real design work, not
+> extraction. None of the 22 existing toast (`m.notify`) call sites are
+> migrated — they're synchronous on bubbletea's `Update()` call stack and no
+> engine/goroutine code emits a toast today, so there's no real caller to
+> prove an async migration against yet. `internal/transport/streamjson` and
+> `internal/transport/acp` are untouched. The ANSI-literal fix (`internal/ansi`,
+> new package) covers exactly the four `\033[...]` literal sites §11's Phase 1
+> bullet names (`cmd/milk/runner.go:596,659`, `internal/agent/local/
+> local.go`'s `⚙ calling agent` literal and its now-deleted duplicate
+> `dimWrap`) — not the broader "~10 direct `fmt.Fprint` call sites" catalog in
+> §8.2, which is plain prose output with no ANSI, and belongs to Phase 4.
 >
 > **Scope decision (recorded):** the primary target is **editor embedding** —
 > milk as a managed agent inside an editor ("GitHub Copilot inside VS Code" is

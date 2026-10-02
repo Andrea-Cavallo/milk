@@ -48,14 +48,14 @@ func TitledMultiSelect(opts []EnumOption) MultiSelectItems {
 // are mutually exclusive single-select forms of the string type; Items turns
 // the array type into a multi-select.
 type ElicitationProperty struct {
-	Type     string           `json:"type"` // "string" | "number" | "integer" | "boolean" | "array" (open-set)
-	Title    string           `json:"title,omitempty"`
-	Enum     []string         `json:"enum,omitempty"`
-	OneOf    []EnumOption     `json:"oneOf,omitempty"`
+	Type     string            `json:"type"` // "string" | "number" | "integer" | "boolean" | "array" (open-set)
+	Title    string            `json:"title,omitempty"`
+	Enum     []string          `json:"enum,omitempty"`
+	OneOf    []EnumOption      `json:"oneOf,omitempty"`
 	Items    *MultiSelectItems `json:"items,omitempty"`
-	MinItems *int             `json:"minItems,omitempty"`
-	MaxItems *int             `json:"maxItems,omitempty"`
-	Default  any              `json:"default,omitempty"`
+	MinItems *int              `json:"minItems,omitempty"`
+	MaxItems *int              `json:"maxItems,omitempty"`
+	Default  any               `json:"default,omitempty"`
 }
 
 // SelectProperty builds a titled single-select string property.
@@ -71,11 +71,11 @@ func MultiSelectProperty(title string, items MultiSelectItems) ElicitationProper
 // ElicitationSchema is the form schema the client renders
 // (ElicitationSchema: type "object" with primitive property definitions).
 type ElicitationSchema struct {
-	Type        string                          `json:"type"` // "object"
-	Title       string                          `json:"title,omitempty"`
-	Description string                          `json:"description,omitempty"`
-	Properties  map[string]ElicitationProperty  `json:"properties"`
-	Required    []string                        `json:"required,omitempty"`
+	Type        string                         `json:"type"` // "object"
+	Title       string                         `json:"title,omitempty"`
+	Description string                         `json:"description,omitempty"`
+	Properties  map[string]ElicitationProperty `json:"properties"`
+	Required    []string                       `json:"required,omitempty"`
 }
 
 // ElicitationIDText is the key under which ElicitSession carries milk's
@@ -87,12 +87,12 @@ const ElicitationIDText = "milk/elicitation_id"
 // CreateElicitationRequest is the elicitation/create params (form mode,
 // session scope).
 type CreateElicitationRequest struct {
-	Message         string            `json:"message"`
-	Mode            string            `json:"mode"` // "form"
+	Message         string             `json:"message"`
+	Mode            string             `json:"mode"` // "form"
 	RequestedSchema *ElicitationSchema `json:"requestedSchema"`
-	SessionID       SessionID         `json:"sessionId"`
-	ToolCallID      *ToolCallID       `json:"toolCallId,omitempty"`
-	Meta            map[string]any    `json:"_meta,omitempty"`
+	SessionID       SessionID          `json:"sessionId"`
+	ToolCallID      *ToolCallID        `json:"toolCallId,omitempty"`
+	Meta            map[string]any     `json:"_meta,omitempty"`
 }
 
 // CreateElicitationResponse is the elicitation/create result.
@@ -104,7 +104,7 @@ type CreateElicitationResponse struct {
 // CompleteElicitationNotification is the elicitation/complete params: the
 // agent telling the client an elicitation is over and its UI can go.
 type CompleteElicitationNotification struct {
-	ElicitationID ElicitationID   `json:"elicitationId"`
+	ElicitationID ElicitationID  `json:"elicitationId"`
 	Meta          map[string]any `json:"_meta,omitempty"`
 }
 

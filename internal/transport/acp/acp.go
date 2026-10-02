@@ -24,7 +24,6 @@ import (
 	"context"
 )
 
-
 // ProtocolVersion is the ACP protocol version this surface targets (v2 is the
 // documented forward path; a v1 bridge is a translation layer only if v1-only
 // hosts matter — see the design doc §3 delta table).
@@ -55,13 +54,13 @@ const (
 // Wire identifier types. ACP models these as distinct strings; keeping them
 // distinct in Go prevents cross-wiring a plan ID into a terminal field.
 type (
-	SessionID           string
-	PlanID              string
-	ToolCallID          string
-	TerminalID          string
-	MessageID           string
-	ElicitationID       string
-	SessionConfigID     string
+	SessionID            string
+	PlanID               string
+	ToolCallID           string
+	TerminalID           string
+	MessageID            string
+	ElicitationID        string
+	SessionConfigID      string
 	SessionConfigValueID string
 )
 
@@ -123,8 +122,8 @@ type SessionUpdate interface {
 // UpdateSessionNotification is the `session/update` params shape
 // (UpdateSessionNotification in the upstream schema).
 type UpdateSessionNotification struct {
-	SessionID SessionID    `json:"sessionId"`
-	Update    SessionUpdate `json:"update"`
+	SessionID SessionID      `json:"sessionId"`
+	Update    SessionUpdate  `json:"update"`
 	Meta      map[string]any `json:"_meta,omitempty"`
 }
 
@@ -144,9 +143,9 @@ func TextBlock(text string) ContentBlock { return ContentBlock{Type: "text", Tex
 // "content" wrapping a ContentBlock, "terminal" referencing an agent-owned
 // terminal, or an open-set extension type).
 type ToolCallContent struct {
-	Type       string       `json:"type"`
+	Type       string        `json:"type"`
 	Content    *ContentBlock `json:"content,omitempty"`
-	TerminalID *TerminalID  `json:"terminalId,omitempty"`
+	TerminalID *TerminalID   `json:"terminalId,omitempty"`
 }
 
 // ContentItem wraps a ContentBlock as ToolCallContent{type:"content"}.
@@ -200,17 +199,17 @@ const (
 // updates with the same toolCallId patch the same call (progressive rawInput
 // fills, status transitions, streamed content).
 type ToolCallUpdate struct {
-	SessionUpdate string           `json:"sessionUpdate"` // "tool_call_update"
-	ToolCallID    ToolCallID       `json:"toolCallId"`
-	Name          string           `json:"name,omitempty"`
-	Title         string           `json:"title,omitempty"`
-	Kind          ToolKind         `json:"kind,omitempty"`
-	Status        ToolCallStatus   `json:"status,omitempty"`
-	Content       []ToolCallContent `json:"content,omitempty"`
+	SessionUpdate string             `json:"sessionUpdate"` // "tool_call_update"
+	ToolCallID    ToolCallID         `json:"toolCallId"`
+	Name          string             `json:"name,omitempty"`
+	Title         string             `json:"title,omitempty"`
+	Kind          ToolKind           `json:"kind,omitempty"`
+	Status        ToolCallStatus     `json:"status,omitempty"`
+	Content       []ToolCallContent  `json:"content,omitempty"`
 	Locations     []ToolCallLocation `json:"locations,omitempty"`
-	RawInput      any              `json:"rawInput,omitempty"`
-	RawOutput     any              `json:"rawOutput,omitempty"`
-	Meta          map[string]any   `json:"_meta,omitempty"`
+	RawInput      any                `json:"rawInput,omitempty"`
+	RawOutput     any                `json:"rawOutput,omitempty"`
+	Meta          map[string]any     `json:"_meta,omitempty"`
 }
 
 func (ToolCallUpdate) isSessionUpdate() {}
@@ -218,10 +217,10 @@ func (ToolCallUpdate) isSessionUpdate() {}
 // ToolCallContentChunk streams one item of tool-call content (live-attach
 // parity: F3/attach views become streamed tool output).
 type ToolCallContentChunk struct {
-	SessionUpdate string         `json:"sessionUpdate"` // "tool_call_content_chunk"
-	ToolCallID    ToolCallID     `json:"toolCallId"`
+	SessionUpdate string          `json:"sessionUpdate"` // "tool_call_content_chunk"
+	ToolCallID    ToolCallID      `json:"toolCallId"`
 	Content       ToolCallContent `json:"content"`
-	Meta          map[string]any `json:"_meta,omitempty"`
+	Meta          map[string]any  `json:"_meta,omitempty"`
 }
 
 func (ToolCallContentChunk) isSessionUpdate() {}
@@ -232,9 +231,9 @@ func (ToolCallContentChunk) isSessionUpdate() {}
 // (ADR-0042: reasoning preserved verbatim). Declared here so map.go and the
 // parity checks can cover the whole session/update surface.
 type ContentChunk struct {
-	SessionUpdate string      `json:"sessionUpdate"` // discriminator, see constructors
-	MessageID     MessageID   `json:"messageId"`
-	Content       ContentBlock `json:"content"`
+	SessionUpdate string         `json:"sessionUpdate"` // discriminator, see constructors
+	MessageID     MessageID      `json:"messageId"`
+	Content       ContentBlock   `json:"content"`
 	Meta          map[string]any `json:"_meta,omitempty"`
 }
 
@@ -261,21 +260,21 @@ const (
 
 // Stop reasons reported on an idle state_update (open-set).
 const (
-	StopReasonEndTurn       = "end_turn"
-	StopReasonMaxTokens     = "max_tokens"
-	StopReasonMaxTurns      = "max_turn_requests"
-	StopReasonRefusal       = "refusal"
-	StopReasonCancelled     = "cancelled"
-	StopReasonError         = "error"
+	StopReasonEndTurn   = "end_turn"
+	StopReasonMaxTokens = "max_tokens"
+	StopReasonMaxTurns  = "max_turn_requests"
+	StopReasonRefusal   = "refusal"
+	StopReasonCancelled = "cancelled"
+	StopReasonError     = "error"
 )
 
 // StateUpdate reports foreground-work state (running/idle/requires_action).
 // requires_action fires while a permission or elicitation is outstanding —
 // the TUI's "needs input" state.
 type StateUpdate struct {
-	SessionUpdate string      `json:"sessionUpdate"` // "state_update"
-	State         SessionState `json:"state"`
-	StopReason    string      `json:"stopReason,omitempty"` // idle only
+	SessionUpdate string         `json:"sessionUpdate"` // "state_update"
+	State         SessionState   `json:"state"`
+	StopReason    string         `json:"stopReason,omitempty"` // idle only
 	Meta          map[string]any `json:"_meta,omitempty"`
 }
 
