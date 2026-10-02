@@ -295,3 +295,47 @@ Attachment data is never stored verbatim. The session records a compact placehol
 | `.json`, `.yaml`, `.toml`, `.html`, `.css` | Various text | Fenced block in prompt |
 | `.pdf` | `application/pdf` | Binary notice only |
 | Other | `text/plain` (default) | Fenced block in prompt |
+
+---
+
+## Machine-readable output
+
+milk can present itself to machines — an editor hosting it as a managed agent, or a CI script parsing a one-shot run — through one canonical event model with two wire shapes. The wire contract is **ratified** in [ADR-0049](adr/0049-machine-readable-wire-contract.md); the full normative catalog lives in [docs/machine-readable-output-design.md](machine-readable-output-design.md) (§5 CLI surface, §6 event catalog, §8.2 model-layer normalization, §8.3 batch conventions). The summary below is contractual but abbreviated.
+
+### CLI surface (design §5)
+
+```
+milk serve --acp                                  # ACP v2 agent server on stdio (editor embedding)
+milk [flags] "prompt" --output-format stream-json  # batch event stream (CI/scripts/log pipelines)
+milk [flags] "prompt" --output-format json         # single terminal-result document
+milk [flags] "prompt"                              # --output-format text (default, unchanged)
+```
+
+- **`milk serve --acp`** — a dedicated entry point (like `milk mcp serve`) speaking **ACP v2** (JSON-RPC 2.0 over stdio): `initialize` handshake with capability negotiation, session lifecycle (`session/new|prompt|cancel|resume|list|close|delete`), streaming `session/update` events, agent→client requests `session/request_permission` (permission prompts) and `elicitation/create` (structured user input), `$/cancel_request` for in-flight cancellation. Milk-specific payloads ride ACP's sanctioned `Ext*` methods (`milk/notification`, `milk/warning`, `milk/memory`, `milk/route`) — never a forked schema. This is the **embedding wire**.
+- **`--output-format stream-json`** — the batch event stream below, one JSON event per stdout line.
+- **`--output-format json`** — the terminal `result` event alone as one whole document (`json.MarshalIndent`).
+- **`--output-format text`** — current behavior byte-for-byte. Interactive TUI mode ignores `--output-format`.
+- Batch runs are non-interactive by definition: `--permission-mode acceptEdits|bypassPermissions|deny` and `--allow-tool <glob>` decide locally (emitting `permission_denied` events). `--verbose` debug logs stay on stderr; `--no-partial-messages` degrades `stream-json` to block-level events.
+
+### Event catalog summary (design §6)
+
+Every `stream-json` line is a UTF-8 JSON object with a `type` discriminator (plus `subtype` where the standard uses one), a monotonic `seq`, and optional `parent_tool_use_id` when the actor is nested (sub-agent, tool-agent, workflow stage):
+
+| Line | Carries |
+|---|---|
+| `system`/`init` (first line, always) | cwd, milk version, `agent` + `escalation_agent`, `tools`, `mcp_servers`, `route`, `session_state`, `warnings`, `capabilities` |
+| `stream_event` | partial deltas: `text_delta` / `thinking_delta` content blocks, `tool_args_delta` tool-argument fragments |
+| `assistant` | completed message blocks: `text`, `thinking` (reasoning preserved verbatim per [ADR-0042](adr/0042-preserve-reasoning-content.md)), `tool_use` |
+| `user` | `tool_result` content + `tool_use_result` summary (`is_error`, `summary`) |
+| `system` subtypes | `agent_switch`, `route`, `notification` (toasts, [ADR-0048](adr/0048-notification-toasts.md)), `warning` (loop/consumption), `state`, `task_started`/`task_progress`/`task_notification`, `background_tasks_changed`, `memory`, `commands`, `config_option`, `permission_denied`, `error` |
+| `result` (last line, always, exactly one) | `is_error`, `num_turns`, `duration_ms`, final `result` text, `stop_reason`, `route_history`, `usage` + per-model `model_usage` |
+
+### Batch conventions (design §8.3 — locked)
+
+- **snake_case fields** everywhere (`input_tokens`, `cache_read`, `is_error`, `session_id`, `total_cost_usd` where cost exists) — matching session files, eval reports and `MilkEvent`. The ACP side uses ACP's camelCase shapes verbatim; never rename standard fields.
+- **`type` per line; `subtype`** for the `system`/`result` families. All enums are **open sets** — consumers must ignore values they don't recognize.
+- **stdout = events only; stderr = prose.** Human `[milk]` logs stay on stderr and are mirrored as `system/init.warnings` / `system/warning` events; nothing else is ever written to stdout.
+- **Exactly one terminal `result`** per one-shot run — the last `stream-json` line, or the whole `--output-format json` document.
+- **Never ANSI.** Machine transports emit no escape sequences; TUI colorization is kept out of them (routed through `colorize()`).
+- **Whole-document exports stay `json.MarshalIndent`** (sessions, config, eval reports, `--output-format json`). `stream-json` is the only streaming serialization and the only place with per-line framing.
+- **Normalization happens at the model layer** (design §8.2): provider signals (OpenAI-compatible, Bedrock, `claude-cli` `stream-json`, subprocess `MilkEvent`) are normalized into the canonical event model once; transports never see provider shapes.
