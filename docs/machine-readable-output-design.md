@@ -17,12 +17,10 @@
 > golden recordings under `internal/transport/streamjson/testdata/` — and a
 > real consumer: `eval/adapter_milk.go` spawns `milk --output-format
 > stream-json` and decodes it via `streamjson.Decoder`. The typed event model
-> + JSONL encoder/decoder live in `internal/transport/streamjson` (with
-> `internal/transport/acp` taking shape alongside, as ACP v2 payload
-> vocabulary only — no JSON-RPC stdio loop yet); the §8.2 `internal/events`
-> emission model and the `milk serve --acp` CLI wiring land per the remaining
-> §11 phases. This note records status only — the contract below is
-> unchanged.
+> + JSONL encoder/decoder live in `internal/transport/streamjson`; the ACP v2
+> payload vocabulary lives in `internal/transport/acp`, now with a real
+> JSON-RPC stdio loop (`milk serve --acp` — see the Phase 2 status note
+> below). This note records status only — the contract below is unchanged.
 >
 > **Status note (phase 4 — `--output-format` CLI wiring):** `text|json|
 > stream-json` landed (`cmd/milk/outputformat.go`, wired in `main.go`'s
@@ -81,6 +79,57 @@
 > local.go`'s `⚙ calling agent` literal and its now-deleted duplicate
 > `dimWrap`) — not the broader "~10 direct `fmt.Fprint` call sites" catalog in
 > §8.2, which is plain prose output with no ANSI, and belongs to Phase 4.
+>
+> **Status note (phase 2 — `milk serve --acp` core):** landed —
+> `internal/transport/acp/lifecycle.go` (the inbound `initialize`/
+> `session/new`/`session/prompt`/`session/cancel` structs, field names
+> verified against the upstream `agentclientprotocol/agent-client-protocol`
+> schema/v2, not guessed from this doc's own prose tables — one real
+> correction found that way: `PromptResponse` carries only `messageId`, never
+> `stopReason`, which rides on a `state_update` notification instead) and
+> `internal/transport/acp/stdio.go` (`StdioConn`: a real JSON-RPC 2.0
+> transport over any reader/writer, concurrent-in-flight-safe, each incoming
+> request dispatched to its own goroutine — required because `session/
+> prompt`'s response is held open for the whole turn per the upstream schema,
+> so a second session's `session/new` must never stall behind it).
+> `cmd/milk/host_acp.go` adapts `events.Host` (Phase 1) onto `acp.ACPHost` for
+> **local-provider agents only**; claude-cli-as-escalation gets no new wiring
+> and stays on its existing `denyAllHandler` default — its own control-request
+> wire format is a separate protocol, out of scope here. Tool-call identity
+> (`tool_call_update`) uses the *real* ids both agent packages already
+> compute and previously discarded (`local.Agent`'s `toolCall.ID`, `claude.
+> Agent`'s `ContentBlock.ID`) — threaded through widened callback signatures,
+> not a synthetic FIFO-ordered id, which turned out to be unsafe for both
+> providers (local-agent's result order is call-order only by incidental
+> implementation choice; claude-cli's tool execution order is opaque to milk
+> entirely). `AgentCapabilities.Session` is advertised as the upstream
+> schema's monolithic baseline (there's no finer-grained flag covering only
+> new/prompt/cancel/update) — `session/list|resume|close` calls get the
+> standard JSON-RPC "method not found" error (`acp.MethodNotFoundError`,
+> -32601), the correct way to say "not implemented yet," not a capability
+> lie. Deferred, unchanged from the design's own catalog: `auth/*`,
+> `session/list|resume|delete|close`, `session/set_config_option` dispatch
+> (`ConfigState` already exists, stays unwired), `elicitation/create` wiring,
+> `plan_update`/workflow mapping, `terminal_update`, the `milk/*`
+> `ExtNotification` channels, `available_commands_update`. One fix to shared
+> code this required: `internal/session/store.go`'s `Save`/`Drop` did an
+> unsynchronized read-modify-write of the shared `index.json` — harmless with
+> one session per process (true until now), a real lost-update race once
+> `milk serve --acp` runs concurrent sessions; fixed with a package-level
+> mutex, purely additive. Verified end-to-end against the real compiled
+> binary (`cmd/milk/serve_acp_e2e_test.go`, mirroring `eval/adapter_milk.go`'s
+> subprocess pattern) since no real ACP client (Zed, a VS Code adapter, etc.)
+> is available in this environment or vendored in the repo — the single-
+> session round trip and the "unknown method" error path are both 100%
+> reliable; a third test proving two sessions never block each other is
+> opt-in (`MILK_ACP_E2E_STRESS=1`) because real-subprocess scheduling in this
+> sandboxed environment made it ~25% flaky — the same property is proven
+> deterministically and race-clean twice over by other means (`internal/
+> transport/acp/stdio_test.go`'s concurrent-request tests at the transport
+> layer, and an in-process-only variant hitting `acpServer` directly that
+> completed in 5-9ms across 15/15 runs with zero failures), isolating the
+> flakiness to the subprocess+OS-pipe layer in this sandbox, not to milk's
+> own concurrency.
 >
 > **Scope decision (recorded):** the primary target is **editor embedding** —
 > milk as a managed agent inside an editor ("GitHub Copilot inside VS Code" is

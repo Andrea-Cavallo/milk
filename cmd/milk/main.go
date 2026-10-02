@@ -107,6 +107,7 @@ func init() {
 	rootCmd.AddCommand(otelCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(serverCmd)
+	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(eval.Command())
 }
 
