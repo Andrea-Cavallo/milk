@@ -57,6 +57,7 @@ exclude_docs: |
   context-bloat-analysis.md
   eval-harness-plan.md
   eval-harness-spec.md
+  machine-readable-output-design.md
   memory-design.md
   mock-setup.md
   observability-design.md
