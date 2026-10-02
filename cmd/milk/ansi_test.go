@@ -31,8 +31,8 @@ func TestColorize_ResetBeforeTrailingNewline(t *testing.T) {
 	isTTY = true
 	t.Cleanup(func() { isTTY = oldIsTTY })
 
-	got := yellow("[⚠ loop detected: reasoning chunk flood (confidence 85%)]\n")
-	want := ansiYellow + "[⚠ loop detected: reasoning chunk flood (confidence 85%)]" + ansiReset + "\n"
+	got := yellow("[⚠ consumption: 5000 reasoning chunks this turn (limit 5000)]\n")
+	want := ansiYellow + "[⚠ consumption: 5000 reasoning chunks this turn (limit 5000)]" + ansiReset + "\n"
 
 	if got != want {
 		t.Fatalf("yellow() = %q, want %q", got, want)

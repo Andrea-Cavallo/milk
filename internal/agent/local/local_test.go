@@ -162,12 +162,26 @@ func TestSystemPromptShared_SharesConfigWriteWarningWithEscalation(t *testing.T)
 	}
 }
 
-// TestSystemPromptShared_MentionsConsumerScoping verifies that the local
-// system prompt tells the model about record_memory's consumer field for
-// scoping a fact to one agent — previously only documented on the escalation
-// (tag-based) path, not the local (tool-call) path.
-func TestSystemPromptShared_MentionsConsumerScoping(t *testing.T) {
-	if !strings.Contains(systemPromptShared, "consumer") {
-		t.Error("expected systemPromptShared to mention record_memory's consumer field")
+// TestMemoryToolGuidance_MentionsConsumerScoping verifies that the memory-tool
+// mandate tells the model about record_memory's consumer field for scoping a
+// fact to one agent — previously only documented on the escalation (tag-based)
+// path, not the local (tool-call) path. The mandate lives in memoryToolGuidance
+// since issue #172 moved it out of systemPromptShared.
+func TestMemoryToolGuidance_MentionsConsumerScoping(t *testing.T) {
+	if !strings.Contains(memoryToolGuidance, "consumer") {
+		t.Error("expected memoryToolGuidance to mention record_memory's consumer field")
+	}
+}
+
+// TestSystemPromptShared_NoMemoryToolMandate pins the issue #172 fix: the
+// shared prompt must not mandate memory tools unconditionally (tool-agents
+// and background jobs may not have them) — the mandate lives in
+// memoryToolGuidance and is appended only when the tools are registered.
+func TestSystemPromptShared_NoMemoryToolMandate(t *testing.T) {
+	if strings.Contains(systemPromptShared, "forget_memory") {
+		t.Error("systemPromptShared must not mandate forget_memory — the memory tools are not always registered")
+	}
+	if !strings.Contains(memoryToolGuidance, "forget_memory") {
+		t.Error("memoryToolGuidance must document forget_memory")
 	}
 }

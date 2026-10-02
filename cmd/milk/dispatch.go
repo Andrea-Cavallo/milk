@@ -252,7 +252,7 @@ func runPrimaryWithSession(
 			lr.agent = lr.agent.WithToolAgentEntries(entries)
 			capturedDA := da
 			lr.agent.SetToolAgentDispatcher(func(dctx context.Context, agentName, request string, images []local.ContentPart, dout io.Writer) (string, error) {
-				tr, err := getOrBuildToolRunner(dctx, agentName, cfg, capturedDA)
+				tr, err := getOrBuildToolRunner(dctx, agentName, cfg, capturedDA, mem, memory.ConsumerLocal)
 				if err != nil {
 					return "", err
 				}
@@ -478,7 +478,7 @@ func runEscalationWithSession(
 			lr.agent = lr.agent.WithToolAgentEntries(entries)
 			capturedDA := da
 			lr.agent.SetToolAgentDispatcher(func(dctx context.Context, agentName, request string, images []local.ContentPart, dout io.Writer) (string, error) {
-				tr, err := getOrBuildToolRunner(dctx, agentName, cfg, capturedDA)
+				tr, err := getOrBuildToolRunner(dctx, agentName, cfg, capturedDA, mem, memory.ConsumerEscalation)
 				if err != nil {
 					return "", err
 				}

@@ -241,7 +241,7 @@ func buildWorkflowRunners(
 				inner = cr
 			} else {
 				var err error
-				inner, err = getOrBuildToolRunner(context.Background(), name, cfg, da)
+				inner, err = getOrBuildToolRunner(context.Background(), name, cfg, da, mem, memory.ConsumerAll)
 				if err != nil {
 					return nil, fmt.Errorf("workflow role %q: %w", role, err)
 				}

@@ -94,7 +94,11 @@ func TestConnectToolSets_ConnectsInParallelAndMergesAcrossToolSets(t *testing.T)
 	}
 	tsPrimary := mcp.NewToolSet([]*mcp.Client{
 		shared(),
-		mcp.New(config.MCPServerConfig{Name: "unreachable", URL: "http://127.0.0.1:1"}),
+		// Short connect timeout so a sandbox/firewall that silently drops
+		// (rather than refuses) connections to 127.0.0.1:1 can't stall this
+		// client until the test ctx deadline and trip the parallelism check
+		// for environmental reasons.
+		mcp.New(config.MCPServerConfig{Name: "unreachable", URL: "http://127.0.0.1:1", ConnectTimeout: "500ms"}),
 	})
 	tsEscalation := mcp.NewToolSet([]*mcp.Client{shared()})
 

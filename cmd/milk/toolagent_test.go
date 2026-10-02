@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/scoutme/milk/internal/memory"
 	"testing"
 
 	"github.com/scoutme/milk/internal/config"
@@ -16,7 +17,7 @@ func TestBuildToolRunner_CLIRequiresDangerouslySkipPermissions(t *testing.T) {
 		Bin:      "claude",
 		// DangerouslySkipPermissions intentionally left false
 	}
-	_, err := buildToolRunner(context.Background(), ac, config.Config{}, nil)
+	_, err := buildToolRunner(context.Background(), ac, config.Config{}, nil, nil, memory.ConsumerAll)
 	if err == nil {
 		t.Fatal("expected an error when DangerouslySkipPermissions is false, got nil")
 	}
@@ -37,7 +38,7 @@ func TestBuildToolRunner_CLIWithSkipPermissions(t *testing.T) {
 		Bin:                        "claude",
 		DangerouslySkipPermissions: true,
 	}
-	runner, err := buildToolRunner(context.Background(), ac, config.Config{}, nil)
+	runner, err := buildToolRunner(context.Background(), ac, config.Config{}, nil, nil, memory.ConsumerAll)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestBuildToolRunner_CLIDefaultName(t *testing.T) {
 		Bin:                        "claude",
 		DangerouslySkipPermissions: true,
 	}
-	runner, err := buildToolRunner(context.Background(), ac, config.Config{}, nil)
+	runner, err := buildToolRunner(context.Background(), ac, config.Config{}, nil, nil, memory.ConsumerAll)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestBuildToolRunner_LocalAgent(t *testing.T) {
 		URL:      "http://localhost:19999",
 		Model:    "mock-model",
 	}
-	runner, err := buildToolRunner(context.Background(), ac, config.Config{}, nil)
+	runner, err := buildToolRunner(context.Background(), ac, config.Config{}, nil, nil, memory.ConsumerAll)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

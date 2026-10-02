@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/scoutme/milk/internal/memory"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,7 @@ func TestBuildToolRunner_CLIIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	runner, err := buildToolRunner(ctx, ac, config.Config{})
+	runner, err := buildToolRunner(ctx, ac, config.Config{}, nil, nil, memory.ConsumerAll)
 	if err != nil {
 		t.Fatalf("buildToolRunner: %v", err)
 	}

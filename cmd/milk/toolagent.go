@@ -11,6 +11,7 @@ import (
 	"github.com/scoutme/milk/internal/agent/smolagent"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/mcp"
+	"github.com/scoutme/milk/internal/memory"
 )
 
 // findAgentByName looks up an agent config by name in cfg.Agents.
@@ -42,7 +43,7 @@ func findAgentByName(cfg config.Config, name string) (config.AgentConfig, bool) 
 // single-prompt CLI mode), existingMCP is nil and a fresh connection is opened.
 //
 // No session callbacks are wired — RunToolCall passes nil for session everywhere.
-func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Config, existingMCP *mcp.ToolSet) (TurnRunner, error) {
+func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Config, existingMCP *mcp.ToolSet, mem *memory.Store, caller memory.Consumer) (TurnRunner, error) {
 	if ac.IsCLI() {
 		if !ac.DangerouslySkipPermissions {
 			return nil, fmt.Errorf(
@@ -91,7 +92,7 @@ func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Conf
 	}
 
 	freshAC := applyFreshAWSCreds(cfg, ac)
-	la := local.NewFromConfig(freshAC).WithToolAgentRole()
+	la := local.NewFromConfig(freshAC).WithToolAgentRole().WithMemoryCaller(caller)
 
 	if existingMCP != nil {
 		la = la.WithMCPToolSet(existingMCP)
@@ -118,16 +119,22 @@ func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Conf
 		la = la.WithDebugLog(dbg)
 	}
 
-	return newLocalRunner(la, name), nil
+	r := newLocalRunner(la, name)
+	r.mem = mem
+	return r, nil
 }
 
 // getOrBuildToolRunner returns a cached TurnRunner for the named tool agent,
-// building it on first use and caching it in da.toolRunners.
-func getOrBuildToolRunner(ctx context.Context, agentName string, cfg config.Config, da *dispatchAgents) (TurnRunner, error) {
+// building it on first use and caching it in da.toolRunners. The cache is keyed
+// by (agent name, memory-visibility caller): the same peer agent invoked from
+// the primary role and from the escalation role must see its invoker's
+// percepts, so each combination gets its own runner (issue #172 gap 2).
+func getOrBuildToolRunner(ctx context.Context, agentName string, cfg config.Config, da *dispatchAgents, mem *memory.Store, caller memory.Consumer) (TurnRunner, error) {
+	cacheKey := agentName + "\x00" + string(caller)
 	if da.toolRunners == nil {
 		da.toolRunners = make(map[string]TurnRunner)
 	}
-	if tr, ok := da.toolRunners[agentName]; ok {
+	if tr, ok := da.toolRunners[cacheKey]; ok {
 		return tr, nil
 	}
 	ac, ok := findAgentByName(cfg, agentName)
@@ -138,10 +145,10 @@ func getOrBuildToolRunner(ctx context.Context, agentName string, cfg config.Conf
 	if da.mcpToolSets != nil {
 		existingMCP = da.mcpToolSets[agentName]
 	}
-	tr, err := buildToolRunner(ctx, ac, cfg, existingMCP)
+	tr, err := buildToolRunner(ctx, ac, cfg, existingMCP, mem, caller)
 	if err != nil {
 		return nil, err
 	}
-	da.toolRunners[agentName] = tr
+	da.toolRunners[cacheKey] = tr
 	return tr, nil
 }
