@@ -146,3 +146,20 @@ func SaveState(path string, s *State) error {
 	}
 	return os.Rename(tmp, path)
 }
+
+// ApplyProgress folds a ProgressMsg into s in place, so fields set once at
+// launch (AgentMap, the full StageTree) survive every later progress update.
+// Shared by every host that renders workflow progress (TUI panel, ACP plan).
+func (s *State) ApplyProgress(msg ProgressMsg) {
+	s.WorkflowName = msg.WorkflowName
+	s.Task = msg.Task
+	s.WorkflowID = msg.WorkflowID
+	s.Role = msg.Role
+	if msg.ActivePaths != nil {
+		s.ActiveStageTree = msg.ActivePaths.Root
+	}
+	if msg.CompletedPaths != nil {
+		s.CompletedStageTree = msg.CompletedPaths.Root
+	}
+	s.Generic = true
+}

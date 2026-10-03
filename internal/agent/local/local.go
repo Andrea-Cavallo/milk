@@ -22,6 +22,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/scoutme/milk/internal/ansi"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/diff"
 	"github.com/scoutme/milk/internal/escalation"
@@ -353,17 +354,21 @@ type Agent struct {
 	model            string
 	chatPath         string // inference path; defaults to "/v1/chat/completions"
 	otelDir          string
-	skipHealthCheck  bool   // true for remote providers that have no /health endpoint (e.g. Bedrock)
-	useBedrockNative bool   // true when provider = "bedrock"; uses Converse API instead of /v1/chat/completions
-	useResponsesAPI  bool   // true when api_format = "responses"; uses OpenAI Responses API instead of Chat Completions
-	skipRepeatCheck  bool   // true when acting as the escalation target: the repeated-prompt check must not fire
-	selfName         string // this agent's own name (e.g. "gemma-local"), injected into the system prompt
-	escalationName   string // non-empty when acting as escalation target; used in the role-aware system prompt
-	workflowRole     bool   // true when acting as a workflow step executor: neutral system prompt, no escalation framing
-	isToolAgent      bool   // true when invoked stateless via RunToolCall (agent-as-tool): no escalate tool — there's no session/runner for it to escalate into
-	skipPerms        bool   // true when dangerously_skip_permissions is on: bypass all tool prompts
-	permStore        *PermStore
-	permAsk          func(tool, summary string) bool // returns true if user allows; nil = deny all (non-TUI)
+	skipHealthCheck  bool        // true for remote providers that have no /health endpoint (e.g. Bedrock)
+	useBedrockNative bool        // true when provider = "bedrock"; uses Converse API instead of /v1/chat/completions
+	useResponsesAPI  bool        // true when api_format = "responses"; uses OpenAI Responses API instead of Chat Completions
+	skipRepeatCheck  bool        // true when acting as the escalation target: the repeated-prompt check must not fire
+	selfName         string      // this agent's own name (e.g. "gemma-local"), injected into the system prompt
+	escalationName   string      // non-empty when acting as escalation target; used in the role-aware system prompt
+	workflowRole     bool        // true when acting as a workflow step executor: neutral system prompt, no escalation framing
+	isToolAgent      bool        // true when invoked stateless via RunToolCall (agent-as-tool): no escalate tool — there's no session/runner for it to escalate into
+	skipPerms        bool        // true when dangerously_skip_permissions is on: bypass all tool prompts
+	skipPermsFn      func() bool // live counterpart of skipPerms; see WithSkipPermissionsFunc
+	// bgPermAsk lets background jobs forked from this agent ask for tool
+	// permission; see WithBackgroundPermissionAsk. nil = jobs never ask.
+	bgPermAsk func(jobID, tool, summary string) bool
+	permStore *PermStore
+	permAsk   func(tool, summary string) bool // returns true if user allows; nil = deny all (non-TUI)
 	// bashAllowedPatterns is AgentConfig.BashAllowedPatterns: bash command
 	// prefixes pre-approved without a grant/ask, checked in checkPermission
 	// before the PermStore/permAsk flow (permissions.go's matchesBashPattern).
@@ -418,12 +423,16 @@ type Agent struct {
 	// (ADR-0043) and receives its calls. nil for background jobs themselves
 	// (RunBackgroundTask never sets it), enforcing the depth-1 fork cap.
 	backgroundManager *Manager
-	// onToolUse is called just before each tool is dispatched, with the tool name
-	// and a short human-readable summary of its key argument.
-	onToolUse func(name, summary string)
-	// onToolResult is called just after each tool finishes, with the tool name
-	// and its result content (the same string stored as the tool message).
-	onToolResult func(name, result string)
+	// onToolUse is called just before each tool is dispatched, with the tool
+	// call's id (toolCall.ID — stable across the use/result pair, unlike
+	// pairing by name or call order), the tool name, a short human-readable
+	// summary of its key argument, and the raw parsed argument map.
+	onToolUse func(id, name, summary string, rawInput map[string]any)
+	// onToolResult is called just after each tool finishes, with the same id
+	// passed to onToolUse, the tool name, its result content (the same string
+	// stored as the tool message), and whether the result is an error
+	// (isToolError's authoritative check, not a caller-side heuristic).
+	onToolResult func(id, name, result string, isError bool)
 	// onResponseSegment is called with each contiguous chunk of assistant text
 	// as it completes — once per tool-calling round before its tools dispatch,
 	// and once more with the final round's text.
@@ -956,6 +965,28 @@ func (a *Agent) WithSkipPermissions(skip bool) *Agent {
 	return &copy
 }
 
+// WithBackgroundPermissionAsk returns a copy whose background jobs can ask for
+// tool permission through fn (which receives the job's ID). Without it a job
+// is denied anything not already granted: the foreground ask blocks on a
+// prompt the user has no reason to expect. An embedder that can attribute
+// the question to the job and bound the wait (ACP) supplies fn; it must be
+// safe for concurrent use and must return rather than block forever.
+func (a *Agent) WithBackgroundPermissionAsk(fn func(jobID, tool, summary string) bool) *Agent {
+	copy := *a
+	copy.bgPermAsk = fn
+	return &copy
+}
+
+// WithSkipPermissionsFunc returns a copy whose permission checks also consult
+// fn on every tool call, so the setting can change while the agent is live
+// (ACP's /skip-permissions). fn is called from turn and background-job
+// goroutines and must be safe for concurrent use.
+func (a *Agent) WithSkipPermissionsFunc(fn func() bool) *Agent {
+	copy := *a
+	copy.skipPermsFn = fn
+	return &copy
+}
+
 // WithOnOpenFile registers a callback that opens a file in the editor (TUI-side).
 // When nil, open_file calls are rejected with a clear error.
 func (a *Agent) WithOnOpenFile(fn func(path string) error) *Agent {
@@ -978,17 +1009,19 @@ func (a *Agent) WithOnRequestSize(fn func(bytes int64)) *Agent {
 }
 
 // WithOnToolUse returns a shallow copy of the agent that calls fn just before
-// each tool is dispatched. name is the tool name; summary is the short
-// human-readable argument summary produced by toolArgSummary.
-func (a *Agent) WithOnToolUse(fn func(name, summary string)) *Agent {
+// each tool is dispatched. id is the tool call's id (toolCall.ID); name is
+// the tool name; summary is the short human-readable argument summary
+// produced by toolArgSummary; rawInput is the parsed argument map.
+func (a *Agent) WithOnToolUse(fn func(id, name, summary string, rawInput map[string]any)) *Agent {
 	copy := *a
 	copy.onToolUse = fn
 	return &copy
 }
 
 // WithOnToolResult returns a shallow copy of the agent that calls fn just
-// after each tool finishes dispatching, with its result content.
-func (a *Agent) WithOnToolResult(fn func(name, result string)) *Agent {
+// after each tool finishes dispatching, with the same id passed to
+// WithOnToolUse's callback, its result content, and whether it's an error.
+func (a *Agent) WithOnToolResult(fn func(id, name, result string, isError bool)) *Agent {
 	copy := *a
 	copy.onToolResult = fn
 	return &copy
@@ -1908,6 +1941,9 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, context
 	// job's requests can be reconstructed from milk.log without guessing
 	// which of several concurrent jobs produced them.
 	bg.jobID = jobID
+	if ask := a.bgPermAsk; ask != nil {
+		bg.permAsk = func(tool, summary string) bool { return ask(jobID, tool, summary) }
+	}
 
 	usage := session.TokenUsage{Model: bg.model, Agent: bg.logRole()}
 	bg.onTokens = func(_, _ string, prompt, completion, cacheRead, cacheCreation int64) {
@@ -2009,6 +2045,8 @@ func (a *Agent) cloneForBackground() *Agent {
 		useResponsesAPI:  a.useResponsesAPI,
 		escalationName:   a.escalationName, // read-only after construction; used for the usage.Agent role tag
 		skipPerms:        a.skipPerms,
+		skipPermsFn:      a.skipPermsFn, // concurrency-safe by contract
+		bgPermAsk:        a.bgPermAsk,
 		permStore:        a.permStore, // shared, but already designed for concurrent access (concurrent tool-call batches use it today)
 		// permAsk deliberately NOT copied. It blocks synchronously on a
 		// plain channel receive (readLineLabeled's <-respCh in cmd/milk)
@@ -2020,6 +2058,8 @@ func (a *Agent) cloneForBackground() *Agent {
 		// asking: already-granted tools (via the shared permStore above,
 		// or skipPerms) still work; anything else fails fast with a
 		// tool-result error the model can react to, never hangs.
+		// (RunBackgroundTask installs a context-aware ask instead when the
+		// embedder supplied one via WithBackgroundPermissionAsk.)
 		client: client,
 		// tokenCmd/sigv4 deliberately NOT copied: they're convenience
 		// pointers to the *foreground* client's auth wrappers, used only for
@@ -2069,7 +2109,7 @@ func (a *Agent) checkPermission(tool, summary, commandArg string) (allowed bool,
 		)
 		return true, ""
 	}
-	if a.skipPerms {
+	if a.skipPerms || (a.skipPermsFn != nil && a.skipPermsFn()) {
 		obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_grants",
 			attribute.String("name", tool),
 			attribute.String("source", "skip_perms"),
@@ -2250,7 +2290,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 		if a.onToolUse != nil {
 			var argMap map[string]any
 			json.Unmarshal([]byte(tc.Function.Arguments), &argMap) //nolint:errcheck
-			a.onToolUse(tc.Function.Name, toolArgSummary(argMap))
+			a.onToolUse(tc.ID, tc.Function.Name, toolArgSummary(argMap), argMap)
 		}
 		args := tc.Function.Arguments
 		if len(args) > 120 {
@@ -2290,7 +2330,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 			if strings.HasPrefix(tc.Function.Name, "agent_") {
 				continue
 			}
-			a.onToolResult(tc.Function.Name, outcomes[i].msg.Content)
+			a.onToolResult(tc.ID, tc.Function.Name, outcomes[i].msg.Content, isToolError(outcomes[i].msg.Content))
 		}
 	}
 
@@ -2371,7 +2411,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 			// if this guess is wrong too.
 			agentName = tc.Function.Name[len("agent_"):]
 		}
-		fmt.Fprintf(out, "\n\033[2m⚙ calling agent %s…\033[0m\n", agentName)
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim(fmt.Sprintf("⚙ calling agent %s…", agentName)))
 		result, err := a.toolAgentDispatcher(ctx, agentName, reqArgs.Request, pendingImages, out)
 		if err != nil {
 			obs.Inc(ctx, inferenceScope, "milk.tools.tool_agent_errors",
@@ -2588,9 +2628,9 @@ func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 				summary = string(runes[:maxSummary-1]) + "…"
 			}
 		}
-		fmt.Fprintf(out, "\n%s\n", dimWrap("⚙ "+tc.Function.Name+": "+summary))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name+": "+summary))
 	} else {
-		fmt.Fprintf(out, "\n%s\n", dimWrap("⚙ "+tc.Function.Name))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name))
 	}
 }
 
@@ -2619,20 +2659,6 @@ func toolDiff(name, argsJSON string) string {
 		return diff.ForWrite(path, content, 3)
 	}
 	return ""
-}
-
-// dimWrap wraps s in ANSI dim, closing and reopening the escape at each embedded
-// newline so every output line is a self-contained dim span with no bleed.
-func dimWrap(s string) string {
-	const on, off = "\033[2m", "\033[0m"
-	if !strings.Contains(s, "\n") {
-		return on + s + off
-	}
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = on + l + off
-	}
-	return strings.Join(lines, "\n")
 }
 
 // summarizeToolTrail builds a fallback assistant message for a turn that

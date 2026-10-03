@@ -164,12 +164,17 @@ func (m *model) refreshSessionScopedState(oldSessionID string) error {
 
 // handleTasksCmd handles `/tasks` — lists current session + global tasks in the transcript.
 func (m model) handleTasksCmd(arg string) (tea.Model, tea.Cmd) {
-	if m.taskStore == nil {
-		m.appendTranscript(milkTag() + " task store not available\n")
-		return m, nil
+	m.appendTranscript(execTasks(m.taskStore))
+	return m, nil
+}
+
+// execTasks renders the session and global task lists (trailing newline included).
+func execTasks(store *tasks.Store) string {
+	if store == nil {
+		return milkTag() + " task store not available\n"
 	}
-	sessionTasks, _ := m.taskStore.List(tasks.ListOpts{})
-	globalTasks, _ := m.taskStore.List(tasks.ListOpts{IncludeGlobal: true})
+	sessionTasks, _ := store.List(tasks.ListOpts{})
+	globalTasks, _ := store.List(tasks.ListOpts{IncludeGlobal: true})
 
 	// Build session ID set to find global-only tasks.
 	sessIDs := map[string]bool{}
@@ -199,32 +204,33 @@ func (m model) handleTasksCmd(arg string) (tea.Model, tea.Cmd) {
 			fmt.Fprintf(&sb, "    %s  %-10s  %s\n", t.ID, t.Status, t.Title)
 		}
 	}
-	m.appendTranscript(sb.String())
-	return m, nil
+	return sb.String()
 }
 
 // handleTaskCmd handles `/task done <id>` shortcut.
 func (m model) handleTaskCmd(arg string) (tea.Model, tea.Cmd) {
+	m.appendTranscript(execTask(arg, m.taskStore) + "\n")
+	return m, nil
+}
+
+// execTask runs `/task done <id>` and returns the message to show (no trailing newline).
+func execTask(arg string, store *tasks.Store) string {
 	const donePrefix = "done "
-	if !strings.HasPrefix(arg, "done ") {
-		m.appendTranscript(milkTag() + " usage: /task done <id>\n")
-		return m, nil
+	const usage = " usage: /task done <id>"
+	if !strings.HasPrefix(arg, donePrefix) {
+		return milkTag() + usage
 	}
 	id := strings.TrimSpace(strings.TrimPrefix(arg, donePrefix))
 	if id == "" {
-		m.appendTranscript(milkTag() + " usage: /task done <id>\n")
-		return m, nil
+		return milkTag() + usage
 	}
-	if m.taskStore == nil {
-		m.appendTranscript(milkTag() + " task store not available\n")
-		return m, nil
+	if store == nil {
+		return milkTag() + " task store not available"
 	}
-	if err := m.taskStore.Complete(id); err != nil {
-		m.appendTranscript(fmt.Sprintf("%s task %q: %v\n", milkTag(), id, err))
-		return m, nil
+	if err := store.Complete(id); err != nil {
+		return fmt.Sprintf("%s task %q: %v", milkTag(), id, err)
 	}
-	m.appendTranscript(fmt.Sprintf("%s task %s marked done\n", milkTag(), id))
-	return m, nil
+	return fmt.Sprintf("%s task %s marked done", milkTag(), id)
 }
 
 // handleBgCmd handles /bg — list, start, and stop background agents.
@@ -265,13 +271,17 @@ func (m model) handleBgCmd(arg string) (tea.Model, tea.Cmd) {
 
 // handleBgList renders the background-agents table into the transcript.
 func (m model) handleBgList(mgr *local.Manager) model {
-	jobs := mgr.Jobs()
+	m.appendTranscript(renderBgList(mgr.Jobs()))
+	return m
+}
+
+// renderBgList formats the background-agents table (trailing newline included).
+func renderBgList(jobs []local.Job) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s background agents:\n", milkTag())
 	if len(jobs) == 0 {
 		fmt.Fprintf(&sb, "  (none)\n")
-		m.appendTranscript(sb.String())
-		return m
+		return sb.String()
 	}
 	for _, j := range jobs {
 		elapsed := ""
@@ -286,8 +296,7 @@ func (m model) handleBgList(mgr *local.Manager) model {
 		}
 		fmt.Fprintf(&sb, "  %-8s  %-10s  %8s  %s\n", j.ID, status, elapsed, j.Label)
 	}
-	m.appendTranscript(sb.String())
-	return m
+	return sb.String()
 }
 
 // handleReloadCmd re-parses config.json immediately and sends a configReloadMsg.
