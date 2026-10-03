@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// ExtNotification mapping (ext.go): milk/notification|warning|memory|route.
+// ExtNotification mapping (ext.go): _milk/notification|warning|memory|route.
 // Each carries its kind payload under the sanctioned Ext* envelope.
 
 func TestExtNotificationKinds(t *testing.T) {

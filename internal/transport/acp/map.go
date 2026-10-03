@@ -52,7 +52,7 @@ func (m Mapper) Ext(n ExtNotification) Notification {
 
 // --- matching extensions: ExtNotification channels -------------------------
 
-// Toast maps one ADR-0048 toast onto milk/notification (id, severity,
+// Toast maps one ADR-0048 toast onto _milk/notification (id, severity,
 // command_hint, body).
 func (m Mapper) Toast(id, severity, commandHint, body string) Notification {
 	return m.Ext(NotificationExt(NotificationPayload{
@@ -60,7 +60,7 @@ func (m Mapper) Toast(id, severity, commandHint, body string) Notification {
 	}))
 }
 
-// LoopWarning maps a loop-detection verdict (internal/loop) onto milk/warning
+// LoopWarning maps a loop-detection verdict (internal/loop) onto _milk/warning
 // — carrying Signal.Category and IsConsumption() plus the count/limit facts
 // so hosts render "[⚠ loop detected: …]" vs "[⚠ consumption: …]" correctly
 // (issue #173).
@@ -75,18 +75,18 @@ func (m Mapper) LoopWarning(v loop.Verdict, count, limit int) Notification {
 }
 
 // MemoryOp maps one memory-panel operation (record|get|list|forget) onto
-// milk/memory.
+// _milk/memory.
 func (m Mapper) MemoryOp(op, perceptID, subject string) Notification {
 	return m.Ext(MemoryExt(MemoryPayload{Op: op, PerceptID: perceptID, Subject: subject}))
 }
 
-// MemoryRecord maps a recorded percept (internal/memory) onto milk/memory,
+// MemoryRecord maps a recorded percept (internal/memory) onto _milk/memory,
 // with the percept's subject (role theme) for panel grouping.
 func (m Mapper) MemoryRecord(p memory.Percept) Notification {
 	return m.MemoryOp("record", p.ID, p.Roles.Theme)
 }
 
-// Route maps a routing decision (internal/router.Decision) onto milk/route.
+// Route maps a routing decision (internal/router.Decision) onto _milk/route.
 func (m Mapper) Route(d router.Decision) Notification {
 	return m.Ext(RouteExt(RoutePayload{
 		Target:     string(d.Target),
@@ -95,7 +95,7 @@ func (m Mapper) Route(d router.Decision) Notification {
 	}))
 }
 
-// AgentSwitch maps a self-escalation hand-off onto milk/route (from/to).
+// AgentSwitch maps a self-escalation hand-off onto _milk/route (from/to).
 func (m Mapper) AgentSwitch(from, to string) Notification {
 	return m.Ext(RouteExt(RoutePayload{From: from, To: to}))
 }
@@ -111,7 +111,7 @@ func (m Mapper) WorkflowPlan(st *workflow.State, cancelled bool) Notification {
 func (m Mapper) Terminal(u SessionUpdate) Notification { return m.Update(u) }
 
 // Commands maps the advertised slash commands onto available_commands_update
-// (commands.go); pass MilkCommands() for milk's own surface.
+// (commands.go).
 func (m Mapper) Commands(cmds []AvailableCommand) Notification {
 	return m.Update(NewAvailableCommandsUpdate(cmds))
 }
@@ -311,6 +311,48 @@ func ToolCallContentPoll(toolCallID ToolCallID, buf *livebuf.Buffer, cursor *Buf
 		SessionUpdate: "tool_call_content_chunk",
 		ToolCallID:    toolCallID,
 		Content:       ContentItem(delta),
+	}}
+}
+
+// BackgroundJobCall maps a background job onto one tool-call row (status and,
+// once finished, result or error). Unlike BackgroundJobTree it has no
+// synthetic parent row: the spawning model's own tool call already shows the
+// spawn, and a job started by the user has nothing to hang a parent on.
+func BackgroundJobCall(job local.Job) ToolCallUpdate {
+	u := ToolCallUpdate{
+		SessionUpdate: "tool_call_update",
+		ToolCallID:    JobToolCallID(job.ID),
+		Name:          "background_agent",
+		Title:         "background agent: " + job.Label,
+		Kind:          ToolKindOther,
+		Status:        ToolCallStatusForJob(job.Status),
+		RawInput:      map[string]any{"task": job.Task, "model": job.Model, "role": job.Role},
+		Meta:          map[string]any{"milk/job_id": job.ID},
+	}
+	switch {
+	case job.Err != nil:
+		u.RawOutput = map[string]any{"error": job.Err.Error()}
+	case job.Status == local.JobCompleted:
+		u.RawOutput = map[string]any{"result": job.Result}
+	}
+	return u
+}
+
+// ToolCallContentReplace is ToolCallContentPoll for protocol-v1 clients, which
+// have no append update: whenever the buffer grew it re-sends the full
+// retained content, replacing what the client holds. Callers should throttle
+// it, since each call carries everything streamed so far.
+func ToolCallContentReplace(toolCallID ToolCallID, buf *livebuf.Buffer, cursor *BufCursor) []SessionUpdate {
+	if buf == nil || cursor == nil {
+		return nil
+	}
+	if delta, _ := cursor.Next(buf); delta == "" {
+		return nil
+	}
+	return []SessionUpdate{ToolCallUpdate{
+		SessionUpdate: "tool_call_update",
+		ToolCallID:    toolCallID,
+		Content:       []ToolCallContent{ContentItem(cursor.Sent())},
 	}}
 }
 

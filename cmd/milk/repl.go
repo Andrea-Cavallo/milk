@@ -20,8 +20,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"go.opentelemetry.io/otel/attribute"
-
 	"github.com/scoutme/milk/internal/agent/aider"
 	"github.com/scoutme/milk/internal/agent/claude"
 	"github.com/scoutme/milk/internal/agent/local"
@@ -509,7 +507,7 @@ func makeLocalPermAsk(host events.Host, ps *local.PermStore) func(tool, summary 
 			prompt += fmt.Sprintf("  (%s)", dim(summary))
 		}
 		prompt += fmt.Sprintf("\n%s Allow? [Y/n] ", milkTag())
-		outcome, _ := host.RequestPermission(context.Background(), events.PermissionRequest{Prompt: prompt})
+		outcome, _ := host.RequestPermission(context.Background(), events.PermissionRequest{Prompt: prompt, Tool: tool, Summary: summary})
 		return outcome.Allow
 	}
 }
@@ -1952,17 +1950,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.workflowState == nil {
 			m.workflowState = &workflow.State{}
 		}
-		m.workflowState.WorkflowName = msg.WorkflowName
-		m.workflowState.Task = msg.Task
-		m.workflowState.WorkflowID = msg.WorkflowID
-		m.workflowState.Role = msg.Role
-		if msg.ActivePaths != nil {
-			m.workflowState.ActiveStageTree = msg.ActivePaths.Root
-		}
-		if msg.CompletedPaths != nil {
-			m.workflowState.CompletedStageTree = msg.CompletedPaths.Root
-		}
-		m.workflowState.Generic = true
+		m.workflowState.ApplyProgress(msg)
 		m.autoOpenPanel(regionWorkflow)
 		m.lastWorkflowActivity = time.Now()
 		m.workflowTimeoutWarned = false
@@ -3037,22 +3025,12 @@ func (m model) maybeAutoFollowupBackgroundJobs(waitForWholeWave bool) (tea.Model
 		m.pendingUserBackgroundFollowup = false
 		return m, nil
 	}
-	if waitForWholeWave && mgr.ActiveCount() > 0 {
-		// A newer wave started in the meantime — wait for that wave's own
-		// completion signal instead.
-		m.pendingBackgroundFollowup = false
+	busy := m.busy || m.pendingPerm != nil || m.pendingDirectBash != nil || m.ptyPane != nil
+	d := decideFollowup(waitForWholeWave, mgr.ActiveCount(), busy)
+	applyFollowupDecision(waitForWholeWave, d, &m.pendingBackgroundFollowup, &m.pendingUserBackgroundFollowup)
+	if d != followupNow {
 		return m, nil
 	}
-	if m.busy || m.pendingPerm != nil || m.pendingDirectBash != nil || m.ptyPane != nil {
-		if waitForWholeWave {
-			m.pendingBackgroundFollowup = true
-		} else {
-			m.pendingUserBackgroundFollowup = true
-		}
-		return m, nil
-	}
-	m.pendingBackgroundFollowup = false
-	m.pendingUserBackgroundFollowup = false
 	return m.submitInput(backgroundFollowupPrompt, dim("[background]")+" ")
 }
 
@@ -3406,52 +3384,17 @@ func spinnerTick() tea.Cmd {
 
 // --- Agent dispatch ---
 
-// replTurnSourceLabel returns the "source" label for milk.turns.total based on
-// TUI routing state: user (sticky/force), auto_sticky, or auto (router-decided).
-func replTurnSourceLabel(st *interactiveState) string {
-	if st.stickyEscalate || st.stickyPrimary {
-		return "user"
-	}
-	if st.autoStickyEscalate {
-		return "auto_sticky"
-	}
-	return "auto"
-}
-
 // runTurn routes a prompt to the appropriate agent, writing output to out.
 func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agents *dispatchAgents, input string, out io.Writer, ir ...inputReader) error {
 	localAvail := agents.localAvail
 	escalationAvail := agents.escalationAvail
 
-	// Route first (fast), then apply the per-agent timeout so long-running
-	// escalation agents can have a higher limit than the local default.
-	forceEscalate := st.forceEscalate || st.stickyEscalate || st.autoStickyEscalate
-	forcePrimary := st.forcePrimary || st.stickyPrimary
-	routeCtx, routeCancel := context.WithTimeoutCause(ctx, agentTimeout, fmt.Errorf("turn timeout"))
-	decision, routeErr := rtr.Route(routeCtx, st.sess, input, forceEscalate, forcePrimary)
-	routeCancel()
+	rt, routeErr := routeTurn(ctx, st, rtr, input, localAvail, escalationAvail)
 	if routeErr != nil {
-		return fmt.Errorf("routing: %w", routeErr)
+		return routeErr
 	}
-	st.forceEscalate = false
-	// A forcePrimary turn (single-turn /primary <prompt>) breaks auto-sticky so
-	// the next turn is re-evaluated by the router rather than staying on escalation.
-	if st.forcePrimary {
-		st.autoStickyEscalate = false
-	}
-	st.forcePrimary = false
-	// stickyEscalate/stickyPrimary/autoStickyEscalate persist until explicitly cleared.
-
-	target := decision.Target
-	if target == router.TargetLocal && !localAvail {
-		target = router.TargetEscalation
-		st.activeFallbackTarget = "escalation"
-	} else if target == router.TargetEscalation && !escalationAvail {
-		target = router.TargetLocal
-		st.activeFallbackTarget = "primary"
-	} else {
-		st.activeFallbackTarget = ""
-	}
+	target := rt.Target
+	st.activeFallbackTarget = rt.Fallback
 	defer func() { st.activeFallbackTarget = "" }()
 
 	targetName := "local"
@@ -3485,7 +3428,7 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 	}
 	st.notifier.NotifyTurnStart(turnCtx, agentName, targetName, input)
 
-	sourceLabel := replTurnSourceLabel(st)
+	sourceLabel := turnSource(st)
 	turnStart := time.Now()
 	var turnErr error
 	var pw io.Writer
@@ -3545,33 +3488,13 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 		// CLI image temp files are no longer needed after the turn.
 		cleanupCLIImageFiles(st)
 	}
-	targetLabel := string(target)
-	obs.Inc(turnCtx, milkScope, "milk.turns.total",
-		attribute.String("target", targetLabel),
-		attribute.String("source", sourceLabel),
-	)
-	obs.RecordDuration(turnCtx, milkScope, "milk.turns.latency_ms", time.Since(turnStart),
-		attribute.String("target", targetLabel),
-	)
-	if turnErr != nil {
-		obs.Inc(turnCtx, milkScope, "milk.turns.errors",
-			attribute.String("target", targetLabel),
-			attribute.String("kind", "inference"),
-		)
-	}
+	recordTurn(turnCtx, target, sourceLabel, turnStart, turnErr)
 	st.notifier.NotifyTurnDone(turnCtx, agentName, turnErr)
 	if turnErr == nil {
 		if !segmentsFired && lastResponseText != "" {
 			st.notifier.NotifyResponse(turnCtx, agentName, lastResponseText)
 		}
-		// Auto-sticky: if the router decided to escalate (not user-pinned) and the
-		// turn succeeded, keep subsequent turns on the escalation agent.
-		// Explicit /escalate uses stickyEscalate (pinned) and is unaffected by this.
-		if target == router.TargetEscalation &&
-			!st.stickyEscalate && !st.forceEscalate &&
-			st.cfg.StickyEscalationEnabled() {
-			st.autoStickyEscalate = true
-		}
+		noteTurnSucceeded(st, target)
 	}
 	return turnErr
 }

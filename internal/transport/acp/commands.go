@@ -2,6 +2,7 @@ package acp
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -25,17 +26,19 @@ type AvailableCommandInput struct {
 
 // AvailableCommand is one advertised slash command.
 type AvailableCommand struct {
-	Name  string                 `json:"name"`
-	Input *AvailableCommandInput `json:"input,omitempty"`
+	Name        string                 `json:"name"`        // without the leading "/"; clients prepend it
+	Description string                 `json:"description"` // required by the spec
+	Input       *AvailableCommandInput `json:"input,omitempty"`
 }
 
-// Command builds an available command with a text-input hint (empty hint →
-// no structured input).
-func Command(name, hint string) AvailableCommand {
+// Command builds an available command. A leading "/" on name is stripped (the
+// wire form has none). Empty hint → no structured input.
+func Command(name, description, hint string) AvailableCommand {
+	name = strings.TrimPrefix(name, "/")
 	if hint == "" {
-		return AvailableCommand{Name: name}
+		return AvailableCommand{Name: name, Description: description}
 	}
-	return AvailableCommand{Name: name, Input: &AvailableCommandInput{Type: CommandInputText, Hint: hint}}
+	return AvailableCommand{Name: name, Description: description, Input: &AvailableCommandInput{Type: CommandInputText, Hint: hint}}
 }
 
 // AvailableCommandsUpdate is the available_commands_update session update.
@@ -51,52 +54,6 @@ func (AvailableCommandsUpdate) isSessionUpdate() {}
 // NewAvailableCommandsUpdate wraps the advertised commands.
 func NewAvailableCommandsUpdate(cmds []AvailableCommand) AvailableCommandsUpdate {
 	return AvailableCommandsUpdate{SessionUpdate: "available_commands_update", AvailableCommands: cmds}
-}
-
-// MilkCommands advertises milk's slash-command surface. The list mirrors
-// cmd/milk/interactive.go's slashCommands (the TUI's tab-completion source);
-// cmd/milk/host_tui.go's parity checks fail the build's tests if the two
-// lists drift. Input hints carry the TUI's usage strings.
-func MilkCommands() []AvailableCommand {
-	return []AvailableCommand{
-		Command("/escalate", ""),
-		Command("/primary", ""),
-		Command("/paste", ""),
-		Command("/learn", "<instruction>"),
-		Command("/otel", ""),
-		Command("/metrics", ""),
-		Command("/usage", ""),
-		Command("/memory", ""),
-		Command("/export", "[<path>]"),
-		Command("/history", "[<n>]"),
-		Command("/panel", "memory|tasks|background|workflow"),
-		Command("/forget", "<description>|#<id>"),
-		Command("/skip-permissions", "[on|off]"),
-		Command("/agent", "list|add <name>|remove <name>|switch <name>"),
-		Command("/colorize", "[on|off]"),
-		Command("/think", "on|off"),
-		Command("/setup", "telegram"),
-		Command("/config", "init|open"),
-		Command("/open", "<file>"),
-		Command("/mcp", "add|auth <server-name>|list"),
-		Command("/update", "check|install|skip"),
-		Command("/workflow", "dev|swarm|pair|resume|status"),
-		Command("/server", "status [<agent>]|start|stop"),
-		Command("/reload", ""),
-		Command("/tasks", ""),
-		Command("/task", "add <title>|done <id>|list"),
-		Command("/attach", "<path>"),
-		Command("/bash", "list|allow <prefix>|deny <prefix>"),
-		Command("/bg", "list|start <task>|stop <id>"),
-		Command("/notifications", "[<n>]"),
-		Command("/new", ""),
-		Command("/clear", ""),
-		Command("/drop", "<session-id>"),
-		Command("/list", ""),
-		Command("/help", "[<command>]"),
-		Command("/exit", ""),
-		Command("/quit", ""),
-	}
 }
 
 // --- session config options (/think, /agent switch, /model) ----------------

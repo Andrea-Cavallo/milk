@@ -110,7 +110,7 @@ func TestACPHost_Notify(t *testing.T) {
 
 	sent := conn.sent()
 	if len(sent) != 1 || sent[0].Method != acp.ExtMethodNotification {
-		t.Fatalf("sent = %+v, want one milk/notification", sent)
+		t.Fatalf("sent = %+v, want one _milk/notification", sent)
 	}
 	payload, ok := sent[0].Params.(acp.NotificationPayload)
 	if !ok || payload.Body != "hello" || payload.CommandHint != "/foo" {

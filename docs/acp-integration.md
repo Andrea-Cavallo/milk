@@ -36,6 +36,7 @@ milk serve --acp
 | `session/prompt` | client → agent | ✅ real |
 | `session/cancel` | client → agent (notification) | ✅ real |
 | `session/update` (`state_update`) | agent → client | ✅ real: `running` at turn start, `idle` at turn end |
+| `session/update` (`available_commands_update`) | agent → client | ✅ real, sent once right after the `session/new` response. Advertises exactly the commands listed under "Slash commands" below (no per-argument granularity, no refresh — `milk serve --acp` has no config reload) |
 | `session/update` (`agent_message_chunk`) | agent → client | ✅ real, but **one per completed turn, not per token** — see caveat below |
 | `session/update` (`tool_call_update`) | agent → client | ✅ real, for both the local-provider and claude-cli-escalation paths |
 | `session/request_permission` | agent → client | ✅ real, but **local-provider agents only** — see caveat below |
@@ -46,6 +47,137 @@ Everything else a real ACP client might try — `session/list`, `session/resume`
 standalone per-request cancel — returns the standard JSON-RPC **`-32601`
 method not found** error. That's a deliberate, documented gap, not a bug: see
 [Deferred](#deferred-not-silently-missing) below.
+
+## Slash commands
+
+A `session/prompt` whose text starts with a known slash command is executed by
+milk itself rather than sent to the model. Output comes back as one
+`agent_message_chunk` (ANSI stripped) between the usual `running`/`idle`
+`state_update`s. The advertised list and the executable list come from one
+table (`cmd/milk/acp_commands.go`), so nothing is advertised that doesn't run.
+
+| Command | Effect |
+|---|---|
+| `/escalate [fresh] [<msg>]` | pin all turns to the escalation agent; with a message, force that one turn |
+| `/primary [<msg>]` | pin all turns to the primary agent; with a message, force that one turn |
+| `/learn <fact>` | store a persistent memory |
+| `/memory [global\|session\|<pattern>]` | list percepts |
+| `/usage`, `/metrics` | token usage / recent metrics |
+| `/export [json\|<path>]` | print the transcript, or write it to a file |
+| `/list` | list sessions for the working directory |
+| `/skip-permissions [on\|off]` | approve every tool call without asking (seeded from `dangerously_skip_permissions`, like the TUI) |
+| `/think [on\|off]` | show or hide `agent_thought_chunk` updates for this session (default on, as before, unless `show_reasoning` is set to false) |
+| `/agent [list]` | list configured agents (switching is TUI-only) |
+| `/tasks`, `/task done <id>` | list / complete tasks (session and global) |
+| `/bg [list\|start <task>\|stop <id>]` | list, start or stop background agents |
+| `/workflow <name> <task> [--<role> <agent>]` | run a workflow (see "Workflows, tasks and background agents") |
+| `/workflow resume\|status\|clear` | continue, inspect or clear the session's saved workflow |
+| `/help` | list the above |
+
+TUI-only commands (`/panel`, `/colorize`, `/paste`, `/attach`, `/mcp`,
+`/config`, `/reload`, `/new`, `/workflow reconfigure`,
+`/task add`, …) are **not** advertised. If sent anyway they get a "only available in the
+milk TUI" reply instead of reaching the model. Text that merely mentions a
+command mid-sentence is an ordinary prompt. Routing pins from `/escalate` and
+`/primary` are per ACP session.
+
+## Workflows, tasks and background agents
+
+These work over ACP without the TUI's panels; their state reaches the client
+as session updates instead.
+
+- **Tasks.** The model gets the task tools (`create_task`, …) and `/tasks`,
+  `/task done <id>` work. Every change to the session's task list sends a
+  plan update carrying the whole list (`pending`/`in_progress`/`completed`;
+  `blocked` has no ACP status and is sent as `pending` with a "(blocked)"
+  suffix and `_meta.blocked`).
+- **Background agents.** The model's `spawn_background_agent` tool and
+  `/bg start|list|stop` work. Each job is a `tool_call_update` row
+  (`background_agent`, in_progress → completed/failed). Jobs outlive the turn
+  that started them, and `session/cancel` does not stop them (`/bg stop`
+  does). **milk follows up on its own:** when a wave of agent-spawned jobs
+  finishes (or a `/bg start` job does) and no turn is running, it starts a
+  turn without a prompt — `state_update` `running`, the agent's report of the
+  results as ordinary message chunks, then `idle` — as the TUI does. ACP v2
+  permits this ("background activity MAY … emit updates while the Agent is
+  idle"); a v1 client has no such notion and may not expect it. If a turn is
+  already running when the jobs finish, the follow-up runs right after it. A
+  client prompt that arrives during a follow-up waits for it to finish (it
+  isn't cancelled, which would lose the results it already consumed), so
+  turns never overlap. `session/cancel` does abort a follow-up.
+- **Workflows.** The model's `start_workflow` tool and
+  `/workflow <name> <task> [--<role> <agent>]` run the native workflow engine
+  *inside* the `session/prompt` that started it, so the prompt stays open for
+  the whole run and `session/cancel` cancels it (`/workflow resume` continues
+  from the last checkpoint). Roles without an explicit agent use the
+  escalation agent. Progress is a plan update with one entry per stage, plus a
+  `workflow` tool-call row and start/finish messages. Stage output streams
+  into that row (see "Live output" below), under a `── <role> ──` header per
+  stage; the workflow definition still decides what it writes to disk.
+  **User questions are auto-answered:** a step that would ask the user
+  something (designer questions, `user_checkpoint`) is shown to the client and
+  answered with "continue" (accept the designer's defaults), because the user
+  cannot reply while the prompt is open. Put specifics in the task text to
+  steer it. Only one workflow runs per session at a time.
+- **Live output.** A background job's output and a workflow's stage output
+  stream into their tool-call rows (`job:<id>`, `workflow:<n>`), flushed
+  before the row's `completed`/`failed` update. v2 clients get
+  `tool_call_content_chunk` appends; v1 has no append, so v1 clients get a
+  `tool_call_update` with the full content so far, at most every 400 ms.
+  Output is capped by the live buffer, so a very long run shows its tail.
+- **Plan shape depends on the client.** A client that sent
+  `protocolVersion: 1` in `initialize` gets the v1 `plan` update (one plan per
+  session, no `planId`; tasks and workflow entries are concatenated, and
+  `cancelled` is sent as `completed` with a "(cancelled)" suffix). Anything
+  else gets v2 `plan_update` with a `planId` per plan (`tasks-<session>`,
+  `workflow-<n>`).
+
+## Tool permissions
+
+A local-provider agent asks before running side-effecting tools (file writes,
+shell commands, …) with `session/request_permission`, unless the tool is
+already granted, matches `bash_allowed_patterns`, or skip-permissions is on.
+
+- **Request shape.** Title `Allow <tool>?`, the call summary as description,
+  and the pending tool call as subject: v2 clients get
+  `subject: {type: "tool_call", toolCall: {toolCallId}}`; a v1 client (one
+  that sent `protocolVersion: 1`) gets v1's `toolCall` object instead.
+  Options are `allow_once` / `reject_once`. An approval is remembered for that
+  tool, as in the TUI.
+- **A client that can't answer.** If `session/request_permission` fails (for
+  instance a client that doesn't implement it), the tool is denied and milk
+  says so in a message, naming the cause, rather than only reporting "denied
+  by user". Use `/skip-permissions on` (or set `dangerously_skip_permissions`
+  in the config) to run tools without asking.
+- **Background agents** ask too. Their prompts point at the job's own
+  `job:<id>` tool-call row and say which job is asking; the wait is bounded by
+  the background-agent timeout, after which the tool is denied. `/skip-permissions`
+  and `dangerously_skip_permissions` apply to jobs as well. (In the TUI a
+  background job never asks and can only use tools already granted.)
+- **Not covered yet:** the claude-cli escalation agent (its tool permissions
+  are denied by default over ACP, and no request is ever sent), and agents
+  that a workflow role or a tool-agent entry builds separately from the
+  session's primary/escalation agents.
+
+## Routing and warnings
+
+- **Routing.** Each model turn sends a `_milk/route` notification
+  (`agent`, `target`, `reason`) once the router has decided, and the turn's
+  closing `idle` `state_update` carries the same as
+  `_meta["milk/route"]`. A one-line message ("→ now handled by <agent>
+  (<target>): <reason>") appears only when the handling target *changes*
+  from the previous model turn.
+- **Loop and consumption warnings.** milk's loop detector runs per session:
+  streamed reasoning is checked for repetition as it arrives (even with
+  `/think off`), and each finished turn is checked for token velocity, silent
+  burn, turn flood and cross-turn repetition. A verdict is sent as a
+  `[⚠ loop detected: …]` or `[⚠ consumption: …]` message chunk and as a
+  `_milk/warning` notification (`category`, `consumption`, `message`). With
+  `loop_detection.auto_interrupt: true` the running turn is cancelled too.
+  Workflow steps are exempt from the reasoning check, as in the TUI.
+- **Custom methods.** ACP requires custom notification methods to start with
+  `_`, and clients should ignore ones they don't know. milk lists the ones it
+  emits in `initialize`'s `capabilities._meta.milk.notifications`.
 
 ### Caveat: `agent_message_chunk` is not token-level streaming
 
@@ -155,16 +287,25 @@ design doc:
   the dispatcher)
 - `elicitation/create` — `Elicit` always returns a cancelled result; nothing
   will ever actually prompt the client with a form
-- `plan_update` (workflow progress), `terminal_update` (PTY/agent-owned
-  terminal streaming)
-- The `milk/notification`, `milk/warning`, `milk/memory`, `milk/route`
-  extension channels — never emitted
-- `available_commands_update` — milk's slash commands aren't surfaced to an
-  ACP client
+- `terminal_update` (PTY/agent-owned terminal streaming)
+- The `_milk/notification` and `_milk/memory` extension channels — never
+  emitted (`_milk/route` and `_milk/warning` are; see "Routing and warnings")
 - `NewSessionRequest.mcpServers` — accepted and parsed, never merged with
   the agent's own configured MCP servers
 - `cwd` isn't validated as an absolute path (the ACP spec says it should be),
   only checked for non-empty
+
+## Shared with the TUI
+
+ACP and the TUI run the same turn loop (`runPrimary` / `runEscalation`) and
+the same workflow engine. They also share three host-independent cores, so a
+rule changed in one shows up in the other: **routing** (`turn_routing.go` —
+pins, single-turn `/escalate` and `/primary`, availability fallback,
+auto-sticky escalation after the router first escalates, turn metrics),
+**workflow launch/resume/clear** (`workflow_core.go`), and **when a background
+follow-up turn runs** (`followup_core.go`). Each host still does its own
+channel work: wiring agents to its output, deciding whether a turn is running,
+and rendering progress.
 
 ## For implementers extending this
 

@@ -22,6 +22,10 @@ type acpServer struct {
 
 	mu       sync.Mutex
 	sessions map[acp.SessionID]*acpSession
+	// clientProtocol is the protocolVersion the client sent in initialize
+	// (0 if it never did). milk always answers with its own version; this
+	// only selects the few wire shapes that differ for a v1 client (plans).
+	clientProtocol int
 }
 
 func newACPServer(cfg config.Config, conn acp.Conn) *acpServer {
@@ -61,11 +65,29 @@ func (s *acpServer) HandleNotification(method string, params json.RawMessage) {
 	}
 }
 
+// AfterResponse implements acp.PostResponder: once session/new's response is
+// on the wire, advertise milk's slash commands for the new session.
+func (s *acpServer) AfterResponse(method string, result any) {
+	if method != "session/new" {
+		return
+	}
+	resp, ok := result.(acp.NewSessionResponse)
+	if !ok {
+		return
+	}
+	if as := s.session(resp.SessionID); as != nil {
+		as.notify(acp.NewAvailableCommandsUpdate(acpAdvertisedCommands()))
+	}
+}
+
 func (s *acpServer) handleInitialize(params json.RawMessage) (any, error) {
 	var req acp.InitializeRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("initialize: %w", err)
 	}
+	s.mu.Lock()
+	s.clientProtocol = req.ProtocolVersion
+	s.mu.Unlock()
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersion,
 		Info:            acp.Implementation{Name: "milk", Version: version},
@@ -73,7 +95,12 @@ func (s *acpServer) handleInitialize(params json.RawMessage) (any, error) {
 		// schema (new|list|resume|close|prompt|cancel|update) — see
 		// lifecycle.go's package doc for why advertising it despite only
 		// implementing a subset is correct, not a capability lie.
-		Capabilities: acp.AgentCapabilities{Session: &acp.SessionCapabilities{}},
+		Capabilities: acp.AgentCapabilities{
+			Session: &acp.SessionCapabilities{},
+			Meta: map[string]any{"milk": map[string]any{
+				"notifications": []string{acp.ExtMethodRoute, acp.ExtMethodWarning},
+			}},
+		},
 	}, nil
 }
 
@@ -98,6 +125,8 @@ func (s *acpServer) handleSessionNew(params json.RawMessage) (any, error) {
 	}
 
 	s.mu.Lock()
+	as.v1Client = s.clientProtocol == 1
+	as.host.host.V1 = as.v1Client
 	s.sessions[id] = as
 	s.mu.Unlock()
 

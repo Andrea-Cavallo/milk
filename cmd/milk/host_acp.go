@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"github.com/scoutme/milk/internal/events"
 	"github.com/scoutme/milk/internal/transport/acp"
@@ -23,6 +24,11 @@ const (
 // claude-cli-as-escalation isn't wired through this.
 type acpHost struct {
 	host *acp.ACPHost
+	// callID returns the tool call a permission prompt for tool is about
+	// ("" if unknown); failed is told when the request itself could not be
+	// delivered or answered. Both are optional.
+	callID func(tool string) acp.ToolCallID
+	failed func(tool string, err error)
 }
 
 func newACPHost(conn acp.Conn, sessionID acp.SessionID) *acpHost {
@@ -31,7 +37,7 @@ func newACPHost(conn acp.Conn, sessionID acp.SessionID) *acpHost {
 
 var _ events.Host = (*acpHost)(nil)
 
-// Notify maps a plain events.Notification onto milk's milk/notification
+// Notify maps a plain events.Notification onto milk's _milk/notification
 // ExtNotification channel.
 func (h *acpHost) Notify(n events.Notification) {
 	h.host.Notify(acp.NotificationExt(acp.NotificationPayload{
@@ -41,19 +47,35 @@ func (h *acpHost) Notify(n events.Notification) {
 	}))
 }
 
-// RequestPermission synthesizes a binary allow/deny ACP permission prompt
-// from req.Prompt — events.PermissionRequest's one caller (makeLocalPermAsk)
-// only ever supplies a rendered prompt string, no structured Title/Subject/
-// Options, so this is the one place that structure gets invented.
+// RequestPermission turns a permission ask into a session/request_permission
+// prompt: title "Allow <tool>?" with the call summary as its description and
+// the pending tool call as its subject. (The TUI's rendered Prompt, with its
+// ANSI codes and "[Y/n]", is only used when no structured tool is supplied.)
+// A request the client cannot answer is reported through failed and treated
+// as a denial.
 func (h *acpHost) RequestPermission(ctx context.Context, req events.PermissionRequest) (events.PermissionOutcome, error) {
+	title, desc := strings.TrimSpace(stripANSI(req.Prompt)), ""
+	var callID acp.ToolCallID
+	if req.Tool != "" {
+		title, desc = "Allow "+req.Tool+"?", stripANSI(req.Summary)
+		callID = acp.ToolCallID(req.ToolCallID)
+		if callID == "" && h.callID != nil {
+			callID = h.callID(req.Tool)
+		}
+	}
 	outcome, err := h.host.RequestPermission(ctx, acp.PermissionRequest{
-		Title: req.Prompt,
+		Title:       title,
+		Description: desc,
+		ToolCallID:  callID,
 		Options: []acp.PermissionOption{
 			{OptionID: acpPermAllowOptionID, Name: "Allow", Kind: acp.PermissionAllowOnce},
 			{OptionID: acpPermDenyOptionID, Name: "Deny", Kind: acp.PermissionRejectOnce},
 		},
 	})
 	if err != nil {
+		if h.failed != nil {
+			h.failed(req.Tool, err)
+		}
 		return events.PermissionOutcome{}, err
 	}
 	if outcome.Cancelled {

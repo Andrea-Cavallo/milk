@@ -30,6 +30,9 @@ type Implementation struct {
 // its monolithic baseline.
 type AgentCapabilities struct {
 	Session *SessionCapabilities `json:"session,omitempty"`
+	// Meta advertises milk's custom notification methods (ACP's sanctioned
+	// way to negotiate custom features: _meta in capability objects).
+	Meta map[string]any `json:"_meta,omitempty"`
 }
 
 // SessionCapabilities is intentionally empty: milk advertises only the

@@ -7,7 +7,7 @@
 // surfaces (available_commands_update, session/set_config_option),
 // session_info_update._meta route/state snapshots, background-agent tool
 // trees with streamed tool_call_content_chunk content, and milk's Ext*
-// notification channels (milk/notification|warning|memory|route).
+// notification channels (_milk/notification|warning|memory|route).
 //
 // Wire shapes follow the upstream ACP v2 schema
 // (agentclientprotocol/agent-client-protocol schema/v2) verbatim: standard

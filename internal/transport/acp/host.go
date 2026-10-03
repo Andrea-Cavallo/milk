@@ -12,7 +12,7 @@ import "context"
 // concerns — exactly the Phase 3 elicitation wiring's "behind Host.Elicit".
 type Host interface {
 	// Notify surfaces a turn-unrelated notification: an ExtNotification
-	// (milk/notification|warning|memory|route) rendered by the host as
+	// (_milk/notification|warning|memory|route) rendered by the host as
 	// toasts/status-bar badges/panel feeds.
 	Notify(ExtNotification)
 	// RequestPermission runs a structured permission prompt
@@ -47,10 +47,12 @@ type PermissionOption struct {
 // (session/request_permission): maps field-for-field onto milk's structured
 // permission records.
 type PermissionRequest struct {
-	SessionID SessionID          `json:"sessionId,omitempty"`
-	Title     string             `json:"title"`
-	Subject   string             `json:"subject,omitempty"` // tool call or command name
-	Options   []PermissionOption `json:"options"`
+	SessionID   SessionID
+	Title       string
+	Description string
+	// ToolCallID names the tool call being approved, when there is one.
+	ToolCallID ToolCallID
+	Options    []PermissionOption
 }
 
 // PermissionOutcome is the user's answer: the selected option ID, or
@@ -72,12 +74,37 @@ func (o PermissionOutcome) Allow(options []PermissionOption) bool {
 
 // RequestPermissionRequest is the session/request_permission params
 // (agent→client).
+//
+// The two protocol versions name the tool call differently: v2 carries
+// title/description plus a typed subject, v1 a required toolCall object with
+// the title inside it. ACPHost fills the fields of the client's version.
 type RequestPermissionRequest struct {
-	SessionID SessionID          `json:"sessionId"`
-	Title     string             `json:"title"`
-	Subject   string             `json:"subject,omitempty"`
-	Options   []PermissionOption `json:"options"`
-	Meta      map[string]any     `json:"_meta,omitempty"`
+	SessionID   SessionID          `json:"sessionId"`
+	Title       string             `json:"title,omitempty"`       // v2
+	Description string             `json:"description,omitempty"` // v2
+	Subject     *PermissionSubject `json:"subject,omitempty"`     // v2
+	ToolCall    *PermissionV1Call  `json:"toolCall,omitempty"`    // v1
+	Options     []PermissionOption `json:"options"`
+	Meta        map[string]any     `json:"_meta,omitempty"`
+}
+
+// PermissionSubject is v2's typed subject of a permission prompt.
+type PermissionSubject struct {
+	Type     string            `json:"type"` // "tool_call"
+	ToolCall PermissionCallRef `json:"toolCall"`
+}
+
+// PermissionCallRef identifies the tool call a v2 prompt is about.
+type PermissionCallRef struct {
+	ToolCallID ToolCallID `json:"toolCallId"`
+}
+
+// PermissionV1Call is v1's toolCall object (a ToolCallUpdate: only
+// toolCallId is required).
+type PermissionV1Call struct {
+	ToolCallID ToolCallID     `json:"toolCallId"`
+	Title      string         `json:"title,omitempty"`
+	Status     ToolCallStatus `json:"status,omitempty"`
 }
 
 // RequestPermissionOutcome is the outcome variant of
@@ -100,7 +127,10 @@ type RequestPermissionResponse struct {
 type ACPHost struct {
 	Conn    Conn
 	Session SessionID
-	elicit  *ElicitSession
+	// V1 selects the protocol-v1 wire shape for requests that differ between
+	// versions (permission prompts). Set once, before any request is in flight.
+	V1     bool
+	elicit *ElicitSession
 }
 
 // NewACPHost returns the Host implementation the serve loop hands to the turn
@@ -118,14 +148,21 @@ func (h *ACPHost) Notify(n ExtNotification) {
 
 // RequestPermission implements Host over session/request_permission.
 func (h *ACPHost) RequestPermission(ctx context.Context, req PermissionRequest) (PermissionOutcome, error) {
-	params := RequestPermissionRequest{
-		SessionID: h.Session,
-		Title:     req.Title,
-		Subject:   req.Subject,
-		Options:   req.Options,
-	}
+	params := RequestPermissionRequest{SessionID: h.Session, Options: req.Options}
 	if req.SessionID != "" {
 		params.SessionID = req.SessionID
+	}
+	if h.V1 {
+		id := req.ToolCallID
+		if id == "" {
+			id = ToolCallID("permission:" + req.Title) // v1 requires a toolCall; this prompt has no call to point at
+		}
+		params.ToolCall = &PermissionV1Call{ToolCallID: id, Title: req.Title, Status: ToolCallPending}
+	} else {
+		params.Title, params.Description = req.Title, req.Description
+		if req.ToolCallID != "" {
+			params.Subject = &PermissionSubject{Type: "tool_call", ToolCall: PermissionCallRef{ToolCallID: req.ToolCallID}}
+		}
 	}
 	var resp RequestPermissionResponse
 	if err := h.Conn.Request(ctx, MethodRequestPermission, params, &resp); err != nil {

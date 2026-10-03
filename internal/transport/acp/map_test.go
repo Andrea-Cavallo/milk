@@ -190,7 +190,7 @@ func TestToolKindFor(t *testing.T) {
 func TestMatchingExtMappings(t *testing.T) {
 	m := Mapper{Session: "sess-1"}
 
-	// milk/warning from a loop verdict (Signal.Category + IsConsumption).
+	// _milk/warning from a loop verdict (Signal.Category + IsConsumption).
 	warn := m.LoopWarning(loop.Verdict{Signal: loop.SignalTokenVelocity, Message: "token burn"}, 41, 100)
 	if warn.Method != ExtMethodWarning {
 		t.Fatalf("warning method = %q", warn.Method)
@@ -204,27 +204,27 @@ func TestMatchingExtMappings(t *testing.T) {
 		t.Fatalf("repetition is not consumption: %+v", rep.Params)
 	}
 
-	// milk/route from a router decision.
+	// _milk/route from a router decision.
 	route := m.Route(router.Decision{Target: router.TargetEscalation, Reason: "model classifier", Conclusive: true})
 	rp := route.Params.(RoutePayload)
 	if rp.Target != "escalation" || rp.Reason != "model classifier" || !rp.Conclusive {
 		t.Fatalf("route payload = %+v", rp)
 	}
 
-	// milk/route for an agent switch.
+	// _milk/route for an agent switch.
 	sw := m.AgentSwitch("qwen-local", "claude")
 	if sp := sw.Params.(RoutePayload); sp.From != "qwen-local" || sp.To != "claude" {
 		t.Fatalf("switch payload = %+v", sp)
 	}
 
-	// milk/memory from a percept record.
+	// _milk/memory from a percept record.
 	mem := m.MemoryRecord(memory.Percept{ID: "p1", Roles: memory.Roles{Theme: "wire contract"}})
 	mp := mem.Params.(MemoryPayload)
 	if mp.Op != "record" || mp.PerceptID != "p1" || mp.Subject != "wire contract" {
 		t.Fatalf("memory payload = %+v", mp)
 	}
 
-	// milk/route + milk/notification wrap to their Ext* methods verbatim.
+	// milk/route + _milk/notification wrap to their Ext* methods verbatim.
 	if m.Ext(NotificationExt(NotificationPayload{ID: "x"})).Method != ExtMethodNotification {
 		t.Fatal("notification ext method")
 	}

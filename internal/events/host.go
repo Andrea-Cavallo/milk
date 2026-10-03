@@ -78,7 +78,15 @@ type PermissionRequest struct {
 	Prompt  string
 	Title   string
 	Subject string
-	Options []PermissionOption
+	// Tool and Summary are the structured facts behind Prompt (the tool's
+	// name and a short description of the call), for hosts that render their
+	// own permission UI instead of showing Prompt verbatim.
+	Tool    string
+	Summary string
+	// ToolCallID names the tool call being approved when the caller knows it
+	// (a background job's row); hosts otherwise look it up from Tool.
+	ToolCallID string
+	Options    []PermissionOption
 }
 
 // PermissionOutcome is the host's answer to a PermissionRequest.

@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/scoutme/milk/internal/tasks"
 	"github.com/scoutme/milk/internal/workflow"
 )
 
@@ -212,4 +213,55 @@ func pathSet(root *workflow.StageNode) map[string]bool {
 		walk(root, "")
 	}
 	return set
+}
+
+// PlanV1Update is the protocol-v1 plan session update: discriminator "plan",
+// entries only (no planId or content-type wrapper), and the client replaces
+// the whole plan on every update. v1 has no "cancelled" status.
+type PlanV1Update struct {
+	SessionUpdate string         `json:"sessionUpdate"` // "plan"
+	Entries       []PlanEntry    `json:"entries"`
+	Meta          map[string]any `json:"_meta,omitempty"`
+}
+
+func (PlanV1Update) isSessionUpdate() {}
+
+// AsV1 renders the plan for a protocol-v1 client. v1 has a single plan per
+// session, so the planId is dropped (callers that own several plans must
+// merge them first), and the unsupported "cancelled" status becomes
+// "completed" with a "(cancelled)" marker in the content.
+func (u PlanUpdate) AsV1() PlanV1Update {
+	entries := make([]PlanEntry, len(u.Plan.Entries))
+	for i, e := range u.Plan.Entries {
+		if e.Status == PlanEntryCancelled {
+			e.Status = PlanEntryCompleted
+			e.Content += " (cancelled)"
+		}
+		entries[i] = e
+	}
+	return PlanV1Update{SessionUpdate: "plan", Entries: entries}
+}
+
+// PlanIDForTasks is the stable plan ID for a session's task list.
+func PlanIDForTasks(sessionID string) PlanID { return PlanID("tasks-" + sessionID) }
+
+// PlanEntriesForTasks maps tasks onto plan entries. Tasks carry no priority,
+// so all are medium; "blocked" has no ACP status, so it maps to pending with
+// a "(blocked)" marker in the content.
+func PlanEntriesForTasks(ts []tasks.Task) []PlanEntry {
+	entries := make([]PlanEntry, 0, len(ts))
+	for _, t := range ts {
+		e := PlanEntry{Content: t.Title, Priority: PlanPriorityMedium, Status: PlanEntryPending}
+		switch t.Status {
+		case tasks.StatusInProgress:
+			e.Status = PlanEntryInProgress
+		case tasks.StatusDone:
+			e.Status = PlanEntryCompleted
+		case tasks.StatusBlocked:
+			e.Content += " (blocked)"
+			e.Meta = map[string]any{"blocked": true}
+		}
+		entries = append(entries, e)
+	}
+	return entries
 }

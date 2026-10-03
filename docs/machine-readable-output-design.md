@@ -496,10 +496,10 @@ map (authoritative names from `schema/v2/meta.json`):
 | `system/state` | `state_update` (`running` / `idle`+`stopReason` / `requires_action`) | `requires_action` fires when a permission/elicitation is outstanding — TUI's "needs input" state |
 | `system/task_*` (background agents, workflows, tool-agents) | nested `tool_call_update`s with `parent` linkage via content/title, + `plan_update` for workflows | workflow `start_workflow` call owns a `PlanItems` (`planId`, entries per stage node: `pending|in_progress|completed|cancelled`, priority `high|medium|low`) — F4 panel = the editor's plan UI |
 | `background_tasks_changed` | `tool_call_update` batch (statuses) | panel badges |
-| `system/notification` (toasts, ADR-0048) | `ExtNotification` `milk/notification` (`id`, `severity`, `command_hint`, `body`) | ACP has no toast channel; `Ext*` is the sanctioned escape hatch. Clients that ignore extensions lose only turn-unrelated notices |
-| `system/warning` (loop/consumption) | `ExtNotification` `milk/warning` | renders in editor status/notifications |
-| `system/memory` | `ExtNotification` `milk/memory` | F1 panel feed |
-| `system/route`, `agent_switch` | `ExtNotification` `milk/route` + `session_info_update._meta` snapshot | status-bar route/role |
+| `system/notification` (toasts, ADR-0048) | `ExtNotification` `_milk/notification` (`id`, `severity`, `command_hint`, `body`) | ACP has no toast channel; `Ext*` is the sanctioned escape hatch. Clients that ignore extensions lose only turn-unrelated notices |
+| `system/warning` (loop/consumption) | `ExtNotification` `_milk/warning` | renders in editor status/notifications |
+| `system/memory` | `ExtNotification` `_milk/memory` | F1 panel feed |
+| `system/route`, `agent_switch` | `ExtNotification` `_milk/route` + `session_info_update._meta` snapshot | status-bar route/role |
 | `system/commands` | `available_commands_update` (`availableCommands`, `TextCommandInput.hint`) | milk's slash commands become editor input completion, natively |
 | `system/config_option` | `config_option_update` + client calls `session/set_config_option` | `/think on|off`, `/agent switch`, `/model` as `SessionConfigOption`s (v2 replaced v1's `session/set_mode`) |
 | permission prompt (ADR-0013 suggestions) | `session/request_permission` (`title`, `description`, `subject` = tool call or command, `options[]` with `PermissionOptionKind` `allow_once|allow_always|reject_once|reject_always`) → outcome `selected(optionId)|cancelled` | maps field-for-field onto milk's structured permission records |
@@ -517,14 +517,14 @@ Coverage map (batch mode §6 forms in parentheses):
 | transcript (text) | `agent_message_chunk` / `agent_message` (`stream_event`, `assistant`) | none |
 | reasoning (`/think`) | `agent_thought_chunk` (`thinking_delta`) | none |
 | tool lines + diffs | `tool_call_update` (`tool_use`/`tool_result`) | none |
-| status bar | `state_update`, `usage_update`, `session_info_update._meta`, `milk/route` (`init`, `route`, `result.usage`) | none |
-| loop/consumption warnings (#173) | `milk/warning` (`system/warning`) | none |
-| toasts + history (ADR-0048) | `milk/notification` (`system/notification`) | none |
+| status bar | `state_update`, `usage_update`, `session_info_update._meta`, `_milk/route` (`init`, `route`, `result.usage`) | none |
+| loop/consumption warnings (#173) | `_milk/warning` (`system/warning`) | none |
+| toasts + history (ADR-0048) | `_milk/notification` (`system/notification`) | none |
 | tasks/background agents/workflows | `tool_call_update` tree + `plan_update` (`task_*`, `background_tasks_changed`) | none |
 | live-attach view (ADR-0047) | `tool_call_content_chunk`, `terminal_output_chunk` (`task_progress`) | none |
 | permission prompts | `session/request_permission` (`--permission-mode` flags in batch) | none |
 | structured input prompts | `elicitation/create` (batch: not applicable) | none |
-| memory panel | `milk/memory` (`system/memory`) | none |
+| memory panel | `_milk/memory` (`system/memory`) | none |
 | input completion | `available_commands_update` (`system/commands`) | none |
 | input history, selection/copy, welcome screen | — | intentionally out of scope (client chrome, not agent state) |
 
@@ -635,7 +635,7 @@ Provider normalization (applies to all transports once, at the model layer):
   client `ClientCapabilities.auth/elicitation`) feature-detect; unknown fields,
   enum values and `Ext*` methods must be ignored (the spec's own rule).
 - **milk extensions** ride ACP's sanctioned `Ext*` mechanism
-  (`milk/notification`, `milk/warning`, `milk/memory`, `milk/route`) and
+  (`_milk/notification`, `_milk/warning`, `_milk/memory`, `_milk/route`) and
   `_meta` reserved fields — never a forked schema.
 - **Batch mode** keeps `system/init.capabilities: []` (open-set strings:
   `stream_v1`, `partial_messages_v1`, `tasks_v1`, `workflows_v1`); evolution is

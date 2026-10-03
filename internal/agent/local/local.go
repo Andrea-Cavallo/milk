@@ -354,17 +354,21 @@ type Agent struct {
 	model            string
 	chatPath         string // inference path; defaults to "/v1/chat/completions"
 	otelDir          string
-	skipHealthCheck  bool   // true for remote providers that have no /health endpoint (e.g. Bedrock)
-	useBedrockNative bool   // true when provider = "bedrock"; uses Converse API instead of /v1/chat/completions
-	useResponsesAPI  bool   // true when api_format = "responses"; uses OpenAI Responses API instead of Chat Completions
-	skipRepeatCheck  bool   // true when acting as the escalation target: the repeated-prompt check must not fire
-	selfName         string // this agent's own name (e.g. "gemma-local"), injected into the system prompt
-	escalationName   string // non-empty when acting as escalation target; used in the role-aware system prompt
-	workflowRole     bool   // true when acting as a workflow step executor: neutral system prompt, no escalation framing
-	isToolAgent      bool   // true when invoked stateless via RunToolCall (agent-as-tool): no escalate tool — there's no session/runner for it to escalate into
-	skipPerms        bool   // true when dangerously_skip_permissions is on: bypass all tool prompts
-	permStore        *PermStore
-	permAsk          func(tool, summary string) bool // returns true if user allows; nil = deny all (non-TUI)
+	skipHealthCheck  bool        // true for remote providers that have no /health endpoint (e.g. Bedrock)
+	useBedrockNative bool        // true when provider = "bedrock"; uses Converse API instead of /v1/chat/completions
+	useResponsesAPI  bool        // true when api_format = "responses"; uses OpenAI Responses API instead of Chat Completions
+	skipRepeatCheck  bool        // true when acting as the escalation target: the repeated-prompt check must not fire
+	selfName         string      // this agent's own name (e.g. "gemma-local"), injected into the system prompt
+	escalationName   string      // non-empty when acting as escalation target; used in the role-aware system prompt
+	workflowRole     bool        // true when acting as a workflow step executor: neutral system prompt, no escalation framing
+	isToolAgent      bool        // true when invoked stateless via RunToolCall (agent-as-tool): no escalate tool — there's no session/runner for it to escalate into
+	skipPerms        bool        // true when dangerously_skip_permissions is on: bypass all tool prompts
+	skipPermsFn      func() bool // live counterpart of skipPerms; see WithSkipPermissionsFunc
+	// bgPermAsk lets background jobs forked from this agent ask for tool
+	// permission; see WithBackgroundPermissionAsk. nil = jobs never ask.
+	bgPermAsk func(jobID, tool, summary string) bool
+	permStore *PermStore
+	permAsk   func(tool, summary string) bool // returns true if user allows; nil = deny all (non-TUI)
 	// bashAllowedPatterns is AgentConfig.BashAllowedPatterns: bash command
 	// prefixes pre-approved without a grant/ask, checked in checkPermission
 	// before the PermStore/permAsk flow (permissions.go's matchesBashPattern).
@@ -958,6 +962,28 @@ func (a *Agent) WithPermissions(ps *PermStore, ask func(tool, summary string) bo
 func (a *Agent) WithSkipPermissions(skip bool) *Agent {
 	copy := *a
 	copy.skipPerms = skip
+	return &copy
+}
+
+// WithBackgroundPermissionAsk returns a copy whose background jobs can ask for
+// tool permission through fn (which receives the job's ID). Without it a job
+// is denied anything not already granted: the foreground ask blocks on a
+// prompt the user has no reason to expect. An embedder that can attribute
+// the question to the job and bound the wait (ACP) supplies fn; it must be
+// safe for concurrent use and must return rather than block forever.
+func (a *Agent) WithBackgroundPermissionAsk(fn func(jobID, tool, summary string) bool) *Agent {
+	copy := *a
+	copy.bgPermAsk = fn
+	return &copy
+}
+
+// WithSkipPermissionsFunc returns a copy whose permission checks also consult
+// fn on every tool call, so the setting can change while the agent is live
+// (ACP's /skip-permissions). fn is called from turn and background-job
+// goroutines and must be safe for concurrent use.
+func (a *Agent) WithSkipPermissionsFunc(fn func() bool) *Agent {
+	copy := *a
+	copy.skipPermsFn = fn
 	return &copy
 }
 
@@ -1915,6 +1941,9 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, context
 	// job's requests can be reconstructed from milk.log without guessing
 	// which of several concurrent jobs produced them.
 	bg.jobID = jobID
+	if ask := a.bgPermAsk; ask != nil {
+		bg.permAsk = func(tool, summary string) bool { return ask(jobID, tool, summary) }
+	}
 
 	usage := session.TokenUsage{Model: bg.model, Agent: bg.logRole()}
 	bg.onTokens = func(_, _ string, prompt, completion, cacheRead, cacheCreation int64) {
@@ -2016,6 +2045,8 @@ func (a *Agent) cloneForBackground() *Agent {
 		useResponsesAPI:  a.useResponsesAPI,
 		escalationName:   a.escalationName, // read-only after construction; used for the usage.Agent role tag
 		skipPerms:        a.skipPerms,
+		skipPermsFn:      a.skipPermsFn, // concurrency-safe by contract
+		bgPermAsk:        a.bgPermAsk,
 		permStore:        a.permStore, // shared, but already designed for concurrent access (concurrent tool-call batches use it today)
 		// permAsk deliberately NOT copied. It blocks synchronously on a
 		// plain channel receive (readLineLabeled's <-respCh in cmd/milk)
@@ -2027,6 +2058,8 @@ func (a *Agent) cloneForBackground() *Agent {
 		// asking: already-granted tools (via the shared permStore above,
 		// or skipPerms) still work; anything else fails fast with a
 		// tool-result error the model can react to, never hangs.
+		// (RunBackgroundTask installs a context-aware ask instead when the
+		// embedder supplied one via WithBackgroundPermissionAsk.)
 		client: client,
 		// tokenCmd/sigv4 deliberately NOT copied: they're convenience
 		// pointers to the *foreground* client's auth wrappers, used only for
@@ -2076,7 +2109,7 @@ func (a *Agent) checkPermission(tool, summary, commandArg string) (allowed bool,
 		)
 		return true, ""
 	}
-	if a.skipPerms {
+	if a.skipPerms || (a.skipPermsFn != nil && a.skipPermsFn()) {
 		obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_grants",
 			attribute.String("name", tool),
 			attribute.String("source", "skip_perms"),

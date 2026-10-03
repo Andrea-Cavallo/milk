@@ -7,14 +7,21 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
+	"github.com/scoutme/milk/internal/events"
+	"github.com/scoutme/milk/internal/loop"
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/router"
 	"github.com/scoutme/milk/internal/session"
+	"github.com/scoutme/milk/internal/tasks"
 	"github.com/scoutme/milk/internal/transport/acp"
 )
+
+// acpNoReplyNotice is sent when a turn completes without any message text.
+const acpNoReplyNotice = "(milk finished this turn without a text reply — see the tool calls above, if any.)"
 
 // acpSession holds one ACP session's state: a fresh buildPrimaryRunner/
 // buildEscalationRunner pair, a fresh *session.Session/*memory.Store, and
@@ -33,6 +40,50 @@ type acpSession struct {
 	escalationRunner TurnRunner
 
 	msgCounter atomic.Int64
+
+	// st carries the slash-command/routing state (sticky and forced routing,
+	// cwd, cfg copy) shared with the TUI's handlers; showThinking gates
+	// agent_thought_chunk forwarding (/think).
+	st           *interactiveState
+	showThinking atomic.Bool
+
+	// skipPerms is /skip-permissions (seeded from dangerously_skip_permissions,
+	// like the TUI); openCalls maps a tool name to its in-flight tool-call
+	// IDs so a permission prompt can point at the call it is about.
+	skipPerms atomic.Bool
+	callsMu   sync.Mutex
+	openCalls map[string][]acp.ToolCallID
+	host      *acpHost
+
+	loop       *loop.Detector // TUI-level loop/consumption signals; see acp_signals.go
+	loopMu     sync.Mutex     // guards loop, lastTarget and reads of st routing pins
+	lastTarget router.Target  // target of the previous model turn
+
+	// turnMu serializes turns: client prompts and automatic background
+	// follow-ups (see acp_followup.go).
+	turnMu sync.Mutex
+	// pendingWaveFollowup / pendingUserFollowup remember a follow-up that was
+	// requested while a turn was running, to be retried when it ends.
+	pendingWaveFollowup bool
+	pendingUserFollowup bool
+
+	taskStore       *tasks.Store
+	workflowRunning atomic.Bool
+	cliPC           permContext    // for CLI-agent roles inside workflows
+	mgr             *local.Manager // background jobs; nil without an inference-server agent
+	da              *dispatchAgents
+
+	// localAgent / escLocalAgent are the wired local-provider agents behind
+	// the runners (nil when that role isn't local), kept for /bg start.
+	localAgent    *local.Agent
+	escLocalAgent *local.Agent
+
+	// v1Client: the client speaks ACP v1, which lacks v2's plan_update and
+	// tool_call_content_chunk (see notifyPlan, streamLive).
+	v1Client  bool
+	planMu    sync.Mutex
+	plans     map[acp.PlanID][]acp.PlanEntry
+	planOrder []acp.PlanID
 
 	mu     sync.Mutex
 	cancel context.CancelFunc // set only while a turn is running
@@ -65,16 +116,43 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 	}
 
 	as := &acpSession{cfg: cfg, sess: sess, mem: mem, conn: conn, id: id}
+	as.st = &interactiveState{sess: sess, cwd: cwd, cfg: cfg, mem: mem, toolFutures: map[string]chan string{}}
+	// Thoughts have always been forwarded over ACP; keep that unless the
+	// config explicitly opts out.
+	as.showThinking.Store(cfg.ShowReasoning == nil || *cfg.ShowReasoning)
 	host := newACPHost(conn, id)
+	as.host = host
+	host.callID = as.pendingCallID
+	host.failed = as.permissionFailed
+	as.skipPerms.Store(cliAgentConfig(cfg).DangerouslySkipPermissions)
 
-	if localAgent != nil {
+	as.loop = loop.New(cfg.LoopDetectionCfg())
+	as.cliPC = permContext{cwd: cwd, toolFutures: map[string]chan string{}}
+	as.setupTasks()
+	as.setupBackground(localAgent != nil || isLocalRunner(escalationRunner))
+
+	// wireLocal applies everything an ACP session adds to a local-provider agent.
+	wireLocal := func(a *local.Agent) *local.Agent {
 		permStore, _ := local.OpenPermStore(cwd) //nolint:errcheck // nil disables persistent grants, same as every other best-effort call site
-		wired := localAgent.
+		wired := a.
 			WithPermissions(permStore, makeLocalPermAsk(host, permStore)).
+			WithSkipPermissionsFunc(as.skipPerms.Load).
+			WithBackgroundPermissionAsk(as.backgroundPermissionAsk).
 			WithOnToolUse(as.onLocalToolUse).
 			WithOnToolResult(as.onLocalToolResult).
 			WithOnThinking(as.onThinking)
-		primaryRunner = newLocalRunner(wired, primaryRunner.Name())
+		if as.taskStore != nil {
+			wired = wired.WithTaskStore(tasks.NewAdapter(as.taskStore))
+		}
+		if as.mgr != nil {
+			wired.SetBackgroundManager(as.mgr)
+		}
+		return wired
+	}
+
+	if localAgent != nil {
+		as.localAgent = wireLocal(localAgent)
+		primaryRunner = newLocalRunner(as.localAgent, primaryRunner.Name())
 	}
 
 	switch er := escalationRunner.(type) {
@@ -86,23 +164,28 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 		// escalation defaults to denyAllHandler; see the design doc's ACP
 		// status note on why that's not wired further this round.
 		er.pc.toolFutures = map[string]chan string{}
+		as.cliPC = er.pc
 		er.agent = er.agent.
 			WithOnToolUse(as.onClaudeToolUse).
 			WithOnToolUseReady(as.onClaudeToolUseReady).
 			WithOnToolResult(as.onClaudeToolResult).
 			WithOnThinking(as.onThinking)
 	case *localRunner:
-		permStore, _ := local.OpenPermStore(cwd) //nolint:errcheck
-		wired := er.agent.
-			WithPermissions(permStore, makeLocalPermAsk(host, permStore)).
-			WithOnToolUse(as.onLocalToolUse).
-			WithOnToolResult(as.onLocalToolResult).
-			WithOnThinking(as.onThinking)
-		escalationRunner = newLocalRunner(wired, er.name)
+		as.escLocalAgent = wireLocal(er.agent)
+		escalationRunner = newLocalRunner(as.escLocalAgent, er.name)
 	}
 
 	as.primaryRunner = primaryRunner
 	as.escalationRunner = escalationRunner
+	as.da = &dispatchAgents{
+		primary:         primaryRunner,
+		escalation:      escalationRunner,
+		local:           as.localAgent,
+		escalationLocal: as.escLocalAgent,
+		localAvail:      primaryRunner != nil,
+		escalationAvail: escalationRunner != nil,
+		backgroundMgr:   as.mgr,
+	}
 	return as, nil
 }
 
@@ -120,6 +203,7 @@ func (as *acpSession) emitToolCall(id, name string, status acp.ToolCallStatus, r
 		SessionUpdate: "tool_call_update",
 		ToolCallID:    acp.ToolCallID(id),
 		Name:          name,
+		Title:         name,
 		Kind:          acp.ToolKindFor(name),
 		Status:        status,
 		RawInput:      rawInput,
@@ -128,10 +212,28 @@ func (as *acpSession) emitToolCall(id, name string, status acp.ToolCallStatus, r
 }
 
 func (as *acpSession) onLocalToolUse(id, name, _ string, rawInput map[string]any) {
+	as.callsMu.Lock()
+	if as.openCalls == nil {
+		as.openCalls = map[string][]acp.ToolCallID{}
+	}
+	as.openCalls[name] = append(as.openCalls[name], acp.ToolCallID(id))
+	as.callsMu.Unlock()
 	as.emitToolCall(id, name, acp.ToolCallInProgress, rawInput, nil)
 }
 
 func (as *acpSession) onLocalToolResult(id, name, result string, isError bool) {
+	as.callsMu.Lock()
+	if as.openCalls == nil {
+		as.openCalls = map[string][]acp.ToolCallID{}
+	}
+	calls := as.openCalls[name][:0:0]
+	for _, c := range as.openCalls[name] {
+		if string(c) != id {
+			calls = append(calls, c)
+		}
+	}
+	as.openCalls[name] = calls
+	as.callsMu.Unlock()
 	status := acp.ToolCallCompleted
 	if isError {
 		status = acp.ToolCallFailed
@@ -156,6 +258,10 @@ func (as *acpSession) onClaudeToolResult(id, name, result string, isError bool) 
 }
 
 func (as *acpSession) onThinking(text string) {
+	as.feedThinking(text) // detection runs whether or not the client is shown the reasoning
+	if !as.showThinking.Load() {
+		return
+	}
 	msgID := acp.MessageID(fmt.Sprintf("thought-%d", as.msgCounter.Load()))
 	as.notify(acp.AgentThoughtChunk(msgID, text))
 }
@@ -171,7 +277,22 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 			text.WriteString(block.Text)
 		}
 	}
-	prompt := strings.TrimSpace(text.String())
+	// One turn at a time per session. A prompt that arrives while an
+	// automatic background follow-up is running waits for it rather than
+	// cancelling it: the follow-up has already drained the finished jobs'
+	// results, so cancelling would lose them.
+	as.turnMu.Lock()
+	defer func() {
+		as.turnMu.Unlock()
+		as.flushPendingFollowup()
+	}()
+	return as.runTurn(ctx, strings.TrimSpace(text.String()))
+}
+
+// runTurn runs one turn for prompt text, with as.turnMu held by the caller.
+func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptResponse, error) {
+
+	as.notify(acp.RunningState())
 
 	msgID := acp.MessageID(fmt.Sprintf("msg-%d", as.msgCounter.Add(1)))
 
@@ -186,28 +307,60 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 		cancel()
 	}()
 
-	as.notify(acp.RunningState())
+	// replied tracks whether the client got any message text this turn, so a
+	// turn that ends on tool calls alone (or an empty completion) doesn't look
+	// to the client like milk never answered.
+	var replied atomic.Bool
+	say := func(text string) {
+		replied.Store(true)
+		as.notify(acp.AgentMessageChunk(msgID, text))
+	}
+	onResponse := say
+	turn := &acpTurn{ctx: turnCtx, as: as, say: say}
 
-	onResponse := func(responseText string) {
-		as.notify(acp.AgentMessageChunk(msgID, responseText))
+	if handled, output, dispatch := as.runSlashCommand(turn, prompt); handled {
+		if output != "" {
+			say(output)
+		}
+		if dispatch == "" {
+			as.notify(acp.IdleState(acp.StopReasonEndTurn))
+			return acp.PromptResponse{MessageID: msgID}, nil
+		}
+		prompt = dispatch
 	}
 
-	rtr := router.New(as.cfg, nil)
-	decision, err := rtr.Route(turnCtx, as.sess, prompt, false, false)
+	as.loopMu.Lock()
+	as.loop.ResetTurn()
+	as.loopMu.Unlock()
+	promptBefore, completionBefore := as.sumTokens()
+
+	rt, err := routeTurn(turnCtx, as.st, router.New(as.cfg, nil), prompt, as.primaryRunner != nil, as.escalationRunner != nil)
 	if err != nil {
 		as.notify(acp.IdleState(acp.StopReasonError))
 		return acp.PromptResponse{}, err
 	}
-	target := resolveTarget(decision.Target, as.primaryRunner != nil, as.escalationRunner != nil)
+	decision, target := rt.Decision, rt.Target
+	source, turnStart := turnSource(as.st), time.Now()
+	var routeMeta map[string]any
+	if runner := map[router.Target]TurnRunner{router.TargetLocal: as.primaryRunner, router.TargetEscalation: as.escalationRunner}[target]; runner != nil {
+		routeMeta = as.announceRoute(decision, target, runner.Name())
+	}
+
+	onWorkflowStart := func(ws *local.WorkflowStartSignal) { as.startWorkflowFromTool(turn, ws) }
 
 	var turnErr error
 	switch target {
 	case router.TargetLocal:
-		turnErr = runPrimary(turnCtx, as.cfg, as.sess, as.primaryRunner, as.escalationRunner, as.mem, prompt, io.Discard, nil, onResponse, nil, nil)
+		turnErr = runPrimary(turnCtx, as.cfg, as.sess, as.primaryRunner, as.escalationRunner, as.mem, prompt, io.Discard, as.da, onResponse, nil, onWorkflowStart)
 	case router.TargetEscalation:
-		turnErr = runEscalation(turnCtx, as.cfg, as.sess, as.escalationRunner, "", as.mem, prompt, io.Discard, nil, onResponse, nil, nil)
+		turnErr = runEscalation(turnCtx, as.cfg, as.sess, as.escalationRunner, "", as.mem, prompt, io.Discard, as.da, onResponse, nil, onWorkflowStart)
 	default:
 		turnErr = fmt.Errorf("unknown routing target: %s", target)
+	}
+
+	recordTurn(turnCtx, target, source, turnStart, turnErr)
+	if turnErr == nil {
+		noteTurnSucceeded(as.st, target)
 	}
 
 	stopReason := acp.StopReasonEndTurn
@@ -217,10 +370,58 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 	case turnErr != nil:
 		stopReason = acp.StopReasonError
 	}
-	as.notify(acp.IdleState(stopReason))
+	if stopReason == acp.StopReasonEndTurn && !replied.Load() {
+		say(acpNoReplyNotice)
+	}
+	if stopReason == acp.StopReasonEndTurn {
+		as.endTurnSignals(promptBefore, completionBefore)
+	}
+	idle := acp.IdleState(stopReason)
+	idle.Meta = routeMeta
+	as.notify(idle)
 
 	if turnErr != nil && stopReason != acp.StopReasonCancelled {
 		return acp.PromptResponse{MessageID: msgID}, turnErr
 	}
 	return acp.PromptResponse{MessageID: msgID}, nil
+}
+
+func isLocalRunner(r TurnRunner) bool {
+	_, ok := r.(*localRunner)
+	return ok
+}
+
+// pendingCallID is the most recent in-flight tool call named tool: the local
+// agent reports a call (onToolUse) before it checks permission for it.
+func (as *acpSession) pendingCallID(tool string) acp.ToolCallID {
+	as.callsMu.Lock()
+	defer as.callsMu.Unlock()
+	if calls := as.openCalls[tool]; len(calls) > 0 {
+		return calls[len(calls)-1]
+	}
+	return ""
+}
+
+// permissionFailed tells the client why a tool is about to be denied when the
+// permission request itself could not be answered. Without this the agent
+// only reports "denied by user", which hides that nobody was ever asked.
+func (as *acpSession) permissionFailed(tool string, err error) {
+	as.notify(acp.AgentMessageChunk(acp.MessageID(fmt.Sprintf("perm-%d", as.msgCounter.Add(1))),
+		fmt.Sprintf("Could not ask for permission to run %s (%v), so it was denied. "+
+			"The client must answer session/request_permission; /skip-permissions on approves tools without asking.", tool, err)))
+}
+
+// backgroundPermissionAsk asks the client whether a background job may use a
+// tool, attributed to the job's own tool-call row. The wait is bounded by the
+// job timeout, so an unanswered question denies the tool instead of holding
+// the job's concurrency slot forever.
+func (as *acpSession) backgroundPermissionAsk(jobID, tool, summary string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), as.cfg.EffectiveBackgroundAgentTimeout())
+	defer cancel()
+	out, err := as.host.RequestPermission(ctx, events.PermissionRequest{
+		Tool:       tool,
+		Summary:    strings.TrimSpace(summary + " — requested by background agent " + jobID),
+		ToolCallID: string(acp.JobToolCallID(jobID)),
+	})
+	return err == nil && out.Allow
 }

@@ -25,6 +25,14 @@ type Handler interface {
 	HandleNotification(method string, params json.RawMessage)
 }
 
+// PostResponder is an optional Handler extension: AfterResponse is called
+// after a successful request's response has been written, so a handler can
+// send notifications the client can only correlate once it has the response
+// (e.g. session/update for a sessionId returned by session/new).
+type PostResponder interface {
+	AfterResponse(method string, result any)
+}
+
 // wireMessage is the superset shape of every JSON-RPC message read off the
 // wire: a request/notification (Method set, ID set or unset) or a response
 // to one of our own outbound Request calls (Method unset, ID set, Result or
@@ -128,7 +136,12 @@ func (c *StdioConn) handleRequest(ctx context.Context, msg wireMessage) {
 	} else {
 		resp.Result = result
 	}
-	c.write(resp) //nolint:errcheck // stdout write; nothing meaningful to do with the error
+	werr := c.write(resp)
+	if err == nil && werr == nil {
+		if pr, ok := c.handler.(PostResponder); ok {
+			pr.AfterResponse(msg.Method, result)
+		}
+	}
 }
 
 // MethodNotFoundError signals a method a Handler doesn't implement — mapped

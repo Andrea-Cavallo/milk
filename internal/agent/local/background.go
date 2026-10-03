@@ -451,6 +451,13 @@ func (m *Manager) Drain() []*Job {
 	return out
 }
 
+// PendingCount returns how many finished jobs are waiting for the next Drain.
+func (m *Manager) PendingCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.pending)
+}
+
 // ActiveCount returns the number of jobs not yet completed or failed
 // (queued or executing), for a live "N background agents running" indicator.
 func (m *Manager) ActiveCount() int {

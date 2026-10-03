@@ -2,6 +2,8 @@ package acp
 
 import (
 	"context"
+	"github.com/scoutme/milk/internal/livebuf"
+	"github.com/scoutme/milk/internal/tasks"
 	"testing"
 )
 
@@ -9,31 +11,19 @@ import (
 // slash commands become editor input completion; /think, /agent switch and
 // /model become SessionConfigOptions.
 
-func TestMilkCommandsShape(t *testing.T) {
-	cmds := MilkCommands()
-	byName := map[string]AvailableCommand{}
-	for _, c := range cmds {
-		byName[c.Name] = c
+func TestAvailableCommandsWireShape(t *testing.T) {
+	cmds := []AvailableCommand{
+		Command("/think", "toggle reasoning", "on|off"),
+		Command("/new", "fresh session", ""),
 	}
-	// The deliverable surface must include the slash commands named in the
-	// sprint, with text-input hints where they take arguments.
-	for _, name := range []string{"/think", "/agent", "/panel", "/bg"} {
-		c, ok := byName[name]
-		if !ok {
-			t.Fatalf("missing command %q", name)
-		}
-		if c.Input == nil || c.Input.Type != CommandInputText || c.Input.Hint == "" {
-			t.Fatalf("%s input = %+v", name, c.Input)
-		}
+	if cmds[0].Name != "think" || cmds[0].Input == nil || cmds[0].Input.Type != CommandInputText || cmds[0].Input.Hint != "on|off" {
+		t.Fatalf("think = %+v", cmds[0])
 	}
-	if c := byName["/new"]; c.Input != nil {
-		t.Fatalf("/new takes no input: %+v", c.Input)
+	if cmds[1].Input != nil {
+		t.Fatalf("no-hint command has input: %+v", cmds[1].Input)
 	}
 
 	upd := NewAvailableCommandsUpdate(cmds)
-	if upd.SessionUpdate != "available_commands_update" {
-		t.Fatalf("sessionUpdate = %q", upd.SessionUpdate)
-	}
 	body := jsonBody(t, upd)
 	if body["sessionUpdate"] != "available_commands_update" {
 		t.Fatalf("wire sessionUpdate = %v", body["sessionUpdate"])
@@ -42,9 +32,15 @@ func TestMilkCommandsShape(t *testing.T) {
 	if !ok || len(list) != len(cmds) {
 		t.Fatalf("availableCommands = %v", body["availableCommands"])
 	}
-	first := list[0].(map[string]any)
-	if _, ok := first["name"]; !ok {
-		t.Fatalf("command missing name: %v", first)
+	for _, raw := range list {
+		c := raw.(map[string]any)
+		name, _ := c["name"].(string)
+		if name == "" || name[0] == '/' {
+			t.Fatalf("command name must be non-empty and have no leading slash: %v", c)
+		}
+		if d, _ := c["description"].(string); d == "" {
+			t.Fatalf("command %q missing required description", name)
+		}
 	}
 }
 
@@ -159,5 +155,65 @@ func TestConfigStateSet(t *testing.T) {
 	n := m.ConfigOptions(cs.Options())
 	if n.Method != MethodSessionUpdate {
 		t.Fatalf("method = %q", n.Method)
+	}
+}
+
+func TestPlanEntriesForTasksAndV1Shape(t *testing.T) {
+	ts := []tasks.Task{
+		{Title: "a", Status: tasks.StatusPending},
+		{Title: "b", Status: tasks.StatusInProgress},
+		{Title: "c", Status: tasks.StatusDone},
+		{Title: "d", Status: tasks.StatusBlocked},
+	}
+	entries := PlanEntriesForTasks(ts)
+	want := []PlanEntryStatus{PlanEntryPending, PlanEntryInProgress, PlanEntryCompleted, PlanEntryPending}
+	for i, e := range entries {
+		if e.Status != want[i] || e.Priority != PlanPriorityMedium {
+			t.Errorf("entry %d = %+v, want status %s / medium", i, e, want[i])
+		}
+	}
+	if entries[3].Content != "d (blocked)" {
+		t.Errorf("blocked content = %q", entries[3].Content)
+	}
+
+	v2 := jsonBody(t, NewPlanUpdate("tasks-1", entries))
+	if v2["sessionUpdate"] != "plan_update" {
+		t.Errorf("v2 sessionUpdate = %v", v2["sessionUpdate"])
+	}
+
+	cancelled := append(entries, PlanEntry{Content: "x", Priority: PlanPriorityLow, Status: PlanEntryCancelled})
+	v1 := jsonBody(t, NewPlanUpdate("tasks-1", cancelled).AsV1())
+	if v1["sessionUpdate"] != "plan" {
+		t.Errorf("v1 sessionUpdate = %v", v1["sessionUpdate"])
+	}
+	if _, has := v1["planId"]; has {
+		t.Error("v1 plan must not carry planId")
+	}
+	last := v1["entries"].([]any)[4].(map[string]any)
+	if last["status"] != "completed" || last["content"] != "x (cancelled)" {
+		t.Errorf("v1 cancelled entry = %v, want completed with marker", last)
+	}
+}
+
+func TestToolCallContentReplaceSendsFullContentOnlyWhenGrown(t *testing.T) {
+	buf := livebuf.New(0)
+	var cur BufCursor
+
+	if got := ToolCallContentReplace("job:1", buf, &cur); got != nil {
+		t.Fatalf("empty buffer produced %v", got)
+	}
+	buf.Append([]byte("hello "))
+	got := ToolCallContentReplace("job:1", buf, &cur)
+	if len(got) != 1 {
+		t.Fatalf("got %d updates, want 1", len(got))
+	}
+	buf.Append([]byte("world"))
+	got = ToolCallContentReplace("job:1", buf, &cur)
+	upd, ok := got[0].(ToolCallUpdate)
+	if !ok || len(upd.Content) != 1 || upd.Content[0].Content.Text != "hello world" {
+		t.Fatalf("second update = %+v, want the full 'hello world'", got[0])
+	}
+	if got := ToolCallContentReplace("job:1", buf, &cur); got != nil {
+		t.Fatalf("unchanged buffer re-sent content: %v", got)
 	}
 }

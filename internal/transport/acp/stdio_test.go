@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -239,5 +240,45 @@ func TestStdioConn_RequestContextCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Request did not return after ctx cancel")
+	}
+}
+
+type postResponderHandler struct {
+	fakeHandler
+	conn *StdioConn
+	got  []string
+}
+
+func (h *postResponderHandler) AfterResponse(method string, _ any) {
+	h.got = append(h.got, method)
+	h.conn.Notify("after/"+method, nil) //nolint:errcheck
+}
+
+func TestStdioConn_AfterResponseRunsAfterResponseWritten(t *testing.T) {
+	var buf bytes.Buffer
+	h := &postResponderHandler{}
+	h.conn = NewStdioConn(&buf, h)
+	h.conn.handleRequest(context.Background(), wireMessage{ID: json.RawMessage(`1`), Method: "session/new"})
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("wrote %d lines, want 2: %q", len(lines), buf.String())
+	}
+	if !strings.Contains(lines[0], `"result"`) || !strings.Contains(lines[1], `"after/session/new"`) {
+		t.Errorf("want response then post-response notification, got %q", lines)
+	}
+	if len(h.got) != 1 || h.got[0] != "session/new" {
+		t.Errorf("AfterResponse calls = %v", h.got)
+	}
+}
+
+func TestStdioConn_AfterResponseSkippedOnError(t *testing.T) {
+	var buf bytes.Buffer
+	h := &postResponderHandler{}
+	h.responder = func(string, json.RawMessage) (any, error) { return nil, fmt.Errorf("boom") }
+	h.conn = NewStdioConn(&buf, h)
+	h.conn.handleRequest(context.Background(), wireMessage{ID: json.RawMessage(`1`), Method: "session/new"})
+	if len(h.got) != 0 {
+		t.Errorf("AfterResponse called on error response: %v", h.got)
 	}
 }

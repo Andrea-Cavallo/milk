@@ -31,6 +31,14 @@ cmd/milk/serve.go             # `milk serve --acp` cobra command
 cmd/milk/acp_server.go        # ACP method dispatch (initialize/session/new/prompt/cancel) — see docs/acp-integration.md
 cmd/milk/acp_session.go       # per-ACP-session state + turn dispatch, mirrors repl.go's buildTUIAgents
 cmd/milk/host_acp.go          # events.Host adapter over ACP (local-provider agents only)
+cmd/milk/acp_commands.go      # ACP slash-command table: one source for what is executed and what available_commands_update advertises
+cmd/milk/acp_features.go      # ACP: plan updates, task store, background manager, live-output streaming
+cmd/milk/acp_workflow.go      # ACP: runs workflows inside session/prompt (host half; core is workflow_core.go)
+cmd/milk/acp_followup.go      # ACP: automatic follow-up turn when background jobs finish
+cmd/milk/acp_signals.go       # ACP: route announcements and loop/consumption warnings
+cmd/milk/turn_routing.go      # host-independent routing core (pins, single-turn flags, availability fallback, auto-sticky, turn metrics) shared by TUI runTurn and ACP
+cmd/milk/workflow_core.go     # host-independent workflow launch plan, saved-workflow lookup and clear, shared by TUI and ACP
+cmd/milk/followup_core.go     # host-independent rules for when finished background jobs trigger a follow-up turn, shared by TUI and ACP
 internal/transport/streamjson/ # typed §6 event model + JSONL encoder/decoder for --output-format stream-json
 internal/transport/acp/       # ACP v2 wire vocabulary + stdio.go's JSON-RPC transport (StdioConn)
 internal/config/              # config loading (~/.milk/config.json)
