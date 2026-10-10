@@ -19,14 +19,16 @@ func Schemas() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "record_memory",
-				"description": "Persist a fact, preference, or decision across sessions.",
+				"description": "Persist a fact, preference, or decision across sessions. Re-stating a similar fact reinforces the existing percept (strengthens its weight) instead of duplicating it. Use relation/related_to to link the fact to an existing percept: extends/updates/derives corroborate it, contradicts marks a conflict (both are weighed at memory consolidation).",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"content":  map[string]any{"type": "string", "description": "Fact to remember."},
-						"subject":  map[string]any{"type": "string", "description": "Short label for grouping."},
-						"producer": map[string]any{"type": "string", "enum": []string{"user", "primary", "escalation"}, "description": "Source: 'user' if stated by user."},
-						"consumer": map[string]any{"type": "string", "enum": []string{"primary", "escalation", ""}, "description": "Target agent; omit for both."},
+						"content":    map[string]any{"type": "string", "description": "Fact to remember."},
+						"subject":    map[string]any{"type": "string", "description": "Short label for grouping."},
+						"producer":   map[string]any{"type": "string", "enum": []string{"user", "primary", "escalation"}, "description": "Source: 'user' if stated by user."},
+						"consumer":   map[string]any{"type": "string", "enum": []string{"primary", "escalation", ""}, "description": "Target agent; omit for both."},
+						"relation":   map[string]any{"type": "string", "enum": []string{"extends", "updates", "derives", "contradicts"}, "description": "How this fact relates to related_to."},
+						"related_to": map[string]any{"type": "string", "description": "ID (or prefix, or unique description) of an existing percept this one relates to."},
 					},
 					"required": []string{"content"},
 				},
@@ -233,13 +235,19 @@ func looksLikeIDPrefix(s string) bool {
 	return true
 }
 
-// DispatchRecordMemory handles a record_memory tool call.
+// DispatchRecordMemory handles a record_memory tool call. Optional
+// relation + related_to declare a typed edge between the recorded (or
+// reinforced) percept and an existing one (ADR-0053): extends/updates/derives
+// corroborate the target, contradicts weakens both — all weighed at
+// consolidation.
 func DispatchRecordMemory(ctx context.Context, store *Store, argsJSON string) string {
 	var args struct {
-		Content  string `json:"content"`
-		Subject  string `json:"subject"`
-		Producer string `json:"producer"`
-		Consumer string `json:"consumer"`
+		Content   string `json:"content"`
+		Subject   string `json:"subject"`
+		Producer  string `json:"producer"`
+		Consumer  string `json:"consumer"`
+		Relation  string `json:"relation"`
+		RelatedTo string `json:"related_to"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return errResult(invalidArgs + err.Error())
@@ -247,6 +255,16 @@ func DispatchRecordMemory(ctx context.Context, store *Store, argsJSON string) st
 	if strings.TrimSpace(args.Content) == "" {
 		return errResult("content is required")
 	}
+	rel := Relation(strings.TrimSpace(args.Relation))
+	switch rel {
+	case "", RelationExtends, RelationUpdates, RelationDerives, RelationContradicts:
+	default:
+		return errResult(invalidArgs + "relation must be one of extends, updates, derives, contradicts")
+	}
+	if rel != "" && strings.TrimSpace(args.RelatedTo) == "" {
+		return errResult(invalidArgs + "related_to is required when relation is set")
+	}
+
 	roles := Roles{}
 	if args.Subject != "" {
 		roles.Theme = args.Subject
@@ -265,15 +283,31 @@ func DispatchRecordMemory(ctx context.Context, store *Store, argsJSON string) st
 	case "escalation":
 		consumer = ConsumerEscalation
 	}
-	id, err := store.Record(ctx, args.Content, producer, consumer, roles, false)
-	if dup, ok := IsDuplicate(err); ok {
-		return okResult(fmt.Sprintf("skipped — similar percept already exists: %s (%.0f%% overlap): %s",
-			id[:8], dup.Similarity*100, dup.Existing.Content))
-	}
+	out, err := store.Record(ctx, args.Content, producer, consumer, roles, false)
 	if err != nil {
 		return errResult("failed to record: " + err.Error())
 	}
-	return okResult(fmt.Sprintf("recorded percept %s", id[:8]))
+
+	var b strings.Builder
+	if out.Reinforced {
+		fmt.Fprintf(&b, "reinforced existing percept %s (w=%.2f, %.0f%% overlap): %s",
+			out.ID[:8], out.W, out.Similarity*100, out.Existing)
+	} else {
+		fmt.Fprintf(&b, "recorded percept %s", out.ID[:8])
+	}
+
+	if rel != "" {
+		targets, err := resolveForgetTarget(store, args.RelatedTo)
+		if err != nil {
+			return errResult("percept recorded, but related_to failed: " + err.Error())
+		}
+		target := targets[0]
+		if err := store.AddEdge(out.ID, target.ID, rel); err != nil {
+			return errResult("percept recorded, but edge failed: " + err.Error())
+		}
+		fmt.Fprintf(&b, "\nedge recorded: %s %s %s", out.ID[:8], rel, target.ID[:8])
+	}
+	return okResult(b.String())
 }
 
 // DispatchGetMemory handles a get_memory tool call.

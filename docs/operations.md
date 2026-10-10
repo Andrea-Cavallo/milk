@@ -6,7 +6,7 @@ Running milk day to day: memory, observability, loop detection, task tracking, c
 
 ## Memory
 
-milk keeps a **Percept store** — small remembered facts that survive across sessions, separate from conversation history. Percepts are reinforced when relevant, decay when not, and get promoted to long-term ("core") status over time (NREM consolidation, run at session end).
+milk keeps a **Percept store** — small remembered facts that survive across sessions, separate from conversation history. Percepts are **reinforced** when re-stated (a repeated fact gains weight), **decay** when not (session end runs NREM consolidation: decay → edges → prune → promote), and graduate to the global store when their weight crosses the promotion threshold. The full weight model is below ([Memory weight model](#memory-weight-model)) and in [ADR-0053](adr/0053-memory-weight-model.md).
 
 ### Commands
 
@@ -26,7 +26,7 @@ Agents backed by an inference server (HTTP or Bedrock) get four memory tools wit
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `record_memory` | `content`, optional `subject`, `producer`, `consumer` | new percept ID, or a "skipped — similar percept exists" note |
+| `record_memory` | `content`, optional `subject`, `producer`, `consumer`, `relation`, `related_to` | new percept ID — or a "reinforced existing percept" note (near-duplicates strengthen instead of duplicating); `relation`/`related_to` link the fact to an existing percept (see below) |
 | `get_memory` | `query`, optional `min_confidence`, `max_results` | relevant percepts, best-first |
 | `list_memory` | optional `scope`, `producer`, `consumer`, `min_w`, `pattern` | percept table |
 | `forget_memory` | `id` and/or `ids` and/or `pattern` | deleted percepts — or an error |
@@ -35,6 +35,20 @@ Agents backed by an inference server (HTTP or Bedrock) get four memory tools wit
 - **`forget_memory` matching is the `/forget` contract**: `id`/`ids` accept a percept ID (leading `#` optional), an ID prefix, or a description that must match exactly one percept (several matches are ambiguous — an error listing them); `pattern` deletes every percept whose content contains the substring (the batch path). All targets resolve before anything is deleted — an unresolvable or ambiguous target returns an error-shaped result and the store is left untouched.
 - **Visibility is role-derived**: `get_memory`/`list_memory` see the calling agent's own consumer tag plus shared percepts — an escalation-role call also sees `consumer: "escalation"` percepts (it used to be hardcoded to the primary view). `list_memory`'s `consumer` argument narrows to a named tag explicitly.
 - **Limits apply**: `limits.included_tools`/`limits.excluded_tools` scope the memory tools like any other built-in. The system prompt's memory-tool mandate is only injected when the tools actually survived that filtering — a model is never told to call a tool it doesn't have.
+
+### Memory weight model
+
+Every Percept carries a confidence weight `w` in `[0,1]`. Five forces move it (ADR-0053):
+
+1. **Birth** — `user` facts start at 0.9, inference (`primary`/`escalation`) at 0.7, system hints at 0.4, `core` (`/learn`) at 1.0.
+2. **Reinforcement (re-confirmation)** — re-stating a near-duplicate fact (Jaccard token overlap ≥ 0.60) strengthens the existing percept instead of inserting a copy: `w += 0.05`, capped at 0.90, `updated_at` touched (which also restores the recency bonus). The cap is `promote_threshold + decay_per_session` on purpose: a fully re-confirmed inference percept survives the pre-promotion decay and graduates at the next consolidation — repeated confirmation is a real promotion path. Weights never decrease through reinforcement.
+3. **NREM consolidation** (session end) — session percepts decay −0.10, typed edges fire (below), percepts at `w ≤ 0.20` are pruned, and `w ≥ 0.80` percepts are promoted to the global store (promotion happens *after* the global pass, so fresh promotions aren't decayed twice).
+4. **Global decay** — promoted (non-core) global percepts get a gentle −0.02 per consolidation, floored at 0.20: old facts sink in rank but are never deleted from global by decay (only size-based eviction or `/forget` removes them). `core` percepts never decay anywhere.
+5. **Recency (recall ordering only)** — `get_memory` orders by token-hit count, then `w + 0.10 × 0.5^(age/30d)`: a recently updated fact wins ties but a more relevant old fact always ranks first, and `min_confidence` gates raw `w` — age never hides a fact.
+
+**Edges** (wired via `record_memory`'s `relation` + `related_to`): `extends`/`updates`/`derives` corroborate the target (+0.05 at consolidation), `contradicts` marks a conflict (both endpoints −0.10). The producer agent decides semantics — milk never fabricates relations. Edges are stored with the "from" percept's store file and apply to endpoints in that same file.
+
+All knobs are prepopulated in the generated config's `memory` block (`decay_per_session`, `global_decay_per_session`, `reconfirm_boost`, `reconfirm_cap`, `promote_threshold`, `prune_threshold`, `recency_boost`, `recency_half_life_days`); zero/missing fields fall back to the defaults above. OTel: `milk.memory.consolidation.*` counters (including `global_decayed`) and `milk.memory.percept_events{event=reinforce}`.
 
 ### Tuning
 

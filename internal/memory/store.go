@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,17 +32,27 @@ type Store struct {
 
 	global  storeFile
 	session storeFile
+
+	params Params
 }
 
-// NewStore opens (or creates) the global store and optional session store.
+// NewStore opens (or creates) the global store and optional session store
+// with the default weight-model parameters.
 // baseDir is typically ~/.milk/memory. sessionID may be empty.
 func NewStore(baseDir, sessionID string) (*Store, error) {
+	return NewStoreParams(baseDir, sessionID, Params{})
+}
+
+// NewStoreParams is NewStore with explicit weight-model parameters (zero
+// fields fall back to the package defaults — see Params.normalized).
+func NewStoreParams(baseDir, sessionID string, p Params) (*Store, error) {
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, err
 	}
 	s := &Store{
 		globalPath: filepath.Join(baseDir, "global.json"),
 		sessionID:  sessionID,
+		params:     p.normalized(),
 	}
 	if sessionID != "" {
 		s.sessionPath = filepath.Join(baseDir, sessionID+".json")
@@ -80,15 +92,30 @@ func (s *Store) saveFile(path string, src storeFile) error {
 	return os.Rename(tmp, path)
 }
 
+// RecordOutcome describes what a Record/RecordGlobal call did (ADR-0053).
+type RecordOutcome struct {
+	// ID is the percept's ID — the existing percept's when Reinforced.
+	ID string
+	// Reinforced is true when the content matched a near-duplicate and the
+	// existing percept was strengthened instead of a new one being created.
+	Reinforced bool
+	// Similarity is the Jaccard overlap that triggered reinforcement.
+	Similarity float64
+	// Existing is the reinforced percept's content (empty for new inserts).
+	Existing string
+	// W is the percept's resulting weight (after reinforcement or at birth).
+	W float64
+}
+
 // Record adds a new Percept to the session store (or global if no session).
 // Returns the new Percept's ID.
 //
-// If the incoming content is too similar to an existing Percept (Jaccard token
-// overlap ≥ DuplicateSimilarityThreshold), Record skips insertion and returns
-// the existing Percept's ID together with a *DuplicateError. Callers that want
-// to surface a user-facing hint should type-assert the error; callers that
-// want silent deduplication can ignore the error when IsDuplicate returns true.
-func (s *Store) Record(ctx context.Context, content string, producer Producer, consumer Consumer, roles Roles, core bool) (string, error) {
+// If the incoming content is too similar to an existing Percept (Jaccard
+// overlap ≥ DuplicateSimilarityThreshold), Record does NOT insert a new
+// Percept: it reinforces the existing one (W += ReconfirmBoost capped at
+// ReconfirmCap, UpdatedAt touched — a re-stated fact is corroborated, not
+// rejected) and reports Reinforced in the outcome.
+func (s *Store) Record(ctx context.Context, content string, producer Producer, consumer Consumer, roles Roles, core bool) (RecordOutcome, error) {
 	ctx, end := traceRecord(ctx, producer)
 	defer func() { end(nil) }()
 
@@ -96,8 +123,7 @@ func (s *Store) Record(ctx context.Context, content string, producer Producer, c
 	defer s.mu.Unlock()
 
 	if dup := s.findSimilarLocked(content, DuplicateSimilarityThreshold); dup != nil {
-		dupErr := &DuplicateError{Existing: *dup, Similarity: jaccardSimilarity(tokenize(content), tokenize(dup.Content))}
-		return dup.ID, dupErr
+		return s.reinforceLocked(ctx, dup.ID, jaccardSimilarity(tokenize(content), tokenize(dup.Content)))
 	}
 
 	p := Percept{
@@ -126,7 +152,40 @@ func (s *Store) Record(ctx context.Context, content string, producer Producer, c
 
 	logPercept(ctx, p, s.sessionID)
 	metricsRecord(ctx, producer, scopeLabel)
-	return p.ID, saveErr
+	return RecordOutcome{ID: p.ID, W: p.W}, saveErr
+}
+
+// reinforceLocked boosts the existing Percept with the given ID in whichever
+// store holds it (W += ReconfirmBoost capped at ReconfirmCap, UpdatedAt
+// touched) and persists that store. Caller must hold s.mu.
+func (s *Store) reinforceLocked(ctx context.Context, id string, similarity float64) (RecordOutcome, error) {
+	now := time.Now()
+	for i := range s.global.Percepts {
+		if s.global.Percepts[i].ID == id {
+			existing := s.global.Percepts[i].Content
+			s.global.Percepts[i].W = reinforceW(s.global.Percepts[i].W, s.params)
+			s.global.Percepts[i].UpdatedAt = now
+			metricsReinforce(ctx)
+			return RecordOutcome{ID: id, Reinforced: true, Similarity: similarity, Existing: existing, W: s.global.Percepts[i].W},
+				s.saveFile(s.globalPath, s.global)
+		}
+	}
+	for i := range s.session.Percepts {
+		if s.session.Percepts[i].ID == id {
+			existing := s.session.Percepts[i].Content
+			s.session.Percepts[i].W = reinforceW(s.session.Percepts[i].W, s.params)
+			s.session.Percepts[i].UpdatedAt = now
+			metricsReinforce(ctx)
+			var saveErr error
+			if s.sessionPath != "" {
+				saveErr = s.saveFile(s.sessionPath, s.session)
+			}
+			return RecordOutcome{ID: id, Reinforced: true, Similarity: similarity, Existing: existing, W: s.session.Percepts[i].W}, saveErr
+		}
+	}
+	// The percept vanished between lookup and reinforcement (concurrent
+	// forget); report the ID without a reinforcement side effect.
+	return RecordOutcome{ID: id, Similarity: similarity}, nil
 }
 
 func initialWeight(producer Producer, core bool) float64 {
@@ -139,16 +198,16 @@ func initialWeight(producer Producer, core bool) float64 {
 	case ProducerSystem:
 		return 0.4 // low-confidence hint; pruned after two sessions
 	default: // ProducerLocal, ProducerEscalation
-		return 0.7 // inference; decays over ~5 sessions; needs edge boost to promote
+		return 0.7 // inference; promoted via re-confirmation (reinforce ×2) or positive edges
 	}
 }
 
 // RecordGlobal writes a Percept directly to the global store regardless of
 // session scope. Used by /learn.
 //
-// Like Record, it returns a *DuplicateError when the incoming content is too
-// similar to an existing global percept, along with the ID of that percept.
-func (s *Store) RecordGlobal(ctx context.Context, content string, producer Producer, consumer Consumer, roles Roles) (string, error) {
+// Like Record, a near-duplicate reinforces the existing Percept instead of
+// inserting a new one (see RecordOutcome.Reinforced).
+func (s *Store) RecordGlobal(ctx context.Context, content string, producer Producer, consumer Consumer, roles Roles) (RecordOutcome, error) {
 	ctx, end := traceRecord(ctx, producer)
 	defer func() { end(nil) }()
 
@@ -156,8 +215,7 @@ func (s *Store) RecordGlobal(ctx context.Context, content string, producer Produ
 	defer s.mu.Unlock()
 
 	if dup := s.findSimilarLocked(content, DuplicateSimilarityThreshold); dup != nil {
-		dupErr := &DuplicateError{Existing: *dup, Similarity: jaccardSimilarity(tokenize(content), tokenize(dup.Content))}
-		return dup.ID, dupErr
+		return s.reinforceLocked(ctx, dup.ID, jaccardSimilarity(tokenize(content), tokenize(dup.Content)))
 	}
 
 	p := Percept{
@@ -175,12 +233,16 @@ func (s *Store) RecordGlobal(ctx context.Context, content string, producer Produ
 
 	logPercept(ctx, p, s.sessionID)
 	metricsRecord(ctx, producer, "global")
-	return p.ID, s.saveFile(s.globalPath, s.global)
+	return RecordOutcome{ID: p.ID, W: p.W}, s.saveFile(s.globalPath, s.global)
 }
 
 // Query returns Percepts matching a keyword query, ordered by token-overlap
-// count desc then weight desc. maxResults <= 0 means no limit. minConfidence
-// filters by W. caller restricts results to percepts visible to that agent
+// count desc, then effective weight (W plus a recency bonus — a recently
+// updated percept outranks an equally relevant stale one; the bonus halves
+// every RecencyHalfLifeDays and never extends past a small constant) desc,
+// then raw W desc. maxResults <= 0 means no limit. minConfidence filters by
+// raw W (not the recency-adjusted score, so old facts are never hidden by
+// age alone). caller restricts results to percepts visible to that agent
 // (ConsumerAll = no restriction).
 //
 // Matching is token-based (tokenize, shared with FindSimilar/FilterByRelevance)
@@ -197,10 +259,12 @@ func (s *Store) Query(ctx context.Context, query string, minConfidence float64, 
 
 	all := s.allPercepts()
 	queryTokens := tokenize(query)
+	now := time.Now()
 
 	type scored struct {
-		p    Percept
-		hits int
+		p     Percept
+		hits  int
+		score float64
 	}
 	var candidates []scored
 	for _, p := range all {
@@ -211,7 +275,7 @@ func (s *Store) Query(ctx context.Context, query string, minConfidence float64, 
 			continue
 		}
 		if len(queryTokens) == 0 {
-			candidates = append(candidates, scored{p, 0})
+			candidates = append(candidates, scored{p: p, score: s.recencyScore(p, now)})
 			continue
 		}
 		hits := 0
@@ -221,13 +285,16 @@ func (s *Store) Query(ctx context.Context, query string, minConfidence float64, 
 			}
 		}
 		if hits > 0 {
-			candidates = append(candidates, scored{p, hits})
+			candidates = append(candidates, scored{p: p, hits: hits, score: s.recencyScore(p, now)})
 		}
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].hits != candidates[j].hits {
 			return candidates[i].hits > candidates[j].hits
+		}
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
 		}
 		return candidates[i].p.W > candidates[j].p.W
 	})
@@ -245,6 +312,85 @@ func (s *Store) Query(ctx context.Context, query string, minConfidence float64, 
 	logRecall(ctx, query, len(out), s.sessionID)
 	metricsRecall(ctx)
 	return out
+}
+
+// recencyScore is W plus the recency bonus used for recall ordering: a
+// percept updated moments ago gets +RecencyBoost, halving every
+// RecencyHalfLifeDays (ADR-0053). Ordering only — it never gates visibility.
+func (s *Store) recencyScore(p Percept, now time.Time) float64 {
+	ageDays := now.Sub(p.UpdatedAt).Hours() / 24
+	if ageDays < 0 {
+		ageDays = 0
+	}
+	return p.W + s.params.RecencyBoost*math.Pow(0.5, ageDays/s.params.RecencyHalfLifeDays)
+}
+
+// AddEdge records a typed directed relation between two Percepts (ADR-0053):
+// extends/updates/derives corroborate the target (To), contradicts weakens
+// both endpoints — all applied at consolidation. The edge is stored in the
+// same store file as the "from" Percept and only affects endpoints present in
+// that file at consolidation time. Both endpoints must already exist;
+// identical (From, To, Relation) triples are stored once.
+func (s *Store) AddEdge(fromID, toID string, rel Relation) error {
+	switch rel {
+	case RelationExtends, RelationUpdates, RelationDerives, RelationContradicts:
+	default:
+		return fmt.Errorf("unknown relation %q", rel)
+	}
+	if fromID == toID {
+		return fmt.Errorf("self-referential edge on %s", fromID)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fromGlobal, fromOK := s.findPerceptLocked(fromID)
+	_, toOK := s.findPerceptLocked(toID)
+	if !fromOK {
+		return fmt.Errorf("percept %s not found (edge source)", fromID)
+	}
+	if !toOK {
+		return fmt.Errorf("percept %s not found (edge target)", toID)
+	}
+
+	e := Edge{From: fromID, To: toID, Relation: rel}
+	var saveErr error
+	if fromGlobal {
+		for _, ex := range s.global.Edges {
+			if ex == e {
+				return nil // already recorded
+			}
+		}
+		s.global.Edges = append(s.global.Edges, e)
+		saveErr = s.saveFile(s.globalPath, s.global)
+	} else {
+		for _, ex := range s.session.Edges {
+			if ex == e {
+				return nil
+			}
+		}
+		s.session.Edges = append(s.session.Edges, e)
+		if s.sessionPath != "" {
+			saveErr = s.saveFile(s.sessionPath, s.session)
+		}
+	}
+	return saveErr
+}
+
+// findPerceptLocked reports whether id exists and, if so, whether it lives in
+// the global store (true) or the session store (false). Caller must hold s.mu.
+func (s *Store) findPerceptLocked(id string) (inGlobal bool, ok bool) {
+	for _, p := range s.global.Percepts {
+		if p.ID == id {
+			return true, true
+		}
+	}
+	for _, p := range s.session.Percepts {
+		if p.ID == id {
+			return false, true
+		}
+	}
+	return false, false
 }
 
 // ListOpts filters for List.

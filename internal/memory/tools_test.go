@@ -90,27 +90,27 @@ func TestDispatchRecordMemory_EmptyContent(t *testing.T) {
 	}
 }
 
-func TestDispatchRecordMemory_DuplicateReturnsSkipped(t *testing.T) {
+func TestDispatchRecordMemory_DuplicateReinforces(t *testing.T) {
 	s := newToolsStore(t)
 	// Record the original.
 	DispatchRecordMemory(context.Background(), s, `{"content":"user prefers flat file output over JSON"}`) //nolint:errcheck
 
-	// Near-duplicate — should be skipped.
+	// Near-duplicate — should reinforce the existing percept.
 	result := DispatchRecordMemory(context.Background(), s, `{"content":"user prefers flat file output not JSON"}`)
 	var out map[string]any
 	if err := json.Unmarshal([]byte(result), &out); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 	if _, ok := out["error"]; ok {
-		t.Errorf("duplicate should return ok result with skipped message, got error: %v", out["error"])
+		t.Errorf("duplicate should return ok result with reinforced message, got error: %v", out["error"])
 	}
 	msg, _ := out["output"].(string)
-	if !strings.Contains(msg, "skipped") {
-		t.Errorf("expected 'skipped' in output, got %q", msg)
+	if !strings.Contains(msg, "reinforced") {
+		t.Errorf("expected 'reinforced' in output, got %q", msg)
 	}
 	// Store must still contain exactly one percept.
 	if len(s.global.Percepts) != 1 {
-		t.Errorf("expected 1 percept after duplicate suppression, got %d", len(s.global.Percepts))
+		t.Errorf("expected 1 percept after reinforcement, got %d", len(s.global.Percepts))
 	}
 }
 

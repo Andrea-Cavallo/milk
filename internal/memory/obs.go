@@ -93,6 +93,18 @@ func metricsConsolidation(ctx context.Context, decayed, pruned, promoted, global
 	obs.SetGauge(ctx, meterScope, "milk.memory.global_size", int64(globalTotal))
 }
 
+// metricsGlobalDecay records how many global (promoted) percepts were decayed
+// during the gentle global pass.
+func metricsGlobalDecay(ctx context.Context, decayed int) {
+	obs.Add(ctx, meterScope, "milk.memory.consolidation.global_decayed", int64(decayed))
+}
+
+// metricsReinforce increments the reinforcement counter (re-statement of a
+// near-duplicate fact boosting the existing percept).
+func metricsReinforce(ctx context.Context) {
+	obs.Inc(ctx, meterScope, "milk.memory.percept_events", attribute.String("event", "reinforce"))
+}
+
 // traceRecord returns a span for a record_memory operation.
 func traceRecord(ctx context.Context, producer Producer) (context.Context, func(error)) {
 	ctx, span := obs.StartSpan(ctx, "milk.memory.record",

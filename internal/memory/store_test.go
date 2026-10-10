@@ -22,11 +22,11 @@ func newTestStore(t *testing.T, withSession bool) *Store {
 
 func TestRecord_GlobalWhenNoSession(t *testing.T) {
 	s := newTestStore(t, false)
-	id, err := s.Record(context.Background(), "test fact", ProducerUser, ConsumerAll, Roles{}, false)
+	out, err := s.Record(context.Background(), "test fact", ProducerUser, ConsumerAll, Roles{}, false)
 	if err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	if id == "" {
+	if out.ID == "" {
 		t.Fatal("expected non-empty ID")
 	}
 	if len(s.global.Percepts) != 1 {
@@ -64,11 +64,11 @@ func TestRecord_CoreGoesToGlobal(t *testing.T) {
 
 func TestRecordGlobal_AlwaysGlobal(t *testing.T) {
 	s := newTestStore(t, true)
-	id, err := s.RecordGlobal(context.Background(), "global fact", ProducerUser, ConsumerAll, Roles{})
+	out, err := s.RecordGlobal(context.Background(), "global fact", ProducerUser, ConsumerAll, Roles{})
 	if err != nil {
 		t.Fatalf("RecordGlobal: %v", err)
 	}
-	if id == "" {
+	if out.ID == "" {
 		t.Fatal("expected non-empty ID")
 	}
 	if len(s.global.Percepts) != 1 {
@@ -266,11 +266,11 @@ func TestInitialWeight(t *testing.T) {
 
 func TestDelete_RemovesFromGlobal(t *testing.T) {
 	s := newTestStore(t, false)
-	id, err := s.Record(context.Background(), "global fact to delete", ProducerUser, ConsumerAll, Roles{}, false)
+	out, err := s.Record(context.Background(), "global fact to delete", ProducerUser, ConsumerAll, Roles{}, false)
 	if err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	found, err := s.Delete(id)
+	found, err := s.Delete(out.ID)
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -284,11 +284,11 @@ func TestDelete_RemovesFromGlobal(t *testing.T) {
 
 func TestDelete_RemovesFromSession(t *testing.T) {
 	s := newTestStore(t, true)
-	id, err := s.Record(context.Background(), "session fact to delete", ProducerLocal, ConsumerAll, Roles{}, false)
+	out, err := s.Record(context.Background(), "session fact to delete", ProducerLocal, ConsumerAll, Roles{}, false)
 	if err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	found, err := s.Delete(id)
+	found, err := s.Delete(out.ID)
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -313,10 +313,11 @@ func TestDelete_NotFound(t *testing.T) {
 
 func TestFindByIDPrefix_Matches(t *testing.T) {
 	s := newTestStore(t, false)
-	id1, err := s.Record(context.Background(), "first fact", ProducerUser, ConsumerAll, Roles{}, false)
+	out1, err := s.Record(context.Background(), "first fact", ProducerUser, ConsumerAll, Roles{}, false)
 	if err != nil {
 		t.Fatalf("Record: %v", err)
 	}
+	id1 := out1.ID
 	_, err = s.Record(context.Background(), "second fact", ProducerUser, ConsumerAll, Roles{}, false)
 	if err != nil {
 		t.Fatalf("Record: %v", err)

@@ -51,3 +51,4 @@
 * [50. Batch `stream-json` JSONL Contract (§6 Catalog + §8.3 Conventions)](0050-batch-stream-json-contract.md)
 * [51. ACP Conversation Views Can Rebind Store Sessions](0051-acp-conversation-view-rebinding.md)
 * [52. Three-Source Permission Asks with a Timed Answer for Background Work](0052-background-permission-timed-answer.md)
+* [53. Memory Weight Model v2: Reinforcement, Wired Edges, Recency](0053-memory-weight-model.md)

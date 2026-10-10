@@ -200,7 +200,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	mem, err := memory.NewStore(memDir, sess.ID)
+	mem, err := memory.NewStoreParams(memDir, sess.ID, memParams(cfg))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s warning: memory store unavailable: %v\n", milkTag(), err)
 	}
@@ -808,6 +808,26 @@ func memoryDir() (string, error) {
 		return "", fmt.Errorf("memory dir: %w", err)
 	}
 	return dir + "/memory", nil
+}
+
+// memParams maps the config "memory" block to the memory package's
+// weight-model Params (ADR-0053). Zero fields fall back to the built-in
+// defaults inside the memory package (Params.normalized).
+func memParams(cfg config.Config) memory.Params {
+	m := cfg.Memory
+	if m == nil {
+		return memory.Params{}
+	}
+	return memory.Params{
+		DecayPerSession:       m.DecayPerSession,
+		GlobalDecayPerSession: m.GlobalDecayPerSession,
+		ReconfirmBoost:        m.ReconfirmBoost,
+		ReconfirmCap:          m.ReconfirmCap,
+		PromoteThreshold:      m.PromoteThreshold,
+		PruneThreshold:        m.PruneThreshold,
+		RecencyBoost:          m.RecencyBoost,
+		RecencyHalfLifeDays:   m.RecencyHalfLifeDays,
+	}
 }
 
 // initObs bootstraps OTel, prints any file-size warning, and returns a

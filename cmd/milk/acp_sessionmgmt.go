@@ -50,7 +50,7 @@ func (as *acpSession) rebind(sess *session.Session) error {
 	}
 
 	if dir, err := memoryDir(); err == nil {
-		mem, memErr := memory.NewStore(dir, sess.ID)
+		mem, memErr := memory.NewStoreParams(dir, sess.ID, memParams(as.cfg))
 		if memErr != nil {
 			mem = nil // best-effort, same as newACPSession
 		}

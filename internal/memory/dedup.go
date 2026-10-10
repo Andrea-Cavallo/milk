@@ -3,29 +3,12 @@ package memory
 import "strings"
 
 // DuplicateSimilarityThreshold is the Jaccard similarity score above which a
-// new percept is considered a near-duplicate of an existing one and will be
-// suppressed. Chosen to catch rewordings and subset/superset phrasings while
-// allowing genuinely new assertions through.
+// new percept is considered a near-duplicate of an existing one. Instead of
+// inserting a second copy, Record/RecordGlobal reinforce the existing percept
+// (ADR-0053: a re-stated fact is corroborated — W += ReconfirmBoost, capped —
+// not rejected). Chosen to catch rewordings and subset/superset phrasings
+// while allowing genuinely new assertions through.
 const DuplicateSimilarityThreshold = 0.60
-
-// DuplicateError is returned by Record and RecordGlobal when the incoming
-// content is too similar to an existing percept. The caller can inspect
-// Existing to surface a helpful message instead of silently failing.
-type DuplicateError struct {
-	Existing   Percept
-	Similarity float64
-}
-
-func (e *DuplicateError) Error() string {
-	return "near-duplicate of existing percept " + e.Existing.ID[:8]
-}
-
-// IsDuplicate reports whether err is a *DuplicateError (convenience helper for
-// callers that want to branch on deduplication without a type assertion).
-func IsDuplicate(err error) (*DuplicateError, bool) {
-	d, ok := err.(*DuplicateError)
-	return d, ok
-}
 
 // tokenize lower-cases s, strips punctuation, and returns the unique word set.
 // Common stop-words are excluded so content-bearing words dominate the overlap.

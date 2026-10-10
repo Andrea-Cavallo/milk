@@ -1613,3 +1613,33 @@ func TestInitConfig_GeneratedFileIncludesPermissions(t *testing.T) {
 		t.Error("timed defaults must be deny")
 	}
 }
+
+// TestInitConfig_GeneratedFileIncludesMemory pins the same self-documenting
+// contract for the memory weight-model knobs (ADR-0053): the generated file
+// must show them with the memory package's exact effective values.
+func TestInitConfig_GeneratedFileIncludesMemory(t *testing.T) {
+	cfg := InitConfig(AgentConfig{Name: "primary", Provider: "local", URL: "http://x", Model: "m"}, nil)
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`"memory"`,
+		`"decay_per_session": 0.1`,
+		`"global_decay_per_session": 0.02`,
+		`"reconfirm_boost": 0.05`,
+		`"reconfirm_cap": 0.9`,
+		`"promote_threshold": 0.8`,
+		`"prune_threshold": 0.2`,
+		`"recency_boost": 0.1`,
+		`"recency_half_life_days": 30`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated config missing %s", want)
+		}
+	}
+	if cfg.Memory == nil || cfg.Memory.ReconfirmCap != 0.90 {
+		t.Errorf("Memory block must be prepopulated with effective values, got %+v", cfg.Memory)
+	}
+}

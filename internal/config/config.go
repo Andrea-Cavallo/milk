@@ -999,6 +999,7 @@ type Config struct {
 	// timed answer that bounds background asks (ADR-0052). Nil = defaults
 	// (360s deadline, deny).
 	Permissions *PermissionsConfig `json:"permissions,omitempty"`
+	Memory      *MemoryConfig      `json:"memory,omitempty"`
 
 	// LoopDetection configures agent loop detection. When enabled, milk
 	// monitors turns for signs of the agent looping (repeated responses,
@@ -1187,6 +1188,20 @@ func defaults() Config {
 			BackgroundDefault:     "deny",
 			SafetyTimeoutSecs:     360,
 			SafetyDefault:         "deny",
+		},
+		// Prepopulated (like Otel/Rules/Permissions) so the generated config
+		// shows the memory weight-model knobs instead of hiding them behind
+		// code defaults — the values here are exactly the ones the memory
+		// package falls back to (ADR-0053).
+		Memory: &MemoryConfig{
+			DecayPerSession:       0.10,
+			GlobalDecayPerSession: 0.02,
+			ReconfirmBoost:        0.05,
+			ReconfirmCap:          0.90,
+			PromoteThreshold:      0.80,
+			PruneThreshold:        0.20,
+			RecencyBoost:          0.10,
+			RecencyHalfLifeDays:   30,
 		},
 		Otel: OtelConfig{
 			Enabled:             true,
@@ -1472,6 +1487,39 @@ func (c Config) PermSafetyTimeout() time.Duration {
 // confirmations is "allow". Defaults to false (deny).
 func (c Config) PermSafetyAllow() bool {
 	return c.Permissions != nil && c.Permissions.SafetyDefault == "allow"
+}
+
+// MemoryConfig tunes the memory weight model (ADR-0053): session-end NREM
+// consolidation (decay → edges → prune → promote), the gentle global decay,
+// re-confirmation reinforcement, and the recall recency bonus. Zero fields
+// fall back to the built-in defaults shown below; see docs/operations.md
+// ("Memory weight model") for what each knob does to a real corpus.
+// Field names mirror the memory package's Params JSON tags.
+type MemoryConfig struct {
+	// DecayPerSession is subtracted from every non-core session percept's
+	// weight at session end. Default 0.10.
+	DecayPerSession float64 `json:"decay_per_session,omitempty"`
+	// GlobalDecayPerSession is subtracted from every non-core (promoted)
+	// global percept at consolidation, floored at PruneThreshold. Default 0.02.
+	GlobalDecayPerSession float64 `json:"global_decay_per_session,omitempty"`
+	// ReconfirmBoost is added to a percept's weight when a near-duplicate
+	// fact is re-stated (reinforcement). Default 0.05.
+	ReconfirmBoost float64 `json:"reconfirm_boost,omitempty"`
+	// ReconfirmCap caps reinforcement-driven weight (=
+	// promote_threshold + decay_per_session by default: 0.90).
+	ReconfirmCap float64 `json:"reconfirm_cap,omitempty"`
+	// PromoteThreshold is the weight at which session percepts graduate to
+	// the global store. Default 0.80.
+	PromoteThreshold float64 `json:"promote_threshold,omitempty"`
+	// PruneThreshold is the weight at or below which session percepts are
+	// culled (and below which global decay stops). Default 0.20.
+	PruneThreshold float64 `json:"prune_threshold,omitempty"`
+	// RecencyBoost is the maximum additive recall-order bonus for a
+	// just-updated percept (ordering only — never filters). Default 0.10.
+	RecencyBoost float64 `json:"recency_boost,omitempty"`
+	// RecencyHalfLifeDays is the age at which the recency bonus halves.
+	// Default 30.
+	RecencyHalfLifeDays float64 `json:"recency_half_life_days,omitempty"`
 }
 
 // LocalContextBudget returns the maximum total character count of the local

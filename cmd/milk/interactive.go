@@ -883,15 +883,15 @@ func execLearn(fact string, st *interactiveState) string {
 	if st.mem == nil {
 		return milkTag() + " memory store not available"
 	}
-	id, err := st.mem.RecordGlobal(context.Background(), fact, memory.ProducerUser, memory.ConsumerAll, memory.Roles{})
-	if dup, ok := memory.IsDuplicate(err); ok {
-		return fmt.Sprintf("%s skipped — similar memory already exists (%.0f%% overlap): %q (#%s)",
-			milkTag(), dup.Similarity*100, dup.Existing.Content, id[:8])
+	out, err := st.mem.RecordGlobal(context.Background(), fact, memory.ProducerUser, memory.ConsumerAll, memory.Roles{})
+	if out.Reinforced {
+		return fmt.Sprintf("%s already known — reinforced (%.0f%% overlap, w=%.2f): %q (#%s)",
+			milkTag(), out.Similarity*100, out.W, out.Existing, out.ID[:8])
 	}
 	if err != nil {
 		return fmt.Sprintf("%s error storing memory: %v", milkTag(), err)
 	}
-	return fmt.Sprintf("%s learned: %q (id %s)", milkTag(), fact, id[:8])
+	return fmt.Sprintf("%s learned: %q (id %s)", milkTag(), fact, out.ID[:8])
 }
 
 // execSkipPerms handles /skip-permissions [on|off].

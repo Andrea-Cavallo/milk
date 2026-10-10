@@ -176,7 +176,7 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 	if err != nil {
 		return nil, fmt.Errorf("resolving memory dir: %w", err)
 	}
-	mem, err := memory.NewStore(memDir, sess.ID)
+	mem, err := memory.NewStoreParams(memDir, sess.ID, memParams(cfg))
 	if err != nil {
 		mem = nil // best-effort, same as main.go's one-shot path
 	}

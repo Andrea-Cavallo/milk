@@ -149,7 +149,7 @@ func (m *model) refreshSessionScopedState(oldSessionID string) error {
 	m.useGlobalHistory = false
 
 	if dir, err := memoryDir(); err == nil {
-		if mem, memErr := memory.NewStore(dir, m.st.sess.ID); memErr == nil {
+		if mem, memErr := memory.NewStoreParams(dir, m.st.sess.ID, memParams(m.st.cfg)); memErr == nil {
 			m.mem = mem
 			m.st.mem = mem
 		} else {
