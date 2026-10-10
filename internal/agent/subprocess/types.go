@@ -1,6 +1,11 @@
 package subprocess
 
-import "io"
+import (
+	"context"
+	"io"
+
+	"github.com/scoutme/milk/internal/config"
+)
 
 // ArgBuilder constructs the CLI args for a specific subprocess agent binary.
 // Each agent type (claude, smolagent, …) implements this interface.
@@ -24,6 +29,21 @@ type ArgBuilder interface {
 	Ping() error
 }
 
+// NativeMCPBuilder is an optional ArgBuilder capability: the underlying binary
+// has its own MCP client and consumes resolved MCP server connection params
+// out-of-band, instead of through the context-injected tool-description block
+// that agents without a native client (aider-cli) receive. Currently
+// implemented by milk-smolagent, which connects via smolagents' MCPClient
+// (issue #122).
+type NativeMCPBuilder interface {
+	// NativeMCPEnv serialises servers into whatever channel the binary reads —
+	// currently a temp JSON file whose path travels in an env KEY=VALUE pair —
+	// and returns that pair plus a cleanup func the caller must defer until the
+	// subprocess has exited. Auth headers are resolved here (per turn, via
+	// internal/mcpauth.ResolveHeader), so token_cmd/oauth servers stay fresh.
+	NativeMCPEnv(ctx context.Context, servers []config.MCPServerConfig) (envKV string, cleanup func(), err error)
+}
+
 // StreamParser processes stdout from a subprocess agent.
 type StreamParser interface {
 	// Parse reads NDJSON lines from r, writes display text to out, and returns
@@ -44,7 +64,7 @@ type ParseOpts struct {
 	// OnNeed is called when a <milk:need:NONCE>…</milk:need:NONCE> tag is intercepted.
 	OnNeed    func(content string)
 	NeedNonce string
-	// OnEscalate is called when a <milk:escalate:NONCE>…</milk:escalate:NONCE> tag
+	// OnEscalate is called when a <milk:escalate:NONCE>reason</milk:escalate:NONCE> tag
 	// is intercepted, signalling that the subprocess primary agent wants to hand off
 	// the current turn to the escalation agent. The tag body is the reason string.
 	OnEscalate    func(reason string)
@@ -61,7 +81,7 @@ type ParseResult struct {
 	EndsWithQ bool // true if the final text ends with a question mark
 	IsError   bool
 	// EscalationReason is non-empty when the subprocess primary agent emitted a
-	// <milk:escalate:NONCE> tag requesting hand-off to the escalation agent.
+	// <milk:escalate:NONCE>…</milk:escalate:NONCE> tag requesting hand-off to the escalation agent.
 	EscalationReason string
 	// Token usage from the result event (may be zero if not reported).
 	InputTokens              int64

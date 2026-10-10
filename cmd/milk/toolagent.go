@@ -85,7 +85,16 @@ func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Conf
 					ac.Bin = scriptPath
 				}
 			}
-			return newSubprocessRunner(smolagent.New(ac), name), nil
+			r := newSubprocessRunner(smolagent.New(ac), name)
+			// Native MCP (smolagent, issue #122): smolagent tool-agents get the
+			// same resolved server list the primary/escalation paths carry, and
+			// connect themselves per call. aider-cli tool-agents are left
+			// untouched (no MCP at all, as before — its context-injection block
+			// needs a ToolSet this path has never built).
+			if servers := cfg.EffectiveMCPServers(ac.Name); len(servers) > 0 {
+				r = r.withMCPServers(servers)
+			}
+			return r, nil
 		default:
 			return nil, fmt.Errorf("tool-agent %q uses unsupported subprocess provider %q", ac.Name, ac.Provider)
 		}

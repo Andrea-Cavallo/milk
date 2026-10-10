@@ -31,3 +31,7 @@ eval/results/
 # Website (mkdocs)
 website/site/
 website/.venv/
+
+# Python bytecode caches (scripts/__pycache__)
+__pycache__/
+*.pyc

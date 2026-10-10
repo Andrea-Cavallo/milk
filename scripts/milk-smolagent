@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# dependencies = ["smolagents[litellm]"]
+# dependencies = ["smolagents[litellm,mcp]", "mcp[ws]>=1.10.1,<2"]
 # ///
 """
 milk-smolagent — subprocess bridge between milk and HuggingFace smolagents.
@@ -14,6 +14,7 @@ Usage: milk-smolagent [options] -- "user prompt"
 """
 
 import argparse
+import atexit
 import json
 import sys
 import os
@@ -56,6 +57,104 @@ def build_model(model_type: str, model_id: str, api_base: str | None, api_key: s
         raise ValueError(f"Unknown model_type: {model_type!r}")
 
 
+def _mcp_adapter_kwargs(entry: dict) -> dict:
+    """Map milk's per-server timeouts onto smolagents' MCPAdapt kwargs."""
+    kwargs = {}
+    connect = entry.get("connect_timeout_seconds")
+    if connect:
+        # MCPAdapt.connect_timeout is an int number of seconds.
+        kwargs["connect_timeout"] = max(1, int(round(float(connect))))
+    request = entry.get("timeout_seconds")
+    if request:
+        kwargs["client_session_timeout_seconds"] = float(request)
+    return kwargs
+
+
+def _mcp_server_params(entry: dict):
+    """Build MCPClient server parameters for one entry of milk's config file."""
+    transport = (entry.get("transport") or "http").lower()
+    if transport == "stdio":
+        # smolagents validates dicts as HTTP-only; stdio must be a real
+        # mcp.StdioServerParameters (mcpadapt dispatches on isinstance).
+        from mcp import StdioServerParameters
+        params = StdioServerParameters(
+            command=entry.get("command") or "", args=entry.get("args") or []
+        )
+    else:
+        params = {"url": entry.get("url") or "", "transport": "streamable-http"}
+        if entry.get("headers"):
+            params["headers"] = entry["headers"]
+    return params, _mcp_adapter_kwargs(entry)
+
+
+def _load_mcp_tools():
+    """Connect to the MCP servers milk assigned to this agent (issue #122).
+
+    Returns (tools, clients): the smolagents Tool instances to add to the
+    agent's tool list, and the connected MCPClient handles to disconnect when
+    the run ends. One client per server — a server that fails to connect emits
+    an NDJSON warning and is skipped, so a single dead server neither takes
+    the others down nor fails the turn (milk's own MCP client tolerates
+    partial connectivity the same way).
+
+    Reads the config file path from MILK_MCP_CONFIG_FILE (written per turn by
+    internal/agent/smolagent's writeMCPConfigFile — keep the names in sync).
+    """
+    path = os.environ.get("MILK_MCP_CONFIG_FILE")
+    if not path:
+        return [], []
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        emit({"type": "system", "warning": f"mcp: cannot read config {path}: {e}"})
+        return [], []
+    entries = cfg.get("servers") or []
+    if not entries:
+        return [], []
+    try:
+        from smolagents import MCPClient
+    except ImportError as e:
+        # milk's uv-run script declares smolagents[mcp]; a manual install of
+        # plain smolagents has no MCP extra.
+        emit({"type": "system", "warning": f"mcp: smolagents[mcp] extra not installed ({e}) - MCP tools unavailable"})
+        return [], []
+    tools, clients = [], []
+    for entry in entries:
+        name = entry.get("name") or "?"
+        try:
+            params, kwargs = _mcp_server_params(entry)
+        except Exception as e:
+            emit({"type": "system", "warning": f"mcp server {name!r}: {e}"})
+            continue
+        try:
+            try:
+                # structured_output pinned to False: legacy text-only tool
+                # results, and silences MCPClient's not-specified warning.
+                client = MCPClient(params, adapter_kwargs=kwargs, structured_output=False)
+            except TypeError:
+                client = MCPClient(params, adapter_kwargs=kwargs)
+        except Exception as e:
+            # MCPClient connects eagerly in __init__ - a failed handshake
+            # lands here; any half-started adapter dies with this process.
+            emit({"type": "system", "warning": f"mcp server {name!r}: connect failed: {e}"})
+            continue
+        clients.append(client)
+        try:
+            tools.extend(client.get_tools())
+        except Exception as e:
+            emit({"type": "system", "warning": f"mcp server {name!r}: tool listing failed: {e}"})
+    return tools, clients
+
+
+def _disconnect_mcp(clients):
+    for client in clients:
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+
 def run(args):
     # Read and concatenate context files (static + dynamic system prompt injection).
     instructions_parts = []
@@ -81,6 +180,18 @@ def run(args):
                 tools.append(tool)
         except Exception as e:
             emit({"type": "system", "warning": f"could not load tool {name!r}: {e}"})
+
+    # Native MCP (issue #122): servers milk assigned to this agent, connected
+    # here through smolagents' own MCPClient and added to the tool list like
+    # any built-in - real, directly callable tools instead of the descriptive
+    # context block non-native agents (aider) receive.
+    mcp_tools, mcp_clients = _load_mcp_tools()
+    tools.extend(mcp_tools)
+    if mcp_clients:
+        # Disconnect cleanly at process exit: the script runs once per turn
+        # and exits right after the run loop, so atexit is the single
+        # chokepoint covering both the success and error paths.
+        atexit.register(_disconnect_mcp, mcp_clients)
 
     action_type = (args.action_type or "code").lower()
     if action_type == "code":

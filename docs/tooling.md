@@ -209,7 +209,8 @@ milk tries to open your browser automatically; over SSH, open the printed URL yo
 ### How each agent type connects
 
 - **`claude-cli` agents**: milk translates applicable `mcp_servers` entries into a JSON file passed via `--mcp-config` — HTTP servers become `{"type":"http","url":"...","headers":{...}}` entries, stdio servers become `{"type":"stdio","command":"...","args":[...]}`. The `claude` subprocess connects to each server directly; milk does not proxy the connection.
-- **`aider-cli` and `subprocess` agents** (aider, smolagents): these do not receive a generated MCP config file. Instead, MCP tool schemas are serialised into a text block and injected into the agent's context alongside built-in tool descriptions — informational only, not a wired function-calling path. `aider` has no native MCP client upstream. `smolagents` does have one (`MCPClient`/`ToolCollection.from_mcp`) that milk's adapter script does not yet use — a possible follow-up, not yet scheduled.
+- **`smolagent` agents (native MCP)**: milk writes the agent's resolved server params to a temp JSON file and passes its path via `MILK_MCP_CONFIG_FILE`; the `milk-smolagent` script connects to each server itself through smolagents' native `MCPClient` (stdio and Streamable HTTP transports, auth resolved per turn via `internal/mcpauth.ResolveHeader`) and adds the resulting tools to the agent's tool list — real, directly callable MCP tool execution. A server that fails to connect is skipped with a transcript warning; milk builds no MCP `ToolSet` for these agents (no competing connection). This path applies per turn to primary, escalation and tool-agent roles alike.
+- **`aider-cli` agents**: no native MCP client exists upstream, so MCP tool schemas are serialised into a text block (`internal/escalation.BuildMCPContextBlock`) and injected into the agent's context alongside built-in tool descriptions — informational only, not a wired function-calling path.
 
 ### Observability
 

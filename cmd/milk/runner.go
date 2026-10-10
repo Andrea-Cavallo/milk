@@ -24,6 +24,7 @@ import (
 	"github.com/scoutme/milk/internal/instructions"
 	"github.com/scoutme/milk/internal/mcp"
 	"github.com/scoutme/milk/internal/memory"
+	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
 )
 
@@ -806,6 +807,44 @@ func (r *subprocessRunner) withMCPToolSet(servers []config.MCPServerConfig, ts *
 	return &c
 }
 
+// withMCPServers returns a copy carrying only the resolved server list — used
+// for subprocess agents whose binary connects to MCP servers itself
+// (smolagents' native MCPClient, issue #122). No ToolSet is attached: milk
+// must not open a competing connection (stdio servers like blender-mcp
+// typically accept a single client), the schemas are not needed for a
+// context-injection block the binary doesn't read, and the script connects
+// fresh each turn anyway — the same shape as claude-cli's withMCPServers.
+func (r *subprocessRunner) withMCPServers(servers []config.MCPServerConfig) *subprocessRunner {
+	c := *r
+	c.mcpServers = servers
+	c.mcpToolSet = nil
+	return &c
+}
+
+// withNativeMCP hands r.mcpServers to agent's native MCP client (issue #122)
+// by writing the resolved params to a temp config file and passing its path
+// through env, returning the agent to run, a cleanup func the caller must
+// defer, and whether the native path applied. It is a no-op returning ok=false
+// for binaries without a native MCP client (aider-cli) or with no servers —
+// the caller then falls back to context injection via the ToolSet block.
+func (r *subprocessRunner) withNativeMCP(ctx context.Context, agent *subprocess.Agent) (*subprocess.Agent, func(), bool) {
+	if !agent.SupportsNativeMCP() || len(r.mcpServers) == 0 {
+		return agent, func() {}, false
+	}
+	envKV, cleanup, _, err := agent.NativeMCPEnv(ctx, r.mcpServers)
+	if err != nil {
+		// Degrade to no MCP for this turn rather than failing it — same
+		// best-effort stance as claude-cli's mcp-config write failure.
+		obs.Warn("mcp.native_config_write_failed", "agent", r.name, "error", err.Error())
+		return agent, func() {}, true
+	}
+	if envKV == "" {
+		cleanup()
+		return agent, func() {}, true
+	}
+	return agent.WithExtraEnv(envKV), cleanup, true
+}
+
 func (r *subprocessRunner) Name() string { return r.name }
 func (r *subprocessRunner) IsCLI() bool  { return false }
 func (r *subprocessRunner) Ping() error  { return r.agent.Ping() }
@@ -860,7 +899,14 @@ func (r *subprocessRunner) Execute(
 		// buildStatic for why no CLAUDE.md fallback here.
 		staticCtx += instructions.Block(sess.CWD, false)
 	}
-	if r.mcpToolSet != nil {
+	// MCP wiring has two mutually exclusive paths (issue #122): a native-MCP
+	// binary (smolagent) receives the resolved server params out-of-band via
+	// env and connects itself each turn — it has no milk-side ToolSet, so
+	// there is nothing to inject; aider-cli has no native client and keeps
+	// the informational context block built from its ToolSet's schemas.
+	agent, mcpCleanup, nativeMCP := r.withNativeMCP(ctx, agent)
+	defer mcpCleanup()
+	if !nativeMCP && r.mcpToolSet != nil {
 		mcpBlock := escalation.BuildMCPContextBlock(r.mcpServers, r.mcpToolSet.Schemas(ctx))
 		if staticCtx != "" {
 			staticCtx += mcpBlock
@@ -907,7 +953,11 @@ func (r *subprocessRunner) RunToolCall(ctx context.Context, _ config.Config, pro
 		prompt = fmt.Sprintf("(note: %d image attachment(s) could not be forwarded — this tool-agent type has no image support)\n\n%s", len(images), prompt)
 	}
 	// Subprocess agents are stateless per-call; RunFirst with empty context works directly.
-	_, res, err := r.agent.RunFirst(ctx, "", "", prompt, out)
+	// Native-MCP agents (smolagent, issue #122) get their resolved server
+	// params handed over here too when the caller attached them.
+	agent, mcpCleanup, _ := r.withNativeMCP(ctx, r.agent)
+	defer mcpCleanup()
+	_, res, err := agent.RunFirst(ctx, "", "", prompt, out)
 	if err != nil {
 		return "", err
 	}

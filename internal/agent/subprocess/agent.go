@@ -3,6 +3,8 @@ package subprocess
 import (
 	"context"
 	"io"
+
+	"github.com/scoutme/milk/internal/config"
 )
 
 // Agent is a generic subprocess-backed agent. Provider packages (aider, smolagent)
@@ -27,6 +29,28 @@ func NewAgent(b ArgBuilder, p StreamParser) *Agent {
 
 // Ping checks whether the underlying binary is available.
 func (a *Agent) Ping() error { return a.runner.Ping() }
+
+// SupportsNativeMCP reports whether the underlying binary has its own MCP
+// client and therefore receives resolved MCP server connection params
+// out-of-band (env + temp config file) rather than as a context-injected
+// tool-description block (issue #122). True for milk-smolagent, false for
+// aider-cli.
+func (a *Agent) SupportsNativeMCP() bool {
+	_, ok := a.runner.builder.(NativeMCPBuilder)
+	return ok
+}
+
+// NativeMCPEnv delegates to the ArgBuilder's native-MCP capability. ok=false
+// means the binary has no native MCP client — the caller falls back to
+// context injection (the aider path). Callers should defer cleanup when ok.
+func (a *Agent) NativeMCPEnv(ctx context.Context, servers []config.MCPServerConfig) (envKV string, cleanup func(), ok bool, err error) {
+	b, ok := a.runner.builder.(NativeMCPBuilder)
+	if !ok {
+		return "", func() {}, false, nil
+	}
+	envKV, cleanup, err = b.NativeMCPEnv(ctx, servers)
+	return envKV, cleanup, true, err
+}
 
 // WithDebugLog returns a copy of the agent that writes every raw stdout line to w.
 func (a *Agent) WithDebugLog(w io.Writer) *Agent {

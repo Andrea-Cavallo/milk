@@ -16,6 +16,10 @@ type MilkEvent struct {
 	Type string `json:"type"`
 	// system
 	SessionID string `json:"session_id"`
+	// system (adapter diagnostics, e.g. MCP connect failures or tool-load
+	// warnings from milk-smolagent) — displayed in the transcript only, never
+	// folded into ParseResult.Text
+	Warning string `json:"warning"`
 	// text_delta / final_answer
 	Text string `json:"text"`
 	// edit (aider)
@@ -102,6 +106,13 @@ func ParseMilkNDJSON(r io.Reader, out io.Writer, opts ParseOpts, handler EventHa
 		case "system":
 			if ev.SessionID != "" {
 				res.SessionID = ev.SessionID
+			}
+			if ev.Warning != "" {
+				// Adapter diagnostics (e.g. milk-smolagent MCP connect
+				// failures) are shown to the user but deliberately never
+				// appended to textBuf — they must not become part of the
+				// final ParseResult.Text (issue #122).
+				fmt.Fprintf(displayOut, "\n[warning: %s]\n", ev.Warning) //nolint:errcheck
 			}
 
 		case "text_delta":

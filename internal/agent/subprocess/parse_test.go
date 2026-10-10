@@ -88,3 +88,26 @@ func TestPlainTextParser_EndsWithQ(t *testing.T) {
 		t.Errorf("expected EndsWithQ=true for question-ending text")
 	}
 }
+
+func TestParseMilkNDJSON_SystemWarning_DisplayedButNotInText(t *testing.T) {
+	input := `{"type":"system","session_id":"s1","warning":"mcp server 'x': connect failed"}` + "\n" +
+		`{"type":"text_delta","text":"hello"}` + "\n" +
+		`{"type":"result","is_error":false}` + "\n"
+	var out strings.Builder
+	res, err := ParseMilkNDJSON(strings.NewReader(input), &out, ParseOpts{}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.SessionID != "s1" {
+		t.Errorf("SessionID: want s1, got %q", res.SessionID)
+	}
+	if !strings.Contains(out.String(), "connect failed") {
+		t.Errorf("warning must be displayed to the user, out=%q", out.String())
+	}
+	if strings.Contains(res.Text, "connect failed") {
+		t.Errorf("warning must not leak into ParseResult.Text, text=%q", res.Text)
+	}
+	if !strings.Contains(res.Text, "hello") {
+		t.Errorf("final text missing, text=%q", res.Text)
+	}
+}
