@@ -3217,13 +3217,22 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	m.syncLayout()
 
 	mgr := m.agents.backgroundMgr
-	agent := m.agents.escalationLocal
+	// Build the job's agent through buildTUIAgents — the same live callback
+	// wiring every turn gets (permission asks incl. the background timed
+	// answer, tool hints, token accounting). m.agents alone can hold a
+	// hand-built copy with those callbacks missing (commitSwitchAgent
+	// rebuilds it from config directly), whose unwired permAsk would silently
+	// deny every tool the job tries — no prompt, just an error status.
+	send := func(msg tea.Msg) { m.st.program.Send(msg) }
+	ir0 := &tuiInputReader{send: send}
+	tuiAgents, _ := m.buildTUIAgents(send, ir0)
+	agent := tuiAgents.escalationLocal
 	modelName := m.st.cfg.EscalationAgentConfig().Model
 	if modelName == "" {
 		modelName = m.st.cfg.EscalationAgentConfig().Name
 	}
 	if agent == nil {
-		agent = m.agents.local
+		agent = tuiAgents.local
 		modelName = m.st.cfg.ActiveAgent().Model
 		if modelName == "" {
 			modelName = m.st.cfg.ActiveAgent().Name
@@ -3664,7 +3673,14 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 			WithOnReasoningPromoted(func() { send(reasoningPromotedMsg{}) })
 		tuiEscLocal.SetBackgroundManager(agents.backgroundMgr)
 		tuiAgents.escalationLocal = tuiEscLocal
-		tuiAgents.escalation = newLocalRunner(tuiEscLocal, agents.escalation.Name())
+		// agents.escalation can legitimately be nil in minimal embeddings
+		// (tests, single-agent setups) — fall back to the configured name
+		// instead of assuming the old runner exists.
+		escName := m.st.cfg.EscalationAgentConfig().Name
+		if agents.escalation != nil {
+			escName = agents.escalation.Name()
+		}
+		tuiAgents.escalation = newLocalRunner(tuiEscLocal, escName)
 	}
 	return tuiAgents, cliPC
 }
