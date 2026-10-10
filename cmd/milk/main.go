@@ -379,7 +379,15 @@ func buildPrimaryRunner(_ context.Context, cfg config.Config, cwd string, sess *
 			sp = sp.WithDebugLog(dbg)
 		}
 		r := newSubprocessRunner(sp, primaryAC.Name)
-		if servers, ts, _ := buildMCPToolSet(context.Background(), cfg, primaryAC.Name); ts != nil {
+		if sp.SupportsNativeMCP() {
+			// Native MCP (smolagent, issue #122): the script connects to the
+			// assigned servers itself each turn — hand over the resolved list
+			// only; no milk-side ToolSet (no competing connection, no
+			// context-injection block).
+			if servers := cfg.EffectiveMCPServers(primaryAC.Name); len(servers) > 0 {
+				r = r.withMCPServers(servers)
+			}
+		} else if servers, ts, _ := buildMCPToolSet(context.Background(), cfg, primaryAC.Name); ts != nil {
 			r = r.withMCPToolSet(servers, ts)
 		}
 		return r, nil, nil
@@ -442,7 +450,12 @@ func buildEscalationRunner(_ context.Context, cfg config.Config, cwd string, ses
 				sp = sp.WithDebugLog(dbg)
 			}
 			r := newSubprocessRunner(sp, escAC.Name)
-			if servers, ts, _ := buildMCPToolSet(context.Background(), cfg, escAC.Name); ts != nil {
+			if sp.SupportsNativeMCP() {
+				// Native MCP (smolagent, issue #122) — see buildPrimaryRunner.
+				if servers := cfg.EffectiveMCPServers(escAC.Name); len(servers) > 0 {
+					r = r.withMCPServers(servers)
+				}
+			} else if servers, ts, _ := buildMCPToolSet(context.Background(), cfg, escAC.Name); ts != nil {
 				r = r.withMCPToolSet(servers, ts)
 			}
 			return r, nil

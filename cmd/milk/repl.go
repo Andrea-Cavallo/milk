@@ -145,6 +145,23 @@ func (m model) refreshMCPForRole(role AgentRole, agentName string) (model, bool)
 		}
 		m = m.trackMCPToolSet(agentName, old, ts)
 	case *subprocessRunner:
+		if r.agent.SupportsNativeMCP() {
+			// Native MCP (smolagent, issue #122): no milk-side ToolSet exists
+			// for this agent — only the resolved server list on the runner
+			// needs refreshing. Close any stale toolset defensively (a native
+			// agent never registers one; this guards a provider switch).
+			if old := m.agents.mcpToolSets[agentName]; old != nil {
+				old.Close(m.ctx)
+				delete(m.agents.mcpToolSets, agentName)
+			}
+			newRunner := r.withMCPServers(newServers)
+			if role == RolePrimary {
+				m.agents.primary = newRunner
+			} else {
+				m.agents.escalation = newRunner
+			}
+			break
+		}
 		old := m.agents.mcpToolSets[agentName]
 		servers, ts, err := buildMCPToolSet(m.ctx, m.st.cfg, agentName)
 		if err != nil {
@@ -4106,7 +4123,16 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 		primaryRunner = r
 	case tuiSubprocessPrimaryAgent != nil:
 		r := newSubprocessRunner(tuiSubprocessPrimaryAgent, tuiPrimaryAC.Name)
-		if servers, ts := newMCPToolSet(cfg, tuiPrimaryAC.Name); ts != nil {
+		if tuiSubprocessPrimaryAgent.SupportsNativeMCP() {
+			// Native MCP (smolagent, issue #122): the script connects to the
+			// assigned servers itself each turn — milk only carries the
+			// resolved server list, and deliberately builds no ToolSet (no
+			// competing connection, no context-injection block).
+			if servers := cfg.EffectiveMCPServers(tuiPrimaryAC.Name); len(servers) > 0 {
+				r = r.withMCPServers(servers)
+				mcpServersSeen[tuiPrimaryAC.Name] = servers
+			}
+		} else if servers, ts := newMCPToolSet(cfg, tuiPrimaryAC.Name); ts != nil {
 			r = r.withMCPToolSet(servers, ts)
 			mcpToolSets[tuiPrimaryAC.Name] = ts
 			mcpServersSeen[tuiPrimaryAC.Name] = servers
@@ -4127,7 +4153,13 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	switch {
 	case tuiSubprocessAgent != nil:
 		r := newSubprocessRunner(tuiSubprocessAgent, tuiEscAC.Name)
-		if servers, ts := newMCPToolSet(cfg, tuiEscAC.Name); ts != nil {
+		if tuiSubprocessAgent.SupportsNativeMCP() {
+			// Native MCP (smolagent, issue #122) — see the primary branch.
+			if servers := cfg.EffectiveMCPServers(tuiEscAC.Name); len(servers) > 0 {
+				r = r.withMCPServers(servers)
+				mcpServersSeen[tuiEscAC.Name] = servers
+			}
+		} else if servers, ts := newMCPToolSet(cfg, tuiEscAC.Name); ts != nil {
 			r = r.withMCPToolSet(servers, ts)
 			mcpToolSets[tuiEscAC.Name] = ts
 			mcpServersSeen[tuiEscAC.Name] = servers
