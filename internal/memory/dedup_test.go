@@ -80,29 +80,76 @@ func TestJaccard_BothEmpty(t *testing.T) {
 	}
 }
 
-// --- Store dedup integration ---
+// --- Store dedup integration (ADR-0053: near-duplicates reinforce) ---
 
-func TestRecord_DuplicateBlocked(t *testing.T) {
+func TestRecord_DuplicateReinforces(t *testing.T) {
 	s := newTestStore(t, false)
 	original := "user prefers flat file output over JSON"
-	id1, err := s.Record(context.Background(), original, ProducerUser, ConsumerAll, Roles{}, false)
+	out1, err := s.Record(context.Background(), original, ProducerUser, ConsumerAll, Roles{}, false)
 	if err != nil {
 		t.Fatalf("first Record failed: %v", err)
 	}
 
-	// Near-identical phrasing — should be caught as duplicate
+	// Near-identical phrasing — should reinforce, not insert.
 	duplicate := "user prefers flat file output not JSON"
-	id2, err := s.Record(context.Background(), duplicate, ProducerUser, ConsumerAll, Roles{}, false)
-	if _, ok := IsDuplicate(err); !ok {
-		t.Fatalf("expected DuplicateError, got err=%v  id=%s", err, id2)
+	out2, err := s.Record(context.Background(), duplicate, ProducerUser, ConsumerAll, Roles{}, false)
+	if err != nil {
+		t.Fatalf("reinforcing Record failed: %v", err)
+	}
+	if !out2.Reinforced {
+		t.Fatalf("expected reinforcement, got insert (id=%s)", out2.ID)
 	}
 	// Returns the existing percept's ID
-	if id2 != id1 {
-		t.Errorf("expected duplicate to return existing id %s, got %s", id1, id2)
+	if out2.ID != out1.ID {
+		t.Errorf("expected duplicate to return existing id %s, got %s", out1.ID, out2.ID)
+	}
+	if out2.Existing != original {
+		t.Errorf("Expected existing content %q, got %q", original, out2.Existing)
+	}
+	if out2.Similarity <= 0 || out2.Similarity > 1 {
+		t.Errorf("Similarity out of range: %v", out2.Similarity)
 	}
 	// Store still has only one percept
 	if len(s.global.Percepts) != 1 {
-		t.Errorf("expected 1 percept after duplicate suppression, got %d", len(s.global.Percepts))
+		t.Errorf("expected 1 percept after reinforcement, got %d", len(s.global.Percepts))
+	}
+	// Reinforcement never lowers W: this percept (born at 0.9 via
+	// ProducerUser) is already above the reconfirm cap, so it keeps its
+	// weight; the boost trajectory is covered by
+	// TestRecord_ReinforceCapAndPromotionPath.
+	if got := s.global.Percepts[0].W; got < out1.W {
+		t.Errorf("reinforcement must not lower W: before %v, after %v", out1.W, got)
+	}
+	if out2.W != s.global.Percepts[0].W {
+		t.Errorf("outcome W %v != store W %v", out2.W, s.global.Percepts[0].W)
+	}
+}
+
+func TestRecord_ReinforceCapAndPromotionPath(t *testing.T) {
+	s := newTestStore(t, false)
+	// Inference percept starts at 0.7 (initialWeight) — can never be promoted
+	// by decay/edges alone; reinforcement is its promotion path (ADR-0053).
+	out, err := s.Record(context.Background(), "milk routes coding tasks to the local model", ProducerLocal, ConsumerAll, Roles{}, false)
+	if err != nil {
+		t.Fatalf("Record failed: %v", err)
+	}
+	if out.W != 0.7 {
+		t.Fatalf("expected initial W 0.7, got %v", out.W)
+	}
+	for i := 0; i < 6; i++ {
+		out, err = s.Record(context.Background(), "milk routes coding tasks to the local model", ProducerLocal, ConsumerAll, Roles{}, false)
+		if err != nil {
+			t.Fatalf("reinforce %d failed: %v", i, err)
+		}
+		if !out.Reinforced {
+			t.Fatalf("reinforce %d: expected reinforcement", i)
+		}
+	}
+	if out.W != reconfirmCap {
+		t.Errorf("expected W capped at %v after repeated reinforcement, got %v", reconfirmCap, out.W)
+	}
+	if out.W < promoteThreshold {
+		t.Errorf("reinforcement cap %v must sit at/above promoteThreshold %v", out.W, promoteThreshold)
 	}
 }
 
@@ -110,52 +157,39 @@ func TestRecord_UniquePasses(t *testing.T) {
 	s := newTestStore(t, false)
 	s.Record(context.Background(), "escalate to claude when working on milk", ProducerUser, ConsumerAll, Roles{}, false) //nolint:errcheck
 
-	_, err := s.Record(context.Background(), "prefer JSON output format for responses", ProducerUser, ConsumerAll, Roles{}, false)
-	if _, ok := IsDuplicate(err); ok {
-		t.Error("distinct content should not be flagged as duplicate")
+	out, err := s.Record(context.Background(), "prefer JSON output format for responses", ProducerUser, ConsumerAll, Roles{}, false)
+	if err != nil {
+		t.Fatalf("Record failed: %v", err)
+	}
+	if out.Reinforced {
+		t.Error("distinct content should not be reinforced")
 	}
 	if len(s.global.Percepts) != 2 {
 		t.Errorf("expected 2 percepts, got %d", len(s.global.Percepts))
 	}
 }
 
-func TestRecordGlobal_DuplicateBlocked(t *testing.T) {
+func TestRecordGlobal_DuplicateReinforces(t *testing.T) {
 	s := newTestStore(t, false)
 	original := "escalate to claude code when user asks to design or implement a feature"
-	id1, err := s.RecordGlobal(context.Background(), original, ProducerUser, ConsumerAll, Roles{})
+	out1, err := s.RecordGlobal(context.Background(), original, ProducerUser, ConsumerAll, Roles{})
 	if err != nil {
 		t.Fatalf("first RecordGlobal: %v", err)
 	}
 
 	// Superseding rule — highly overlapping
 	superseding := "escalate to claude code when user asks to design implement refactor or add a feature"
-	id2, err := s.RecordGlobal(context.Background(), superseding, ProducerUser, ConsumerAll, Roles{})
-	if dup, ok := IsDuplicate(err); !ok {
-		t.Fatalf("expected DuplicateError for superseding rule, got err=%v", err)
-	} else {
-		t.Logf("correctly blocked duplicate (%.0f%% overlap), existing: %s", dup.Similarity*100, dup.Existing.Content)
+	out2, err := s.RecordGlobal(context.Background(), superseding, ProducerUser, ConsumerAll, Roles{})
+	if err != nil {
+		t.Fatalf("reinforcing RecordGlobal failed: %v", err)
 	}
-	if id2 != id1 {
-		t.Errorf("expected duplicate to return existing id %s, got %s", id1, id2)
+	if !out2.Reinforced {
+		t.Fatalf("expected reinforcement for superseding rule, got insert")
 	}
-}
-
-func TestRecord_DuplicateError_Fields(t *testing.T) {
-	s := newTestStore(t, false)
-	original := "always use tabs not spaces for indentation"
-	s.Record(context.Background(), original, ProducerUser, ConsumerAll, Roles{}, false) //nolint:errcheck
-
-	_, err := s.Record(context.Background(), "always use tabs not spaces", ProducerUser, ConsumerAll, Roles{}, false)
-	dup, ok := IsDuplicate(err)
-	if !ok {
-		t.Fatalf("expected DuplicateError, got %v", err)
+	if out2.ID != out1.ID {
+		t.Errorf("expected duplicate to return existing id %s, got %s", out1.ID, out2.ID)
 	}
-	if dup.Existing.Content != original {
-		t.Errorf("Existing.Content = %q, want %q", dup.Existing.Content, original)
-	}
-	if dup.Similarity <= 0 || dup.Similarity > 1 {
-		t.Errorf("Similarity out of range: %v", dup.Similarity)
-	}
+	t.Logf("reinforced duplicate (%.0f%% overlap), existing: %s", out2.Similarity*100, out2.Existing)
 }
 
 func TestFindSimilar_ReturnsNilWhenNoMatch(t *testing.T) {

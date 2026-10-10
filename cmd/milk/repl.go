@@ -3849,7 +3849,7 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 
 	var mem *memory.Store
 	if dir, err := memoryDir(); err == nil {
-		if m, err := memory.NewStore(dir, sess.ID); err == nil {
+		if m, err := memory.NewStoreParams(dir, sess.ID, memParams(cfg)); err == nil {
 			mem = m
 		}
 	}

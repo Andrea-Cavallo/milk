@@ -130,7 +130,7 @@ func TestApplyDecayCount(t *testing.T) {
 		{ID: "2", W: 1.0, Core: true},
 		{ID: "3", W: 0.02, Core: false},
 	}
-	result, n := applyDecayCount(percepts)
+	result, n := applyDecayCount(percepts, decayPerSession)
 	if n != 2 {
 		t.Errorf("expected 2 decayed, got %d", n)
 	}
@@ -154,7 +154,7 @@ func TestPrunePerceptsCount(t *testing.T) {
 		{ID: "4", W: 0.21}, // survives (> threshold)
 		{ID: "5", W: 0.20}, // pruned (== threshold, not strictly greater)
 	}
-	result, pruned := prunePerceptsCount(percepts)
+	result, pruned := prunePerceptsCount(percepts, pruneThreshold)
 	if pruned != 3 {
 		t.Errorf("expected 3 pruned, got %d", pruned)
 	}
@@ -182,7 +182,7 @@ func TestEdgePropagation_Extends(t *testing.T) {
 	}
 	edges := []Edge{{From: "a", To: "b", Relation: RelationExtends}}
 	result := applyEdges(percepts, edges)
-	if result[1].W != 0.5+edgePositiveDelta {
+	if result[1].W != 0.5+edgeBoost {
 		t.Errorf("extends edge should raise target W, got %v", result[1].W)
 	}
 }
