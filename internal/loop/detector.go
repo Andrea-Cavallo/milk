@@ -388,6 +388,16 @@ func (d *Detector) FeedChunk(text string) []Verdict {
 	// Skip empty or very short chunks — they're noise (newlines, spaces).
 	trimmed := strings.TrimSpace(text)
 	if len([]rune(trimmed)) < 5 {
+		// Whitespace-only chunks are transparent, but a short chunk with real
+		// content (e.g. the single bytes a tag writer emits between flushed
+		// "<milk:e" prefixes) means the repeats are not back-to-back.
+		if trimmed != "" {
+			d.mu.Lock()
+			d.consecRepeat = 0
+			d.lastChunkText = ""
+			d.firedChunk = false
+			d.mu.Unlock()
+		}
 		return nil
 	}
 

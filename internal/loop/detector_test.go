@@ -314,6 +314,37 @@ func TestChunkRepetition_SkipsShortChunks(t *testing.T) {
 	}
 }
 
+func TestChunkRepetition_ShortContentChunkBreaksStreak(t *testing.T) {
+	// A tag writer flushes "<milk:e" then emits the rest byte by byte; the
+	// single-byte chunks must break the streak so five mentions of the tag in
+	// ordinary prose aren't read as five back-to-back repeats.
+	d := New(testConfig())
+	for i := 0; i < 8; i++ {
+		for _, v := range d.FeedChunk("<milk:e") {
+			t.Fatalf("false positive on iteration %d: %s", i, v.Message)
+		}
+		for _, b := range "scalate:N> " {
+			d.FeedChunk(string(b))
+		}
+	}
+}
+
+func TestChunkRepetition_WhitespaceChunksStayTransparent(t *testing.T) {
+	cfg := testConfig()
+	cfg.ChunkRepetitionThreshold = 3
+	d := New(cfg)
+	var fired bool
+	for i := 0; i < 3; i++ {
+		for _, v := range d.FeedChunk("Let me check that again") {
+			fired = fired || v.Signal == SignalChunkRepetition
+		}
+		d.FeedChunk("\n")
+	}
+	if !fired {
+		t.Error("newline-separated identical chunks should still count as consecutive")
+	}
+}
+
 func TestChunkRepetition_ResetTurnClearsBuffer(t *testing.T) {
 	cfg := testConfig()
 	cfg.ChunkRepetitionThreshold = 3
