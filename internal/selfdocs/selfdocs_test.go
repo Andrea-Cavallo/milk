@@ -4,7 +4,27 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/scoutme/milk/docs"
 )
+
+// TestEmbeddedDocsTrackRepoLayout pins the embedded doc list to the
+// post-refactor (ADR-0054) layout: docs/embed.go's //go:embed names and
+// init()'s ReadFile list must both point at the canonical files at their
+// current paths. This guards selfdocs' one silent failure mode — init() skips
+// a name it cannot read — so a wrong or stale path would otherwise quietly
+// drop a whole doc from every `milk config docs` / milk_config_help lookup.
+func TestEmbeddedDocsTrackRepoLayout(t *testing.T) {
+	for _, name := range []string{"reference/spec.md", "guides/providers.md", "guides/workflows.md", "guides/tooling.md", "guides/operations.md"} {
+		data, err := docs.FS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("embedded doc %q unreadable — docs/embed.go's list and selfdocs init() must name the post-refactor path: %v", name, err)
+		}
+		if n := len(parseSections(string(data))); n == 0 {
+			t.Errorf("%q parsed 0 sections", name)
+		}
+	}
+}
 
 func TestParseSections_NestedHeadingIncludedInParentBody(t *testing.T) {
 	md := "## Parent\n\nintro text\n\n### Child\n\nchild text\n\n## Sibling\n\nsibling text\n"
