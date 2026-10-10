@@ -1583,3 +1583,33 @@ func TestPermissionsTimedAnswerDefaults(t *testing.T) {
 		t.Error("safety_default allow must warn at startup")
 	}
 }
+
+// TestInitConfig_GeneratedFileIncludesPermissions pins the "generated config
+// is self-documenting" contract: the permissions knobs (ADR-0052) must be
+// written out with their default values, not hidden behind code defaults —
+// same convention as the prepopulated Otel/Rules blocks.
+func TestInitConfig_GeneratedFileIncludesPermissions(t *testing.T) {
+	cfg := InitConfig(AgentConfig{Name: "primary", Provider: "local", URL: "http://x", Model: "m"}, nil)
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`"permissions"`,
+		`"background_timeout_secs": 360`,
+		`"background_default": "deny"`,
+		`"safety_timeout_secs": 360`,
+		`"safety_default": "deny"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated config missing %s", want)
+		}
+	}
+	if got := cfg.PermBackgroundTimeout(); got != 360*time.Second {
+		t.Errorf("PermBackgroundTimeout = %v, want 360s", got)
+	}
+	if cfg.PermBackgroundAllow() || cfg.PermSafetyAllow() {
+		t.Error("timed defaults must be deny")
+	}
+}

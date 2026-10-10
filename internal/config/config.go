@@ -1179,6 +1179,15 @@ type LoopDetectionConfig struct {
 func defaults() Config {
 	return Config{
 		Colorization: "balanced",
+		// Prepopulated (like Otel/Rules) so the generated config file shows
+		// the knobs instead of hiding them behind code defaults — the values
+		// here are exactly the ones the Perm* accessors fall back to.
+		Permissions: &PermissionsConfig{
+			BackgroundTimeoutSecs: 360,
+			BackgroundDefault:     "deny",
+			SafetyTimeoutSecs:     360,
+			SafetyDefault:         "deny",
+		},
 		Otel: OtelConfig{
 			Enabled:             true,
 			LogLevel:            "INFO",
