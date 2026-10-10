@@ -5,5 +5,5 @@ package docs
 
 import "embed"
 
-//go:embed spec.md providers.md workflows.md tooling.md operations.md
+//go:embed reference/spec.md guides/providers.md guides/workflows.md guides/tooling.md guides/operations.md
 var FS embed.FS

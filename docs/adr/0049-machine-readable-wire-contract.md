@@ -14,7 +14,7 @@ Code" shape — the editor owns the UI, the agent owns the turn loop), or a
 CI script / log pipeline that wants to parse a run.
 
 The design survey in
-[docs/machine-readable-output-design.md](../machine-readable-output-design.md)
+[docs/internal/design/machine-readable-output-design.md](https://github.com/scoutme/milk/blob/main/docs/internal/design/machine-readable-output-design.md)
 compared ACP, Claude Code `--output-format stream-json`, raw provider streams,
 UI-framework streams, LSP and MCP against eight requirements (standard-based,
 embeddable, stream-safe, complete, provider-neutral, host-agnostic
@@ -122,7 +122,7 @@ documents, and whole documents never grow line framing.
 - The machine contract is checkable, not folklore: golden-file tests
   (`testdata/events/*.jsonl`) and a generated JSON Schema for the batch form,
   with the ACP side checked against the upstream published schema in CI.
-- [docs/tooling.md](../tooling.md) carries a human-facing "Machine-readable
+- [docs/guides/tooling.md](../guides/tooling.md) carries a human-facing "Machine-readable
   output" summary (selfdocs-indexed); the design doc remains the full
   normative catalog and now carries a ratified status pointing here.
 - Implementation lands per the design doc §11 phasing (event model + Host

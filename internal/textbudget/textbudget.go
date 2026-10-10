@@ -3,7 +3,7 @@
 // callers outside internal/workflow/interp (which has its own budgeted
 // truncation helpers for template variables) don't have to reinvent the
 // same head/tail-preserving truncation — see
-// docs/prompt-context-management-review.md §8 rec #3.
+// docs/internal/analysis/prompt-context-management-review.md §8 rec #3.
 package textbudget
 
 import "fmt"

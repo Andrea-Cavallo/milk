@@ -6,7 +6,7 @@ milk supports multiple agent backends. Use `/agent add` in the TUI to register t
 
 `claude-cli` as primary is a special case worth calling out: it works, but it's not a smart pattern for the everyday fast path — every "primary" turn spawns a full Claude Code subprocess, and self-escalation (the `escalate()` tool call a primary agent can use on its own) isn't available to it, since that tool is built into the local agent's tool loop specifically; only explicit `/escalate` works. Where it's genuinely useful: bootstrapping milk with only Claude Code available (e.g. letting it configure other agents for you via `/agent add`), or deliberately running Claude Code in both roles pointed at different backends/models.
 
-New to milk? Start with [docs/getting-started.md](getting-started.md) for the fastest path to a working config, then come back here for backend-specific detail.
+New to milk? Start with [docs/start/getting-started.md](../start/getting-started.md) for the fastest path to a working config, then come back here for backend-specific detail.
 
 ## Primary agent
 
@@ -14,7 +14,7 @@ The agent handling the fast path — most turns, most tool calls. Configurable v
 
 ## Escalation agent
 
-The agent handling turns the primary agent hands off — set via `escalation_agent` in the config root, switch at runtime with `/agent switch <name> as escalation`. Can be Claude Code CLI (`provider: "claude-cli"`), or any inference-server backend using the same protocols as the primary agent, with a role-aware system prompt (no `escalate` tool; it knows it's the escalation target). See [docs/workflows.md](workflows.md) for how a turn gets routed here and what happens across the handoff.
+The agent handling turns the primary agent hands off — set via `escalation_agent` in the config root, switch at runtime with `/agent switch <name> as escalation`. Can be Claude Code CLI (`provider: "claude-cli"`), or any inference-server backend using the same protocols as the primary agent, with a role-aware system prompt (no `escalate` tool; it knows it's the escalation target). See [docs/guides/workflows.md](workflows.md) for how a turn gets routed here and what happens across the handoff.
 
 ### Same backend, two tiers — the routing principle in practice
 
@@ -81,7 +81,7 @@ A built-in entry named `"claude"` with `provider: "claude-cli"` is always availa
 }
 ```
 
-Claude CLI can also be a **tool-agent** — called inline during another agent's tool loop — see [docs/tooling.md — claude-cli as a tool-agent](tooling.md#claude-cli-as-a-tool-agent).
+Claude CLI can also be a **tool-agent** — called inline during another agent's tool loop — see [docs/guides/tooling.md — claude-cli as a tool-agent](tooling.md#claude-cli-as-a-tool-agent).
 
 ---
 
@@ -240,7 +240,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 
 Expected: a `tool_calls` array with `"name": "bash"`. If the call appears inside `content` as raw text instead, `--jinja` is missing or the server started without it.
 
-**6. Build and verify milk** — see [docs/getting-started.md](getting-started.md#install).
+**6. Build and verify milk** — see [docs/start/getting-started.md](../start/getting-started.md#install).
 
 #### Windows and WSL2
 
@@ -633,7 +633,7 @@ Real example — an enterprise GitHub Copilot proxy, combining `token_cmd`, cust
 }
 ```
 
-See [docs/tooling.md — Agent-as-Tool](tooling.md#agent-as-tool) for what the `tools` field does.
+See [docs/guides/tooling.md — Agent-as-Tool](tooling.md#agent-as-tool) for what the `tools` field does.
 
 ---
 
@@ -664,8 +664,8 @@ Common to all inference-server providers (everything except `claude-cli`):
 | `disable_compaction` | bool | See [Context compaction](#context-compaction-disable_compaction) |
 | `bash_allowed_patterns` | array of string | See [Bash command pre-approval](#bash-command-pre-approval-bash_allowed_patterns) |
 | `prompt` / `prompt_file` | string | See [Custom agent behaviour](#custom-agent-behaviour-prompt-prompt_file) |
-| `mcp_servers` | array of string | See [docs/tooling.md](tooling.md#mcp-servers) |
-| `tools` | array of AgentToolEntry | Per-agent overrides of the global `agent_tools` list — see [docs/tooling.md](tooling.md#agent-as-tool) |
+| `mcp_servers` | array of string | See [docs/guides/tooling.md](tooling.md#mcp-servers) |
+| `tools` | array of AgentToolEntry | Per-agent overrides of the global `agent_tools` list — see [docs/guides/tooling.md](tooling.md#agent-as-tool) |
 | `limits` | object | Per-agent overrides — see [Per-agent limit overrides](#per-agent-limit-overrides) |
 
 ### Claude CLI `agents` entry fields (`provider: "claude-cli"`)
@@ -687,13 +687,13 @@ Common to all inference-server providers (everything except `claude-cli`):
 | `agent` | string | first non-cli entry | Name of the active primary backend |
 | `escalation_agent` | string | `"claude"` | Name of the escalation backend |
 | `aws_auth_refresh` | bool | `false` | Run the Claude Code credential-process command before each Bedrock call |
-| `sticky_escalation` | bool | `true` | See [docs/workflows.md — Sticky and auto-sticky escalation](workflows.md#sticky-and-auto-sticky-escalation) |
+| `sticky_escalation` | bool | `true` | See [docs/guides/workflows.md — Sticky and auto-sticky escalation](workflows.md#sticky-and-auto-sticky-escalation) |
 
 ---
 
 ## Memory configuration
 
-All keys go in `~/.milk/config.json`; sensible defaults apply when omitted. See [docs/operations.md — Memory](operations.md#memory) for the concepts and commands these tune.
+All keys go in `~/.milk/config.json`; sensible defaults apply when omitted. See [docs/guides/operations.md — Memory](operations.md#memory) for the concepts and commands these tune.
 
 | Key | Default | Description |
 |---|---|---|
@@ -758,7 +758,7 @@ All fields optional; omitted → global value applies.
 | `max_payload_bytes` | — | 900 KB, or ~4 bytes × window above that | Max HTTP request body; past it, history is trimmed per request (a safety net for reverse proxies — the token trigger above is the primary mechanism). |
 | `included_tools` | — | (all) | Whitelist of built-in tools for this agent |
 | `excluded_tools` | — | (none) | Built-in tools to remove for this agent (applied after `included_tools`) |
-| `tool_timeout_secs` | — | 120 | See [docs/tooling.md — Concurrent tool dispatch](tooling.md#concurrent-tool-dispatch) |
+| `tool_timeout_secs` | — | 120 | See [docs/guides/tooling.md — Concurrent tool dispatch](tooling.md#concurrent-tool-dispatch) |
 
 > **Large context window agents**: set `context_window_tokens` and let milk auto-derive `message_budget_chars`/`max_tool_iterations`; `limits` overrides remain available for exact values. Both `milk config init` and the TUI's `/agent add` prompt for it, proposing a models.dev catalog match as the default when the model name is recognized.
 
@@ -768,6 +768,6 @@ All fields optional; omitted → global value applies.
 
 ## More configuration
 
-- **MCP servers, tool-agents, attachments** — [docs/tooling.md](tooling.md)
-- **Memory usage, observability, loop detection, remote oversight, task tracking** — [docs/operations.md](operations.md)
-- **Routing rules, sticky escalation, the `/workflow` engine** — [docs/workflows.md](workflows.md)
+- **MCP servers, tool-agents, attachments** — [docs/guides/tooling.md](tooling.md)
+- **Memory usage, observability, loop detection, remote oversight, task tracking** — [docs/guides/operations.md](operations.md)
+- **Routing rules, sticky escalation, the `/workflow` engine** — [docs/guides/workflows.md](workflows.md)

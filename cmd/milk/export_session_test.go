@@ -1,6 +1,6 @@
 package main
 
-// /export session <id|prefix> targeting pins (docs/acp-session-resume-plan.md
+// /export session <id|prefix> targeting pins (docs/internal/plans/acp-session-resume-plan.md
 // D6/§4): the /list → /export session a1b2 → session/resume preview flow —
 // export another session without attaching it, on both hosts, composing with
 // json/<path>, with miss/ambiguity errors mirroring session.Lookup. On a

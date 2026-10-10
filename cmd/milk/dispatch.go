@@ -24,7 +24,7 @@ import (
 // job's result is spliced into the next turn's prompt. Without this, a job
 // whose whole point is protecting the caller's context budget could blow
 // that budget right back open on delivery — see
-// docs/prompt-context-management-review.md §8 rec #3. Matches the workflow
+// docs/internal/analysis/prompt-context-management-review.md §8 rec #3. Matches the workflow
 // engine's own sectionCharBudget (internal/workflow/interp/template.go).
 const backgroundJobResultMaxChars = 12000
 

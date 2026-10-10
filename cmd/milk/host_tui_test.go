@@ -95,7 +95,7 @@ func TestTUIHost_Notify(t *testing.T) {
 
 // TestMakeLocalPermAsk_PromptUnchanged locks the exact prompt text
 // makeLocalPermAsk renders — unchanged by the Host migration (Phase 1 of
-// docs/machine-readable-output-design.md) — and that y/n parsing still
+// docs/internal/design/machine-readable-output-design.md) — and that y/n parsing still
 // matches pre-migration behavior.
 func TestMakeLocalPermAsk_PromptUnchanged(t *testing.T) {
 	tests := []struct {

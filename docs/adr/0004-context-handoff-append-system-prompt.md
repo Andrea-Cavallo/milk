@@ -48,7 +48,7 @@ On resumed turns milk now:
 
 ## Update (2026-09-30): corrected "two separate flags" claim, and a live measurement attempt
 
-A prompt/context management review (`docs/prompt-context-management-review.md`) found that this
+A prompt/context management review (`docs/internal/analysis/prompt-context-management-review.md`) found that this
 ADR's Decision section claimed context is passed as "two separate `--append-system-prompt-file`
 flags," each hitting Claude's cache independently. That was never what the code does:
 `appendContextFiles` (`internal/agent/claude/claude.go`) has always concatenated static and

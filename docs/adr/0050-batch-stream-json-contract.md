@@ -136,6 +136,6 @@ normative field-level catalog.
   one terminal `result` last.
 - The eval harness's `milk-tui` adapter is the first in-repo consumer and the
   reference for external ones (`eval/adapter_milk.go` + its fixture tests).
-- [docs/tooling.md](../tooling.md) "Machine-readable output" and the
+- [docs/guides/tooling.md](../guides/tooling.md) "Machine-readable output" and the
   selfdocs `machine-readable-output` topic carry the human summary with links
   here and to the schema.

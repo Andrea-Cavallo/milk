@@ -54,7 +54,7 @@ type workflowTurnRunner struct {
 	// useMemoryNextCall is set by the interpreter (via SetUseMemoryForNextCall,
 	// workflow.MemoryAwareTurnRunner) from the current Stage.UseMemory right
 	// before each Run call — the per-stage memory opt-in (see Stage.UseMemory's
-	// doc comment; docs/prompt-context-management-review.md §8 rec #12).
+	// doc comment; docs/internal/analysis/prompt-context-management-review.md §8 rec #12).
 	useMemoryNextCall bool
 }
 

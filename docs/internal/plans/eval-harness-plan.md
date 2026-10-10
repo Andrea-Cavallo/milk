@@ -1,6 +1,6 @@
 # Agent Evaluation Harness — Design & Plan
 
-> **Historical planning doc.** Written before the harness was built; describes the original standalone `milk-eval` binary, later merged into `milk eval` as a subcommand of the main binary. For current usage — commands, scenario format, adapters and their per-adapter options, judging, reports — see [docs/eval.md](eval.md). Kept as a record of the original design, not maintained in sync with the implementation.
+> **Historical planning doc.** Written before the harness was built; describes the original standalone `milk-eval` binary, later merged into `milk eval` as a subcommand of the main binary. For current usage — commands, scenario format, adapters and their per-adapter options, judging, reports — see [docs/reference/eval.md](../../reference/eval.md). Kept as a record of the original design, not maintained in sync with the implementation.
 
 ## Problem
 

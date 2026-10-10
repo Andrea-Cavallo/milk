@@ -1,7 +1,7 @@
 package main
 
 // Session management — the host-neutral core of the /sessions /new /clear
-// /resume /drop surface (docs/session-management-refactor-plan.md D2),
+// /resume /drop surface (docs/internal/plans/session-management-refactor-plan.md D2),
 // following the established *_core.go split (workflow_core.go, update_core.go,
 // initwizard_core.go, configview.go). Shared by the TUI (execNonPromptCmd /
 // handleSlashInput), ACP (acp_sessionmgmt.go) and the CLI (runList/runDrop/

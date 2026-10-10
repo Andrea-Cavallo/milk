@@ -1,6 +1,6 @@
 // Package events defines Host — the host-agnostic interface for milk's
 // interactive surfaces (notifications, permission prompts, structured user
-// input, session state) per docs/machine-readable-output-design.md §8.1.
+// input, session state) per docs/internal/design/machine-readable-output-design.md §8.1.
 // Today it has exactly one implementation (cmd/milk's tuiHost, wrapping the
 // existing TUI machinery unchanged) and exactly one real caller.
 //
@@ -9,7 +9,7 @@
 // tool lifecycle, usage). That catalog has no consumer yet — it belongs to
 // whichever later phase first needs it (ACP wiring or the batch-mode
 // emitter), built against that consumer's actual requirements rather than
-// guessed at here. See docs/machine-readable-output-design.md's Phase 1
+// guessed at here. See docs/internal/design/machine-readable-output-design.md's Phase 1
 // status note for the full scope rationale.
 //
 // internal/transport/acp already defines its own Host interface, but every

@@ -3,7 +3,7 @@
 // event stream.
 //
 // The contract is ratified in ADR-0049 and normatively specified in
-// docs/machine-readable-output-design.md §6 (event catalog) and §8.3 (batch
+// docs/internal/design/machine-readable-output-design.md §6 (event catalog) and §8.3 (batch
 // conventions). The locked rules this package encodes:
 //
 //   - one UTF-8 JSON object per line, one trailing \n, nothing else on stdout;

@@ -282,7 +282,7 @@ path gets the same effect by rebuilding `acpSession` via `newACPSession`).
 
 ## 5. Docs (per the docs rule — with the PR, not after)
 
-- **`docs/acp-integration.md`**: four ✅ rows in "What's implemented" +
+- **`docs/reference/acp-integration.md`**: four ✅ rows in "What's implemented" +
   `user_message`/`agent_message` upsert rows; new section **"Session resume,
   list, and history replay"** (D1/D2 semantics table: default adopt rule, the
   five conditions, `_meta.milk.fresh`, `acp_resume`, `replayFrom` handling and
@@ -292,13 +292,13 @@ path gets the same effect by rebuilding `acpSession` via `newACPSession`).
   `session/set_config_option`, v1 `session/load`, `mcpServers` merge, …) and the
   example exchange's `session/list → -32601` demo is replaced with a real
   `session/list` + `session/resume` exchange.
-- **`docs/spec.md`**: `acp_resume` config field (default `true`) in the
+- **`docs/reference/spec.md`**: `acp_resume` config field (default `true`) in the
   Configuration section + example JSON; a short "ACP session parity" note
   (TUI `--continue` ≈ ACP `session/new` adopt; `--new` ≈ `acp_resume:false` /
   `_meta.milk.fresh`).
 - **`CLAUDE.md`**: structure entries for `acp_history.go` / `acp.acp sessions.go`;
   one design-decision bullet (resume parity + standard replay).
-- **`docs/machine-readable-output-design.md`** Phase-2 status note (comments in
+- **`docs/internal/design/machine-readable-output-design.md`** Phase-2 status note (comments in
   `acp_server.go` point at it): deferred list updated the same way.
 - lifecycle.go / stdio.go package-doc scope notes updated (they currently
   justify the capability advertisement *because* list/resume/close are missing).
@@ -326,7 +326,7 @@ per the branching strategy.
 - Retaining original ACP `messageId`s in `session.Turn` (nice-to-have;
   synthesized stable IDs are conformant — "not required to retain").
 - TUI in-process `/resume <id>` switch — **done** by the session-management
-  refactor (step 2 of `docs/session-management-refactor-plan.md`); ACP got
+  refactor (step 2 of `docs/internal/plans/session-management-refactor-plan.md`); ACP got
   parity via view rebinding (ADR-0051).
 - `session/set_config_option`, `auth/*`, `additionalDirectories`, `mcpServers`
   merge — unchanged gaps.

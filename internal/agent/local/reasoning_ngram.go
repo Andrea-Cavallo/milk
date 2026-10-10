@@ -21,7 +21,7 @@ var numRe = regexp.MustCompile(`\b\d+(?:\.\d+)?\b`)
 // Inspired by MiMo-Code's TextNgramMonitor (text-ngram-detection.ts) — an
 // independent implementation of the same sliding-window n-gram detection
 // idea, not a port of its code. Compared directly during a
-// prompt/context-management review: see docs/prompt-context-management-review.md.
+// prompt/context-management review: see docs/internal/analysis/prompt-context-management-review.md.
 type reasoningNgramMonitor struct {
 	tokens               []string
 	windowSize           int

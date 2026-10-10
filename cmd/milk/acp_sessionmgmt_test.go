@@ -1,7 +1,7 @@
 package main
 
 // Pins for the session-management JSON-RPC surface (session/list, resume,
-// close, delete) — docs/acp-session-resume-plan.md §4's method/lifecycle
+// close, delete) — docs/internal/plans/acp-session-resume-plan.md §4's method/lifecycle
 // cases. Replay-delivery pins live in acp_history_test.go (step 3) and the
 // resume-by-default adoption pins in acp_resume_default_test.go (step 4).
 

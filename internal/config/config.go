@@ -401,7 +401,7 @@ const DefaultMaxPayloadBytes = 900 * 1024
 // before milk reaches for a one-shot summarizing compaction of the turn's
 // own accumulated history, instead of continuing to only hard-drop oldest
 // content on every subsequent request. See internal/agent/local.Agent's
-// compactForPayloadSize and docs/escalation-and-context-enhancements-plan.md
+// compactForPayloadSize and docs/internal/plans/escalation-and-context-enhancements-plan.md
 // Track B Phase 2.
 const DefaultPayloadTrimCompactionThreshold = 3
 
@@ -411,10 +411,10 @@ const DefaultPayloadTrimCompactionThreshold = 3
 // configured escalation agent instead of letting the recovery ladder keep
 // nudging the same (already-struggling) model. Deliberately a starting
 // guess from exactly one real session (5 recoveries in 16 minutes, see
-// docs/session-2026-10-01-primary-overload-analysis.md) rather than a
+// docs/internal/analysis/session-2026-10-01-primary-overload-analysis.md) rather than a
 // well-tuned value — intended to be revisited once milk.loop.recovery
 // (Track B Phase 1) has data across more sessions. See
-// docs/escalation-and-context-enhancements-plan.md Track A Phase 3.
+// docs/internal/plans/escalation-and-context-enhancements-plan.md Track A Phase 3.
 const DefaultEscalateAfterRecoveries = 4
 
 // OtelConfig controls OpenTelemetry signal collection and file management.
@@ -495,7 +495,7 @@ type AgentConfig struct {
 	//
 	// EXPERIMENTAL: implemented and unit-tested against AWS's documented
 	// Converse API contract, but not exercised against a real Bedrock endpoint
-	// (no Bedrock agent was available during development). See docs/providers.md.
+	// (no Bedrock agent was available during development). See docs/guides/providers.md.
 	PromptCaching bool `json:"prompt_caching,omitempty"`
 
 	// Vision declares that this agent's model accepts image input (an
@@ -577,7 +577,7 @@ type AgentConfig struct {
 	// BashAllowedPatterns is a static, admin-configured allow-list of bash
 	// command prefixes that never require a permission ask/grant for this
 	// agent — a finer-grained alternative to a blanket "bash" grant (see
-	// docs/prompt-context-management-review.md §8 rec #8). Each entry is
+	// docs/internal/analysis/prompt-context-management-review.md §8 rec #8). Each entry is
 	// matched against the tool call's actual "command" argument: an entry
 	// ending in "*" matches by prefix (e.g. "git diff*" matches "git diff
 	// --stat HEAD"); an entry with no "*" must match the whole command
@@ -1023,7 +1023,7 @@ type Config struct {
 	// stored session for the request's cwd instead of starting empty — the
 	// TUI's --continue default mapped onto ACP. Set to false for strict
 	// spec behavior (session/new always starts fresh); the per-request
-	// escape hatch is _meta.milk.fresh: true. See docs/spec.md's "ACP
+	// escape hatch is _meta.milk.fresh: true. See docs/reference/spec.md's "ACP
 	// session parity" note.
 	ACPResume *bool `json:"acp_resume,omitempty"`
 
@@ -1492,7 +1492,7 @@ func (c Config) PermSafetyAllow() bool {
 // MemoryConfig tunes the memory weight model (ADR-0053): session-end NREM
 // consolidation (decay → edges → prune → promote), the gentle global decay,
 // re-confirmation reinforcement, and the recall recency bonus. Zero fields
-// fall back to the built-in defaults shown below; see docs/operations.md
+// fall back to the built-in defaults shown below; see docs/guides/operations.md
 // ("Memory weight model") for what each knob does to a real corpus.
 // Field names mirror the memory package's Params JSON tags.
 type MemoryConfig struct {
@@ -2492,7 +2492,7 @@ func InitConfig(primary AgentConfig, escalation *AgentConfig) Config {
 
 // ACPResumeEnabled reports whether session/new adopts the most-recent stored
 // session for its cwd over ACP (resume-by-default). On unless explicitly
-// disabled — the TUI's --continue default, mirrored 1:1 (docs/spec.md's "ACP
+// disabled — the TUI's --continue default, mirrored 1:1 (docs/reference/spec.md's "ACP
 // session parity" note).
 func (c Config) ACPResumeEnabled() bool {
 	return c.ACPResume == nil || *c.ACPResume

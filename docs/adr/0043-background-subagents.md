@@ -17,7 +17,7 @@ The gap is `internal/agent/local`'s own tool loop — the implementation shared 
 
 This is the same shape of capability Claude Code's own fork/Task tool provides when *it* is used directly (not via milk): spawn a copy of yourself against a narrow question, let it run its own tool loop, and report back a distilled result once, asynchronously — no polling, no mid-flight peeking.
 
-Note: the deciding factor for whether an agent needs this is **provider type**, not role. An inference-server-backed agent lacks it whether it's serving as primary or escalation; a `claude-cli`-backed agent has it natively in both roles. Earlier framing that tied this to "the escalation agent" specifically was a mistake — `escalation_agent` defaults to `claude-cli` as a convenience (see `docs/providers.md`), but any backend can serve either role, and role does not determine whether native fork capability exists.
+Note: the deciding factor for whether an agent needs this is **provider type**, not role. An inference-server-backed agent lacks it whether it's serving as primary or escalation; a `claude-cli`-backed agent has it natively in both roles. Earlier framing that tied this to "the escalation agent" specifically was a mistake — `escalation_agent` defaults to `claude-cli` as a convenience (see `docs/guides/providers.md`), but any backend can serve either role, and role does not determine whether native fork capability exists.
 
 ## Decision
 

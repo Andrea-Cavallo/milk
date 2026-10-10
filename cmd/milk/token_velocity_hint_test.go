@@ -37,7 +37,7 @@ func newTestModelForTokenVelocity(t *testing.T) model {
 }
 
 // TestTokenVelocityHint_SuggestsEscalate: Track A Phase 5 of
-// docs/escalation-and-context-enhancements-plan.md — token_velocity is the
+// docs/internal/plans/escalation-and-context-enhancements-plan.md — token_velocity is the
 // one cross-turn signal that fires with no corresponding loop/duplicate
 // detection (legitimate but fast token burn), and previously was a pure
 // warning nobody could act on. It must now suggest /escalate for the next

@@ -1,6 +1,6 @@
 package main
 
-// Remote oversight over ACP — the ACP half of docs/operations.md's
+// Remote oversight over ACP — the ACP half of docs/guides/operations.md's
 // "Remote oversight (Telegram)". Three things run here, mirroring the TUI:
 //
 //   - turn/tool notifications: acpSession.runTurn and the tool-use hooks

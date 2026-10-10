@@ -4,7 +4,7 @@
 // agent_message, agent_thought). Field names and shapes are verified against
 // the upstream agentclientprotocol/agent-client-protocol schema/v2/schema.json
 // like lifecycle.go's — camelCase standard fields verbatim, `_meta` reserved
-// for implementation metadata. See docs/acp-session-resume-plan.md.
+// for implementation metadata. See docs/internal/plans/acp-session-resume-plan.md.
 package acp
 
 import (

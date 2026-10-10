@@ -16,7 +16,7 @@ Issue #167: the Percept store's staleness/promotion behavior had never been re-e
 
 ## Decision
 
-All five forces on `w` are now explicit (docs/operations.md "Memory weight model"):
+All five forces on `w` are now explicit (docs/guides/operations.md "Memory weight model"):
 
 1. **Birth weights** unchanged (user 0.9, inference 0.7, system 0.4, core 1.0).
 2. **Reinforcement replaces duplicate rejection** (the B design): a near-duplicate (Jaccard ≥ 0.60) strengthens the existing percept — `w += ReconfirmBoost (0.05)`, capped at `ReconfirmCap`, `updated_at` touched — instead of inserting a copy. `Record`/`RecordGlobal` return a `RecordOutcome{ID, Reinforced, Similarity, Existing, W}`; `DuplicateError` is gone. Reinforcement **never lowers** `w` (a percept already above the cap keeps its weight). The cap is `0.90 = promoteThreshold + decayPerSession` deliberately: promotion runs after the −0.10 session decay, so a fully re-confirmed inference percept (0.7 → 0.90 ×4) survives the decay and graduates at the next consolidation — repeated confirmation is a real promotion path, while a single echo can never mint a fully trusted fact.

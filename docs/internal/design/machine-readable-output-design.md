@@ -1,7 +1,7 @@
 # editor embedding & machine-readable output (ACP + `stream-json`) — design proposal
 
 > **Status: RATIFIED — the wire contract is locked in
-> [ADR-0049](adr/0049-machine-readable-wire-contract.md)** (ACP v2 as the
+> [ADR-0049](../../adr/0049-machine-readable-wire-contract.md)** (ACP v2 as the
 > embedding wire; batch JSONL §6/§8.3 as the locked batch contract; §8.2
 > normalization-at-model-layer; the `MarshalIndent` whole-document rule).
 > Implementation proceeds per §11 phasing — the contract below holds
@@ -10,10 +10,10 @@
 > UI) can host it and reach parity with the TUI without embedding it?*
 >
 > **Status note (phase 4b — contract hardening, docs, eval):** the batch
-> contract is additionally locked in [ADR-0050](adr/0050-batch-stream-json-contract.md)
+> contract is additionally locked in [ADR-0050](../../adr/0050-batch-stream-json-contract.md)
 > (§6 catalog + §8.3 conventions, additive-only within `stream_v1`, superseding
 > ADR required for shape changes) with its machine-checkable form —
-> [docs/schema/stream-json.schema.json](schema/stream-json.schema.json) and the
+> [docs/schema/stream-json.schema.json](../../schema/stream-json.schema.json) and the
 > golden recordings under `internal/transport/streamjson/testdata/` — and a
 > real consumer: `eval/adapter_milk.go` spawns `milk --output-format
 > stream-json` and decodes it via `streamjson.Decoder`. The typed event model
@@ -681,7 +681,7 @@ Provider normalization (applies to all transports once, at the model layer):
 4. **Phase 4 — batch mode + contract hardening.**
    `--output-format stream-json|json` transports, `--permission-mode`/
    `--allow-tool`, golden files + generated JSON Schema, docs
-   (`docs/tooling.md` §machine-readable output + selfdocs topic), eval harness
+   (`docs/guides/tooling.md` §machine-readable output + selfdocs topic), eval harness
    adapter consuming `stream-json` (kills the bespoke `milkSessionFile`
    scraping in `eval/adapter_milk.go`), ADR.
 

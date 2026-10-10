@@ -29,7 +29,7 @@ const acpNoReplyNotice = "(milk finished this turn without a text reply — see 
 // acpSession holds one ACP session's state: a fresh buildPrimaryRunner/
 // buildEscalationRunner pair, a fresh *session.Session/*memory.Store, and
 // the agent/tool-call event wiring onto conn — never shared with any other
-// session (see docs/machine-readable-output-design.md's ACP status note on
+// session (see docs/internal/design/machine-readable-output-design.md's ACP status note on
 // why local.Manager+dispatchAgents are NOT shared across sessions here,
 // unlike the design doc's own literal wording).
 type acpSession struct {

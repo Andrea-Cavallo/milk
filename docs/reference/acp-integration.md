@@ -4,7 +4,7 @@
 Protocol](https://agentclientprotocol.com) v2 agent: an editor (or any other
 client) spawns it as a subprocess and speaks JSON-RPC 2.0 over its
 stdin/stdout. This doc describes **exactly what's implemented today** —
-separately from [docs/machine-readable-output-design.md](machine-readable-output-design.md),
+separately from [docs/internal/design/machine-readable-output-design.md](https://github.com/scoutme/milk/blob/main/docs/internal/design/machine-readable-output-design.md),
 which is the full design proposal covering the complete planned surface, most
 of which isn't built yet. If you're integrating an editor or client against
 milk right now, this page — not the design doc — is the contract to code
@@ -249,7 +249,7 @@ already granted, matches `bash_allowed_patterns`, or skip-permissions is on.
 ## Remote oversight (Telegram)
 
 `milk serve --acp` runs the same remote oversight as the TUI
-(docs/operations.md's "Remote oversight (Telegram)") — one notifier per
+(docs/guides/operations.md's "Remote oversight (Telegram)") — one notifier per
 serve process, built at serve start from `remote_oversight` in the config
 and rebuilt when `/setup telegram` changes it:
 
@@ -262,7 +262,7 @@ and rebuilt when `/setup telegram` changes it:
   Background asks (job/workflow tool prompts, doom-loop confirmations in
   unattended contexts) add a third source, the *timed answer*: at the
   configured deadline (default 360s) the configured default applies —
-  see docs/operations.md's "Background asks (timed answer)" and
+  see docs/guides/operations.md's "Background asks (timed answer)" and
   `/permissions`.
 - **Bot messages run as turns** — a message you send the bot runs in the
   live session with the most recent activity, echoed to the client as an
@@ -322,7 +322,7 @@ response text. claude-cli speaks its own separate control-request wire
 protocol for permissions; bridging that through ACP is unbuilt. If you need
 an escalation agent that can actually use tools under ACP today, configure a
 local-provider agent as `escalation_agent` instead of the `claude-cli` default
-(see [docs/providers.md](providers.md)).
+(see [docs/guides/providers.md](../guides/providers.md)).
 
 ### Capability negotiation note
 
@@ -493,7 +493,7 @@ cannot change the handle the client holds — `session/resume`'s response
 carries no `sessionId` — so an ACP session is a **conversation view**: the
 wire handle is fixed at creation, and the view's **current binding** (the
 store session it talks to) can move. Full rationale:
-[ADR-0051](adr/0051-acp-conversation-view-rebinding.md).
+[ADR-0051](../adr/0051-acp-conversation-view-rebinding.md).
 
 - **Handle invariant.** A view's handle is the store session it was created
   with; a store session is bound by at most one live view. `/resume` onto a
@@ -539,7 +539,7 @@ store session it talks to) can move. Full rationale:
 
 ## Known gaps vs. the full design (deferred, not silently missing)
 
-Tracked explicitly in `docs/machine-readable-output-design.md`'s Phase 2
+Tracked explicitly in `docs/internal/design/machine-readable-output-design.md`'s Phase 2
 status note, repeated here for integrators who don't want to read the whole
 design doc:
 

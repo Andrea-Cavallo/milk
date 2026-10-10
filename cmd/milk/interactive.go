@@ -778,7 +778,7 @@ func execOtel(sub string, st *interactiveState) string {
 }
 
 // execExport dumps a session as text or JSON, optionally to a file. Grammar
-// (docs/acp-session-resume-plan.md D6):
+// (docs/internal/plans/acp-session-resume-plan.md D6):
 // `/export [session <id|prefix>] [json|<path>]` — with a `session` target it
 // exports *that* session without attaching it (the /list → /export session
 // a1b2 → session/resume preview flow); without one it exports the current

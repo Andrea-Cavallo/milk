@@ -1,7 +1,7 @@
 // Package streamjson is the contract home for milk's batch JSONL transport —
 // `milk "prompt" --output-format stream-json` (ADR-0050,
 // docs/adr/0050-batch-stream-json-contract.md; the §6 catalog + §8.3
-// conventions in docs/machine-readable-output-design.md).
+// conventions in docs/internal/design/machine-readable-output-design.md).
 //
 // The locked wire artifacts live here: golden recordings of whole one-shot
 // runs under testdata/events/ (with expected parse companions under

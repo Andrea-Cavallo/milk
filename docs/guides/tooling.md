@@ -26,17 +26,17 @@ The primary agent (HTTP or Bedrock backends) has these tools available with no c
 | `open_file(path)` | — | ok — opens the file: the configured editor in the TUI, the platform opener over ACP; refused (TUI-only note) where no opener is wired, e.g. single-prompt mode or background jobs |
 | `current_need(goal)` | one-sentence goal | ok — same effect as the user typing `/need <goal>` |
 | `export_session(format, output_path)` | `"text"`\|`"json"`, optional file path | transcript inline, or written to `output_path` |
-| `milk_config_help(topic)` | e.g. `"mcp add"`, `"agent add"` | a section of milk's own embedded reference docs — lets the agent look up how to manage milk's own config instead of guessing the schema; omit `topic` to list what's available. Backed by `internal/selfdocs`, which indexes `docs/spec.md`/`providers.md`/`workflows.md`/`tooling.md`/`operations.md` by heading — same content this site is built from |
-| `spawn_background_agent(task, label, full_context?)` | self-contained task description + short display label + optional full-context flag | an immediate acknowledgement (job ID) — the eventual result arrives asynchronously, injected into the agent's next turn and shown live in the TUI. See [ADR-0043](adr/0043-background-subagents.md) |
+| `milk_config_help(topic)` | e.g. `"mcp add"`, `"agent add"` | a section of milk's own embedded reference docs — lets the agent look up how to manage milk's own config instead of guessing the schema; omit `topic` to list what's available. Backed by `internal/selfdocs`, which indexes `docs/reference/spec.md`/`providers.md`/`workflows.md`/`tooling.md`/`operations.md` by heading — same content this site is built from |
+| `spawn_background_agent(task, label, full_context?)` | self-contained task description + short display label + optional full-context flag | an immediate acknowledgement (job ID) — the eventual result arrives asynchronously, injected into the agent's next turn and shown live in the TUI. See [ADR-0043](../adr/0043-background-subagents.md) |
 | `cancel_background_agent(job_id)` | a job ID returned by `spawn_background_agent` | confirmation, or an error if the job is already finished/unknown — the model-facing equivalent of `/bg stop` |
 
-Self-escalation (`escalate(reason)`) is covered in [docs/workflows.md](workflows.md#routing). Memory tools (`record_memory`, `get_memory`, `list_memory`, `forget_memory`) and task tools (`create_task`, `update_task`, `list_tasks`, `complete_task`) are covered in [docs/operations.md — Memory tools](operations.md#memory-tools). The memory tools are registered wherever milk's own tool loop runs — live turns, workflow roles, agent-as-tool peers, and background subagent forks (the last two scoped to their invoker's memory visibility) — and honor `limits.included_tools`/`limits.excluded_tools` like the rest of the built-in set.
+Self-escalation (`escalate(reason)`) is covered in [docs/guides/workflows.md](workflows.md#routing). Memory tools (`record_memory`, `get_memory`, `list_memory`, `forget_memory`) and task tools (`create_task`, `update_task`, `list_tasks`, `complete_task`) are covered in [docs/guides/operations.md — Memory tools](operations.md#memory-tools). The memory tools are registered wherever milk's own tool loop runs — live turns, workflow roles, agent-as-tool peers, and background subagent forks (the last two scoped to their invoker's memory visibility) — and honor `limits.included_tools`/`limits.excluded_tools` like the rest of the built-in set.
 
 ### `spawn_background_agent` — forking yourself for background research
 
-Unlike Agent-as-Tool below (which calls a *different*, specifically configured peer agent synchronously with no tool loop), `spawn_background_agent` forks the *calling* agent's own config — same model, same built-in tools — to research a self-contained question asynchronously, with its own full tool loop, without spending the caller's own context. Only available when the calling agent is backed by an inference-server provider (not `claude-cli`, which already has an equivalent fork/Task tool natively, and not subprocess agents, which don't use milk's tool loop at all). A forked job cannot itself spawn further background agents (depth is capped at 1), and its internal tool activity never appears in the *main* transcript — its final result does: it lands in the transcript the moment the job finishes (capped to this same delivery budget; `/bg show <id>` prints it in full) and is injected into the agent's next turn once drained — but is watchable live on demand by double-clicking the job in the background panel (ADR-0047; see [docs/operations.md — Background sub-agents](operations.md#background-sub-agents)). Concurrency is bounded per session by `max_background_agents` (default 3; see [docs/operations.md](operations.md)).
+Unlike Agent-as-Tool below (which calls a *different*, specifically configured peer agent synchronously with no tool loop), `spawn_background_agent` forks the *calling* agent's own config — same model, same built-in tools — to research a self-contained question asynchronously, with its own full tool loop, without spending the caller's own context. Only available when the calling agent is backed by an inference-server provider (not `claude-cli`, which already has an equivalent fork/Task tool natively, and not subprocess agents, which don't use milk's tool loop at all). A forked job cannot itself spawn further background agents (depth is capped at 1), and its internal tool activity never appears in the *main* transcript — its final result does: it lands in the transcript the moment the job finishes (capped to this same delivery budget; `/bg show <id>` prints it in full) and is injected into the agent's next turn once drained — but is watchable live on demand by double-clicking the job in the background panel (ADR-0047; see [docs/guides/operations.md — Background sub-agents](operations.md#background-sub-agents)). Concurrency is bounded per session by `max_background_agents` (default 3; see [docs/guides/operations.md](operations.md)).
 
-Restrict or extend the set per agent with `limits.included_tools` / `limits.excluded_tools` — see [docs/providers.md — Per-agent limit overrides](providers.md#per-agent-limit-overrides).
+Restrict or extend the set per agent with `limits.included_tools` / `limits.excluded_tools` — see [docs/guides/providers.md — Per-agent limit overrides](providers.md#per-agent-limit-overrides).
 
 **Structured result (optional)**: a job's final answer may end with a machine-readable tag on its own line, `<result status="ok|error|partial" files_touched="path1,path2"/>`, instead of leaving the caller to parse free-form prose for that information. Purely opt-in — the background system prompt mentions the convention but the job is never required to use it; when absent, the result is delivered exactly as written.
 
@@ -67,7 +67,7 @@ Any agent in the `agents` list can be exposed as a callable tool to any other ag
 
 An agent entry's own `tools` field shadows or extends this global list for that agent specifically (same `agent` name = replace; new name = append). A cycle guard prevents an agent from calling itself as a tool. Unknown agent names are silently dropped.
 
-Manage at runtime with `/agent tool list|enable|disable|add|remove` — see [docs/spec.md — CLI Interface](spec.md#cli-interface).
+Manage at runtime with `/agent tool list|enable|disable|add|remove` — see [docs/reference/spec.md — CLI Interface](../reference/spec.md#cli-interface).
 
 ### Worked example: real config using aider as a tool-agent
 
@@ -127,7 +127,7 @@ A `claude-cli` agent can be a tool-agent too — called inline during another ag
 }
 ```
 
-**Limitations**: no permission prompts (all tool uses auto-approved); each call is stateless (no session history); the tool-agent does not see the calling agent's session history. For testing without a live `claude` binary, point `bin` at a `milk-mock claude` wrapper — see [docs/mock-setup.md](mock-setup.md).
+**Limitations**: no permission prompts (all tool uses auto-approved); each call is stateless (no session history); the tool-agent does not see the calling agent's session history. For testing without a live `claude` binary, point `bin` at a `milk-mock claude` wrapper — see [docs/internal/mock-setup.md](https://github.com/scoutme/milk/blob/main/docs/internal/mock-setup.md).
 
 **Known limitation, not planned to change**: when a `claude-cli` agent (in *any* role) uses Claude Code's own Agent-tool (Task-tool) subagents or background workflows internally, milk's stream-json parser sees only their aggregated token counts (`subagent_usage`/`workflow_usage` on the final `result` event) — no content field exists there to surface, so there is no live-attach view for those, unlike `spawn_background_agent` jobs and milk's native `/workflow` engine (ADR-0047). This is a `stream-json` protocol limitation, not a milk parsing gap.
 
@@ -305,13 +305,13 @@ milk can present itself to machines two ways: a long-lived ACP v2 agent
 server for editor embedding (`milk serve --acp`), and a one-shot batch event
 stream for CI/scripts (`--output-format stream-json|json`). Both are **real,
 shipped, and narrower than the full design** — the wire contract's full
-target shape is ratified in [ADR-0049](adr/0049-machine-readable-wire-contract.md)
-and [ADR-0050](adr/0050-batch-stream-json-contract.md), and the complete
-normative catalog lives in [docs/machine-readable-output-design.md](machine-readable-output-design.md)
+target shape is ratified in [ADR-0049](../adr/0049-machine-readable-wire-contract.md)
+and [ADR-0050](../adr/0050-batch-stream-json-contract.md), and the complete
+normative catalog lives in [docs/internal/design/machine-readable-output-design.md](https://github.com/scoutme/milk/blob/main/docs/internal/design/machine-readable-output-design.md)
 — but what's actually implemented today is a deliberately scoped subset of
 that catalog, documented precisely (not aspirationally) in two places:
 
-- **[docs/acp-integration.md](acp-integration.md)** — `milk serve --acp`:
+- **[docs/reference/acp-integration.md](../reference/acp-integration.md)** — `milk serve --acp`:
   which of the 4 real methods work, which of the rest return a plain
   JSON-RPC "method not found," the permission-handling caveat (local-provider
   agents only), and a worked example exchange. Read this, not the design
@@ -336,7 +336,7 @@ milk [flags] "prompt"                              # --output-format text (defau
 - Nothing else in the full §6 event catalog is emitted in batch mode: no
   `stream_event` partial deltas, no `tool_use`/`tool_result` events (tool
   calls happen, just not reported on this wire — see the eval harness's
-  `tool_calls: 0` caveat in [docs/eval.md](eval.md) if you rely on this),
+  `tool_calls: 0` caveat in [docs/reference/eval.md](../reference/eval.md) if you rely on this),
   no `system` subtypes beyond `init` (no `agent_switch`, `route`,
   `notification`, `warning`, `state`, `task_*`, `memory`, `commands`,
   `config_option`, `permission_denied`, `error`). `system/init` itself omits
@@ -346,7 +346,7 @@ milk [flags] "prompt"                              # --output-format text (defau
   in the design doc **do not exist** on the CLI — batch mode has no
   permission-prompt wiring at all today; a tool needing interactive
   confirmation is handled per the agent's own existing default (see
-  [docs/acp-integration.md](acp-integration.md)'s permission caveat, which
+  [docs/reference/acp-integration.md](../reference/acp-integration.md)'s permission caveat, which
   applies here too).
 - What *is* locked and accurate: **snake_case fields** throughout
   (`input_tokens`, `cache_read`, `is_error`, `session_id`), a `type`
@@ -355,5 +355,5 @@ milk [flags] "prompt"                              # --output-format text (defau
   stay on stderr, never mirrored into a stdout event yet), exactly one
   terminal `result` per run, and no ANSI escapes ever on this wire. The
   machine-checkable schema for the three real line shapes is
-  [`docs/schema/stream-json.schema.json`](schema/stream-json.schema.json)
+  [`docs/schema/stream-json.schema.json`](../schema/stream-json.schema.json)
   (golden fixtures under `internal/transport/streamjson/testdata/`).

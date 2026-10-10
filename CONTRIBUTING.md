@@ -12,7 +12,7 @@ Open a GitHub issue with:
 
 ## Submitting a pull request
 
-1. Fork the repo and create a branch off `main` (see [docs/branching-strategy.md](docs/branching-strategy.md) for naming conventions: `feat/<scope>`, `fix/<scope>`, `chore/<scope>`, `docs/<scope>`).
+1. Fork the repo and create a branch off `main` (see [docs/internal/branching-strategy.md](docs/internal/branching-strategy.md) for naming conventions: `feat/<scope>`, `fix/<scope>`, `chore/<scope>`, `docs/<scope>`).
 2. Make your change. Keep commits scoped and use [Conventional Commits](https://www.conventionalcommits.org/) format:
    ```
    feat(router): add weighted signal for tool-call density
@@ -34,13 +34,13 @@ Non-trivial design choices are recorded as ADRs under [docs/adr/](docs/adr/). If
 
 ## Where to look first
 
-- [docs/getting-started.md](docs/getting-started.md) — fastest path to a working setup
-- [docs/providers.md](docs/providers.md) — agent/provider configuration
-- [docs/workflows.md](docs/workflows.md) — routing, sticky escalation, the native `/workflow` engine
-- [docs/tooling.md](docs/tooling.md) — built-in tools, agent-as-tool, MCP servers
-- [docs/operations.md](docs/operations.md) — memory, observability, loop detection, remote oversight
-- [docs/eval.md](docs/eval.md) — evaluation harness
-- [docs/spec.md](docs/spec.md) — architecture and CLI reference
+- [docs/start/getting-started.md](docs/start/getting-started.md) — fastest path to a working setup
+- [docs/guides/providers.md](docs/guides/providers.md) — agent/provider configuration
+- [docs/guides/workflows.md](docs/guides/workflows.md) — routing, sticky escalation, the native `/workflow` engine
+- [docs/guides/tooling.md](docs/guides/tooling.md) — built-in tools, agent-as-tool, MCP servers
+- [docs/guides/operations.md](docs/guides/operations.md) — memory, observability, loop detection, remote oversight
+- [docs/reference/eval.md](docs/reference/eval.md) — evaluation harness
+- [docs/reference/spec.md](docs/reference/spec.md) — architecture and CLI reference
 - [CLAUDE.md](CLAUDE.md) — project structure and key design decisions
 
 ## Code of conduct

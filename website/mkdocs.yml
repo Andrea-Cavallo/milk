@@ -40,31 +40,41 @@ theme:
 
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - Providers & Config: providers.md
-  - Routing & workflows: workflows.md
-  - Tooling & MCP: tooling.md
-  - Operations: operations.md
-  - Evaluation: eval.md
-  - Architecture: spec.md
+  - Documentation:
+      - start/index.md
+      - Install & first run: start/getting-started.md
+  - Guides:
+      - guides/index.md
+      - Providers & configuration: guides/providers.md
+      - Routing, sessions & workflows: guides/workflows.md
+      - Tooling, MCP & tool-agents: guides/tooling.md
+      - Day-to-day operations: guides/operations.md
+  - Reference:
+      - reference/index.md
+      - Evaluation (milk eval): reference/eval.md
+      - ACP integration: reference/acp-integration.md
+      - Specification & CLI reference: reference/spec.md
   - Decisions: adr/README.md
 
-# Only the curated, user-facing docs are published. Internal design notes,
-# plans, and analysis docs stay out of the public site.
+plugins:
+  - search
+  - redirects:
+      redirect_maps:
+        # pre-IA-restructure URLs (ADR-0054) — keep old links working
+        getting-started.md: start/getting-started.md
+        providers.md: guides/providers.md
+        workflows.md: guides/workflows.md
+        tooling.md: guides/tooling.md
+        operations.md: guides/operations.md
+        eval.md: reference/eval.md
+        acp-integration.md: reference/acp-integration.md
+        spec.md: reference/spec.md
+
+# Only docs/ outside docs/internal/ is published. The boundary is the
+# directory (ADR-0054), not a per-file denylist: internal design notes, plans,
+# and analyses live under docs/internal/ and are excluded wholesale here.
 exclude_docs: |
-  agent-as-tool-implementation-plan.md
-  branching-strategy.md
-  context-bloat-analysis.md
-  eval-harness-plan.md
-  eval-harness-spec.md
-  machine-readable-output-design.md
-  memory-design.md
-  mock-setup.md
-  observability-design.md
-  observability-refactor.md
-  prompt-context-management-review.md
-  silent-turn-issue-analysis.md
-  smolagent-integration-design.md
+  internal/
   embed.go
 
 markdown_extensions:

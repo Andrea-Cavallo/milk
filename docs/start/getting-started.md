@@ -1,15 +1,15 @@
 # Getting started
 
-The fastest path to a working milk setup — no specific backend required. milk works with any provider in either role; see [docs/providers.md](providers.md) for the full catalog once you're past this page.
+The fastest path to a working milk setup — no specific backend required. milk works with any provider in either role; see [docs/guides/providers.md](../guides/providers.md) for the full catalog once you're past this page.
 
 ## Prerequisites
 
 | Dependency | Required | Notes |
 |---|---|---|
 | Go 1.21+ | no | only if building from source |
-| An inference server or cloud API key | no | any backend from [docs/providers.md](providers.md); milk degrades gracefully if the primary or escalation agent is absent — see [docs/operations.md — Graceful degradation](operations.md#graceful-degradation) |
+| An inference server or cloud API key | no | any backend from [docs/guides/providers.md](../guides/providers.md); milk degrades gracefully if the primary or escalation agent is absent — see [docs/guides/operations.md — Graceful degradation](../guides/operations.md#graceful-degradation) |
 | `claude` CLI | no | only if you want Claude Code as an agent; not required otherwise |
-| Git Bash or WSL2 (Windows only) | yes (Windows) | milk's primary agent uses `sh`, `find`, `grep` — `cmd.exe`/PowerShell are not supported. See [docs/providers.md — Windows and WSL2](providers.md#windows-and-wsl2) |
+| Git Bash or WSL2 (Windows only) | yes (Windows) | milk's primary agent uses `sh`, `find`, `grep` — `cmd.exe`/PowerShell are not supported. See [docs/guides/providers.md — Windows and WSL2](../guides/providers.md#windows-and-wsl2) |
 
 ## Install
 
@@ -19,7 +19,7 @@ Pre-built binary — no Go toolchain needed:
 curl -fsSL https://raw.githubusercontent.com/scoutme/milk/main/install.sh | sh
 ```
 
-Installs to `~/.local/bin/milk`, verifying the release checksum. Pin a version with `MILK_VERSION=v0.2.0`. On Windows, run this inside WSL2 (see [docs/providers.md — Windows and WSL2](providers.md#windows-and-wsl2)).
+Installs to `~/.local/bin/milk`, verifying the release checksum. Pin a version with `MILK_VERSION=v0.2.0`. On Windows, run this inside WSL2 (see [docs/guides/providers.md — Windows and WSL2](../guides/providers.md#windows-and-wsl2)).
 
 Or build from source (requires Go 1.21+):
 
@@ -52,9 +52,9 @@ The wizard asks for a name, URL/model (or `claude-cli`/`aider-cli`/`subprocess` 
 /agent switch <name> as escalation
 ```
 
-**There is no preferred pairing.** Every backend, including `claude-cli`, can serve either role — the only constraint milk expects you to honor yourself is that the escalation agent should be smarter (and usually pricier) than the primary agent. A local model as escalation and a cloud model as primary is a perfectly valid, if unusual, setup. `claude-cli` as primary specifically works but isn't a smart everyday choice (every turn spawns a full subprocess, and it can't self-escalate); see [docs/providers.md](providers.md#primary-agent) for where it's actually useful. See [docs/workflows.md](workflows.md#routing) for how routing decides which agent handles a given prompt.
+**There is no preferred pairing.** Every backend, including `claude-cli`, can serve either role — the only constraint milk expects you to honor yourself is that the escalation agent should be smarter (and usually pricier) than the primary agent. A local model as escalation and a cloud model as primary is a perfectly valid, if unusual, setup. `claude-cli` as primary specifically works but isn't a smart everyday choice (every turn spawns a full subprocess, and it can't self-escalate); see [docs/guides/providers.md](../guides/providers.md#primary-agent) for where it's actually useful. See [docs/guides/workflows.md](../guides/workflows.md#routing) for how routing decides which agent handles a given prompt.
 
-If you don't already have a backend in mind, [docs/providers.md](providers.md) has copy-paste examples for local llama.cpp/Ollama/LM Studio, Claude Code CLI, AWS Bedrock, OpenRouter, Together.ai, Groq, Azure OpenAI, aider, and smolagents — including a full local-hardware reference setup (NVIDIA GPU, WSL2, llama.cpp from source) if you want to run inference yourself rather than call an API.
+If you don't already have a backend in mind, [docs/guides/providers.md](../guides/providers.md) has copy-paste examples for local llama.cpp/Ollama/LM Studio, Claude Code CLI, AWS Bedrock, OpenRouter, Together.ai, Groq, Azure OpenAI, aider, and smolagents — including a full local-hardware reference setup (NVIDIA GPU, WSL2, llama.cpp from source) if you want to run inference yourself rather than call an API.
 
 Check what's configured any time with `/agent` (or `/agent list`).
 
@@ -84,7 +84,7 @@ Force a specific agent for one turn with `/primary <prompt>` or `/escalate <prom
 ❯ /escalate explain the session state machine design
 ```
 
-Once escalation fires — whether you asked for it or the primary agent called `escalate()` on its own — milk keeps subsequent turns on the escalation agent automatically (**auto-sticky**, shown as `<agent> (sticky)` in the status bar) until you type `/primary`. See [docs/workflows.md](workflows.md) for the full routing and session-state model.
+Once escalation fires — whether you asked for it or the primary agent called `escalate()` on its own — milk keeps subsequent turns on the escalation agent automatically (**auto-sticky**, shown as `<agent> (sticky)` in the status bar) until you type `/primary`. See [docs/guides/workflows.md](../guides/workflows.md) for the full routing and session-state model.
 
 Manage sessions from inside the TUI with `/new` (start fresh — alias `/clear`), `/drop` (delete the current one), `/resume <id|prefix|name>` (switch to a stored session), and `/sessions` (sessions for this directory; `/list` is a deprecated alias). Type `/help` for the full command list, `/exit` or Ctrl-D to quit.
 
@@ -152,21 +152,21 @@ Sessions are shared with the TUI's session model — the same `--list`/`--new`/`
 
 ### Graceful degradation
 
-Stop either agent (or never configure one) and confirm milk warns rather than crashing, in either mode — see [docs/operations.md — Graceful degradation](operations.md#graceful-degradation) for the full behavior table.
+Stop either agent (or never configure one) and confirm milk warns rather than crashing, in either mode — see [docs/guides/operations.md — Graceful degradation](../guides/operations.md#graceful-degradation) for the full behavior table.
 
 ## Where to go next
 
 | If you want to… | See |
 |---|---|
-| Pick and configure a specific backend | [docs/providers.md](providers.md) |
-| Understand routing, sticky escalation, or the native `/workflow` engine | [docs/workflows.md](workflows.md) |
-| Give an agent tools, other agents, or MCP servers | [docs/tooling.md](tooling.md) |
-| Tune memory, observability, loop detection, or remote oversight | [docs/operations.md](operations.md) |
-| Compare agents/models on real scenarios | [docs/eval.md](eval.md) |
-| Understand why milk is built the way it is | [docs/adr/](adr/README.md) |
+| Pick and configure a specific backend | [docs/guides/providers.md](../guides/providers.md) |
+| Understand routing, sticky escalation, or the native `/workflow` engine | [docs/guides/workflows.md](../guides/workflows.md) |
+| Give an agent tools, other agents, or MCP servers | [docs/guides/tooling.md](../guides/tooling.md) |
+| Tune memory, observability, loop detection, or remote oversight | [docs/guides/operations.md](../guides/operations.md) |
+| Compare agents/models on real scenarios | [docs/reference/eval.md](../reference/eval.md) |
+| Understand why milk is built the way it is | [docs/adr/](../adr/README.md) |
 
 ## Troubleshooting
 
 **Session in a bad state**: drop it and start fresh — `/drop` in the TUI, or `milk --drop` from the shell.
 
-For backend-specific troubleshooting (e.g. local llama.cpp server issues), see the relevant section in [docs/providers.md](providers.md).
+For backend-specific troubleshooting (e.g. local llama.cpp server issues), see the relevant section in [docs/guides/providers.md](../guides/providers.md).
