@@ -2,7 +2,7 @@
 
 ## Overview
 
-Follow-up to [`docs/session-2026-10-01-primary-overload-analysis.md`](session-2026-10-01-primary-overload-analysis.md),
+Follow-up to [`docs/internal/analysis/session-2026-10-01-primary-overload-analysis.md`](../analysis/session-2026-10-01-primary-overload-analysis.md),
 which found a 3.5h dogfooding session where the primary model (`mimo-v2.6-flash`) carried a
 complex, multi-hour task entirely alone — the router never escalated once — including a 16-minute
 turn where the model got stuck repeating tool calls 5 separate times. Milk's loop detector and

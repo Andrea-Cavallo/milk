@@ -1,7 +1,7 @@
 // Package instructions loads project-level agent instructions (AGENTS.md,
 // falling back to CLAUDE.md where appropriate) so milk's own agents can pick
 // up repo-specific conventions the same way Claude Code, MiMo-Code, and
-// OpenCode do. See docs/prompt-context-management-review.md for the gap this
+// OpenCode do. See docs/internal/analysis/prompt-context-management-review.md for the gap this
 // closes.
 package instructions
 

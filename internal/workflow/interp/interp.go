@@ -468,7 +468,7 @@ func isTerminatedTurn(out string) bool {
 // exhausted step may simply have needed more iterations; it is not
 // necessarily evidence of a stuck loop, so it's given its own outcome
 // instead of being silently lumped in with a genuine loop-detector kill —
-// see docs/prompt-context-management-review.md §8 rec #10. Checked before
+// see docs/internal/analysis/prompt-context-management-review.md §8 rec #10. Checked before
 // isTerminatedTurn, since the budget-exhausted fallback text also happens
 // to contain "turn ended without a final summary" and would otherwise match
 // the generic check too.

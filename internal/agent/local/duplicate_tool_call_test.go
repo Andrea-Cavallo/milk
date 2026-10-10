@@ -39,7 +39,7 @@ func duplicateToolCallServer() (*httptest.Server, *int32) {
 }
 
 // TestDuplicateToolCall_RecoversWithoutTerminating establishes the baseline
-// behavior the analysis in docs/session-2026-10-01-primary-overload-analysis.md
+// behavior the analysis in docs/internal/analysis/session-2026-10-01-primary-overload-analysis.md
 // relied on: a single repeated tool call crops the looping tail, injects a
 // recovery nudge, and lets the turn continue to completion — it must not
 // terminate after only one recovery (duplicateToolMaxRecovery is 5).

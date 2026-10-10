@@ -1,4 +1,4 @@
-// Chat-history replay — ACP's standard mechanism (docs/acp-session-resume-plan.md
+// Chat-history replay — ACP's standard mechanism (docs/internal/plans/acp-session-resume-plan.md
 // D5): `session/resume` with `replayFrom: {"type":"start"}` (and resume-by-
 // default adoption) deliver the session's retained history as session/update
 // **message upserts** (user_message / agent_message / agent_thought — "Agents

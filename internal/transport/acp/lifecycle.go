@@ -130,7 +130,7 @@ type NewSessionRequest struct {
 	// channel for implementation-specific hints. milk reads
 	// `_meta.milk.fresh: true` as the per-request opt-out of resume-by-
 	// default adoption ("start an empty conversation"; see
-	// docs/acp-session-resume-plan.md D2).
+	// docs/internal/plans/acp-session-resume-plan.md D2).
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 

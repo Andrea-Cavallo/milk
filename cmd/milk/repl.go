@@ -554,7 +554,7 @@ func (r *tuiInputReader) readLineCtx(ctx context.Context, prompt, label, autoDef
 
 // makeLocalPermAsk returns the permAsk callback for the local agent, routed
 // through events.Host.RequestPermission (Phase 1's one real Host migration —
-// see docs/machine-readable-output-design.md) and raced over the three
+// see docs/internal/design/machine-readable-output-design.md) and raced over the three
 // answer sources (ADR-0052's permask.go) — direct input and remote oversight
 // here, no timed answer: a foreground ask waits for a human. host is backed
 // by tuiHost, which reuses the existing TUI permRequestMsg flow: the

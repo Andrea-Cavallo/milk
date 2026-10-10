@@ -1,7 +1,7 @@
 # Session-management refactor — TUI, ACP and CLI parity (design only)
 
 Status: **plan, ready for review — no implementation yet.** Baseline: `main` after
-the ACP session-resume parity work (`docs/acp-session-resume-plan.md`, implemented),
+the ACP session-resume parity work (`docs/internal/plans/acp-session-resume-plan.md`, implemented),
 verified against `cmd/milk/interactive.go`, `commands.go`, `completion.go`,
 `acp_commands.go`, `acp_server.go`, `acp_session.go`, `acp_history.go`,
 `main.go`, `internal/session/{session,store}.go`, `internal/transport/acp/sessions.go`,
@@ -32,7 +32,7 @@ Both the TUI and ACP channels get one refined session-management surface.
    (acp_commands.go:44) contains only `"/list"` (viaTUI). `/new`, `/clear`,
    `/drop` are TUI strings handled by `execNonPromptCmd` (interactive.go:616);
    over ACP `runSlashCommand` answers *"is only available in the milk TUI"*.
-   docs/acp-integration.md even lists `/new` as deliberately TUI-only.
+   docs/reference/acp-integration.md even lists `/new` as deliberately TUI-only.
 2. **`/list` is ambiguous.** The name collides conceptually with `/memory`,
    `/tasks`, `/bg`, `/mcp list`, `/bash list`, `/agent list` — "list what?".
    Also `listSessions` (interactive.go:949) and `runList` (main.go:1706) are
@@ -303,21 +303,21 @@ consumers (`/export session`, `session/delete`).
 
 ## 5. Docs (with the PRs, not after)
 
-- **`docs/acp-integration.md`**: slash table — `/sessions`, `/new`, `/clear`,
+- **`docs/reference/acp-integration.md`**: slash table — `/sessions`, `/new`, `/clear`,
   `/resume`, `/drop` rows; `/list` row updated (alias); the TUI-only list drops
   `/new`; new subsection **"Session commands and view rebinding"** (D4 rules,
   handle invariant, alias semantics, closed-set interplay); "Message identity"
   gains the post-rebind qualification note.
-- **`docs/spec.md`**: CLI flag table (`--session <id|prefix|name>` strict
+- **`docs/reference/spec.md`**: CLI flag table (`--session <id|prefix|name>` strict
   semantics, `--drop [--session <ref>]`, `--continue` = documented no-op);
   "ACP session parity" note gains the `/resume` ≈ `session/resume` line and the
   `/sessions` rename.
-- **`docs/workflows.md`** (sessions paragraph, line ~130): `milk --session`
+- **`docs/guides/workflows.md`** (sessions paragraph, line ~130): `milk --session`
   accepts id/prefix/name.
 - **`CLAUDE.md`**: structure entries (`sessionmgmt_core.go`,
   `acp_sessionmgmt.go`), one design-decision bullet (view rebinding).
 - **`docs/adr/0051-…`**: D4 rationale + rejected alternative.
-- **`docs/acp-session-resume-plan.md` §7**: the "TUI in-process `/resume`"
+- **`docs/internal/plans/acp-session-resume-plan.md` §7**: the "TUI in-process `/resume`"
   non-goal marked done by this work (historical doc — one-line pointer only).
 
 ## 6. Phasing (branch-per-step, conventional commits)
@@ -325,7 +325,7 @@ consumers (`/export session`, `session/delete`).
 1. `feat(session): Resolve by id/prefix/name + shared session-mgmt core`
    — `internal/session.Resolve`, `sessionmgmt_core.go`, renderers; CLI wired
    (`--session` strict, `--drop [--session]`, `--continue` help, `runList` via
-   shared renderer). All green; docs/spec.md CLI rows land here.
+   shared renderer). All green; docs/reference/spec.md CLI rows land here.
 2. `feat(tui): /sessions rename and /resume switch`
    — TUI rows, `/list` alias, reseeded transcript on switch, completion +
    help + pins. Docs ride along.
@@ -335,7 +335,7 @@ consumers (`/export session`, `session/delete`).
 4. `docs: session-management cross-links` — only if anything is left over.
 
 Each step: `gofmt` / `go build` / `go vet` / `go test ./...` green before PR;
-small PRs per `docs/branching-strategy.md`.
+small PRs per `docs/internal/branching-strategy.md`.
 
 ## 7. Non-goals / follow-ups
 

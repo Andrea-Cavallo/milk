@@ -1,7 +1,7 @@
 package main
 
 // Replay-delivery pins for the ACP standard chat-history mechanism
-// (docs/acp-session-resume-plan.md §4/D5): replay emitted before the
+// (docs/internal/plans/acp-session-resume-plan.md §4/D5): replay emitted before the
 // session/resume response, deterministic message identity across replays,
 // runID-suffixed live IDs, the bounded head+tail window with its gap marker,
 // tool-trail pairing, and the v1-client chunk fallback. Method/lifecycle pins

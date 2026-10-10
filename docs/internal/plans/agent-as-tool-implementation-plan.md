@@ -215,7 +215,7 @@ Tool definitions live at two levels: a global `agent_tools` array on `Config` (a
 
 ### Phase 7 — Docs
 
-**Files:** `docs/spec.md`
+**Files:** `docs/reference/spec.md`
 
 1. Add `agent_tools` to the top-level config field table and `tools` to the `AgentConfig` field table.
 2. Add "Agent-as-Tool" subsection: feature overview, global vs per-agent merge, v1 scope limitation, cycle guard.

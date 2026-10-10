@@ -6,7 +6,7 @@ Running milk day to day: memory, observability, loop detection, task tracking, c
 
 ## Memory
 
-milk keeps a **Percept store** — small remembered facts that survive across sessions, separate from conversation history. Percepts are **reinforced** when re-stated (a repeated fact gains weight), **decay** when not (session end runs NREM consolidation: decay → edges → prune → promote), and graduate to the global store when their weight crosses the promotion threshold. The full weight model is below ([Memory weight model](#memory-weight-model)) and in [ADR-0053](adr/0053-memory-weight-model.md).
+milk keeps a **Percept store** — small remembered facts that survive across sessions, separate from conversation history. Percepts are **reinforced** when re-stated (a repeated fact gains weight), **decay** when not (session end runs NREM consolidation: decay → edges → prune → promote), and graduate to the global store when their weight crosses the promotion threshold. The full weight model is below ([Memory weight model](#memory-weight-model)) and in [ADR-0053](../adr/0053-memory-weight-model.md).
 
 ### Commands
 
@@ -52,7 +52,7 @@ All knobs are prepopulated in the generated config's `memory` block (`decay_per_
 
 ### Tuning
 
-The knobs that control injection limits, re-injection cadence, and per-agent overrides live in [docs/providers.md — Memory configuration](providers.md#memory-configuration) and [Context budget configuration](providers.md#context-budget-configuration), since they're usually set per-agent alongside the rest of that agent's config.
+The knobs that control injection limits, re-injection cadence, and per-agent overrides live in [docs/guides/providers.md — Memory configuration](providers.md#memory-configuration) and [Context budget configuration](providers.md#context-budget-configuration), since they're usually set per-agent alongside the rest of that agent's config.
 
 ---
 
@@ -203,7 +203,7 @@ Two guards keep an agent that lost its context from re-planning the same work: t
 
 ## Background sub-agents
 
-`spawn_background_agent` (ADR-0043 — see [docs/tooling.md](tooling.md#spawn_background_agent--forking-yourself-for-background-research) for the tool itself) forks an inference-server-backed agent to research a self-contained question asynchronously, one job per call, tracked for the life of the session by a per-session job manager.
+`spawn_background_agent` (ADR-0043 — see [docs/guides/tooling.md](tooling.md#spawn_background_agent--forking-yourself-for-background-research) for the tool itself) forks an inference-server-backed agent to research a self-contained question asynchronously, one job per call, tracked for the life of the session by a per-session job manager.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -306,7 +306,7 @@ Forward agent activity and permission prompts to a mobile device.
 
 **Remote input**: any message sent to the bot is injected as a new turn (`[telegram] …` in the transcript); queued while a turn is in progress, delivered as the next turn once it completes.
 
-**Over ACP** (`milk serve --acp`): everything above runs too, with one notifier per serve process — permission prompts race the ACP client (first answer wins, remote asks serialized process-wide), and bot messages run as turns in the live session the user touched most recently (queued until one exists if none do), echoed to the client as ordinary user messages. See docs/acp-integration.md's "Remote oversight (Telegram)" section.
+**Over ACP** (`milk serve --acp`): everything above runs too, with one notifier per serve process — permission prompts race the ACP client (first answer wins, remote asks serialized process-wide), and bot messages run as turns in the live session the user touched most recently (queued until one exists if none do), echoed to the client as ordinary user messages. See docs/reference/acp-integration.md's "Remote oversight (Telegram)" section.
 
 ---
 

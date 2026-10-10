@@ -2,11 +2,11 @@
 
 ## Overview
 
-milk is a terminal agent host: it routes each prompt between a primary inference agent and a configurable escalation agent mid-workflow, maintaining full session context across the switch, and layers tools, MCP, multi-agent orchestration, memory, and evaluation on top. Six surfaces make up the product — **routing & sessions**, **providers**, **tools & MCP**, **orchestration** (background agents + the native `/workflow` engine), **memory & safety**, and **observability/eval**. Any backend can serve either role — see [docs/providers.md](providers.md) for the full catalog and the one routing constraint milk expects you to honor (escalation should be smarter/pricier than primary).
+milk is a terminal agent host: it routes each prompt between a primary inference agent and a configurable escalation agent mid-workflow, maintaining full session context across the switch, and layers tools, MCP, multi-agent orchestration, memory, and evaluation on top. Six surfaces make up the product — **routing & sessions**, **providers**, **tools & MCP**, **orchestration** (background agents + the native `/workflow` engine), **memory & safety**, and **observability/eval**. Any backend can serve either role — see [docs/guides/providers.md](../guides/providers.md) for the full catalog and the one routing constraint milk expects you to honor (escalation should be smarter/pricier than primary).
 
 The primary use case is code assistance and shell automation for a single user.
 
-This page is the architecture/CLI reference. For task-oriented docs, start at [docs/getting-started.md](getting-started.md); see also [docs/workflows.md](workflows.md), [docs/tooling.md](tooling.md), [docs/operations.md](operations.md), and [docs/eval.md](eval.md).
+This page is the architecture/CLI reference. For task-oriented docs, start at [docs/start/getting-started.md](../start/getting-started.md); see also [docs/guides/workflows.md](../guides/workflows.md), [docs/guides/tooling.md](../guides/tooling.md), [docs/guides/operations.md](../guides/operations.md), and [docs/reference/eval.md](eval.md).
 
 ---
 
@@ -42,7 +42,7 @@ local / bedrock /    local / bedrock /
 claude-cli / …       claude-cli / …
 ```
 
-Routing mechanics, session states, and the native `/workflow` engine are covered in [docs/workflows.md](workflows.md).
+Routing mechanics, session states, and the native `/workflow` engine are covered in [docs/guides/workflows.md](../guides/workflows.md).
 
 ---
 
@@ -98,13 +98,13 @@ runPrimary / runEscalation role-specific session bookkeeping (dispatch.go)
 run() / runTurn()          single-shot or TUI entry point; builds runners, drives router
 ```
 
-Any agent can be exposed as a callable tool to any other agent (Agent-as-Tool) — see [docs/tooling.md](tooling.md#agent-as-tool).
+Any agent can be exposed as a callable tool to any other agent (Agent-as-Tool) — see [docs/guides/tooling.md](../guides/tooling.md#agent-as-tool).
 
 ---
 
 ## Claude CLI escalation mechanics
 
-Implementation detail for the `claude-cli` provider specifically — see [docs/providers.md — Claude Code CLI](providers.md#claude-code-cli) for configuration, and [docs/workflows.md — Context handoff](workflows.md#context-handoff) for the cross-provider handoff format.
+Implementation detail for the `claude-cli` provider specifically — see [docs/guides/providers.md — Claude Code CLI](../guides/providers.md#claude-code-cli) for configuration, and [docs/guides/workflows.md — Context handoff](../guides/workflows.md#context-handoff) for the cross-provider handoff format.
 
 - **AWS credential injection**: when `aws_auth_refresh: true`, milk reads the `awsAuthRefresh` command from `~/.claude/settings.json`, runs it before each turn for fresh STS credentials, and injects them as explicit `AWS_*` env vars into the subprocess. Conflicting inherited vars (`AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_DEFAULT_*_MODEL`, `AWS_PROFILE`, etc.) are stripped to prevent wrong-account overrides. See ADR 23.
 - **First escalation turn**:
@@ -163,8 +163,8 @@ milk update install           # download and install it (replaces the milk binar
 ```
 
 `--output-format` and `milk serve --acp` are machine-readable output
-surfaces — see [docs/tooling.md — Machine-readable output](tooling.md#machine-readable-output)
-and, for ACP integration specifically, [docs/acp-integration.md](acp-integration.md).
+surfaces — see [docs/guides/tooling.md — Machine-readable output](../guides/tooling.md#machine-readable-output)
+and, for ACP integration specifically, [docs/reference/acp-integration.md](acp-integration.md).
 
 ### Interactive mode
 
@@ -172,9 +172,9 @@ and, for ACP integration specifically, [docs/acp-integration.md](acp-integration
 
 **Slash commands:** `/escalate`, `/primary`, `/sessions`, `/new`, `/clear`, `/resume`, `/drop`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/init`, `/open`, `/update`, `/notifications`, `/help`, `/exit` (`/list` is a deprecated hidden alias of `/sessions`, kept one release)
 
-**Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [session <id|prefix>] [json|<path>]` — see [docs/operations.md — Memory](operations.md#memory).
+**Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [session <id|prefix>] [json|<path>]` — see [docs/guides/operations.md — Memory](../guides/operations.md#memory).
 
-**Panel commands:** `/panel memory`, `/panel tasks`, `/panel background`, `/panel workflow` (also F1-F4) — see [docs/operations.md — Keyboard shortcuts](operations.md#keyboard-shortcuts) and [docs/workflows.md](workflows.md#the-native-workflow-engine).
+**Panel commands:** `/panel memory`, `/panel tasks`, `/panel background`, `/panel workflow` (also F1-F4) — see [docs/guides/operations.md — Keyboard shortcuts](../guides/operations.md#keyboard-shortcuts) and [docs/guides/workflows.md](../guides/workflows.md#the-native-workflow-engine).
 
 #### Tab completion and multi-value parameters
 
@@ -216,7 +216,7 @@ Persisted to config immediately, effective on next render.
 
 **/need** sets the current session goal (`/need <one-sentence goal>`); the primary agent calls this automatically when the user states a new objective. Shown in the memory panel and injected into escalation context.
 
-**/workflow** runs a named multi-agent pipeline in the background (`/workflow status` and `/workflow cancel` manage it) — see [docs/workflows.md — The native `/workflow` engine](workflows.md#the-native-workflow-engine).
+**/workflow** runs a named multi-agent pipeline in the background (`/workflow status` and `/workflow cancel` manage it) — see [docs/guides/workflows.md — The native `/workflow` engine](../guides/workflows.md#the-native-workflow-engine).
 
 **/config** manages configuration:
 
@@ -229,7 +229,7 @@ Persisted to config immediately, effective on next render.
 
 Same commands on the CLI as `milk config`, `milk config init`, `milk config show`, `milk config open`. Editor selection uses `config_editors` (see below).
 
-**`milk otel`** manages observability settings — see [docs/operations.md — Observability](operations.md#observability).
+**`milk otel`** manages observability settings — see [docs/guides/operations.md — Observability](../guides/operations.md#observability).
 
 **/open** opens any file in the configured editor: `/open <path>` (or `/open @<path>`, `@` stripped automatically). The agent can also open files via the `open_file` tool.
 
@@ -241,7 +241,7 @@ Same commands on the CLI as `milk config`, `milk config init`, `milk config show
 | `/update install` | Download and apply the newest release (status-bar progress in the TUI). The binary is replaced in place; the running milk process must be restarted to use it. On Windows the running binary cannot be replaced, so milk reports the saved download path instead of claiming success |
 | `/update skip` | Suppress the pending release: its tag is written to `update_skipped_version` and filtered from every later check (including the startup check) until a newer release appears |
 
-Startup/background release checks are throttled by `update_last_check` (at most once per 24h, shared between the TUI and ACP) and gated by `update_check`/`update_channel` (see Configuration). When a newer release is found at startup, the TUI shows a status-bar badge (`⬆ <tag> available — /update install`); `milk serve --acp` sends an equivalent one-shot notice per session (see [docs/acp-integration.md](acp-integration.md)).
+Startup/background release checks are throttled by `update_last_check` (at most once per 24h, shared between the TUI and ACP) and gated by `update_check`/`update_channel` (see Configuration). When a newer release is found at startup, the TUI shows a status-bar badge (`⬆ <tag> available — /update install`); `milk serve --acp` sends an equivalent one-shot notice per session (see [docs/reference/acp-integration.md](acp-integration.md)).
 
 The CLI equivalent is `milk update check` and `milk update install` (non-interactive; `install` ignores `/update skip` and always takes the latest release).
 
@@ -265,7 +265,7 @@ The CLI equivalent is `milk update check` and `milk update install` (non-interac
 | `--list` | List sessions for current cwd |
 | `--list --all` | List all sessions across all directories |
 | `--drop [--session <ref>]` | Delete the referenced session, or — without a ref — the cwd's current session |
-| `--output-format text\|json\|stream-json` | Single-prompt mode only (ignored by the REPL); `text` (default) is unchanged, `json`/`stream-json` emit machine-readable output — see [docs/tooling.md](tooling.md#machine-readable-output) |
+| `--output-format text\|json\|stream-json` | Single-prompt mode only (ignored by the REPL); `text` (default) is unchanged, `json`/`stream-json` emit machine-readable output — see [docs/guides/tooling.md](../guides/tooling.md#machine-readable-output) |
 
 **Resumed sessions in the TUI.** When the TUI starts on a stored session (the default for the cwd, or `--session`/`--continue`), the transcript is pre-populated with its prior user/assistant turns instead of the welcome screen, under a `[milk] resumed session …` banner. The window mirrors ACP's history replay: the first 10 and last 200 turns, each message capped at 8 KB, with a gap marker pointing at `/export` for the rest; tool calls and reasoning are not replayed. `--new` (and a session with no history) starts empty; `/new`, `/clear` and `/drop` keep the visible transcript as is.
 
@@ -273,7 +273,7 @@ The CLI equivalent is `milk update check` and `milk update install` (non-interac
 
 ## Configuration
 
-`~/.milk/config.json` — see [docs/providers.md](providers.md) for the full `agents`/provider field reference, [docs/workflows.md](workflows.md#customizing-the-rules-block) for the `rules` block, and [docs/tooling.md](tooling.md) for `agent_tools`/`mcp_servers`. This section covers the remaining root-level behavior fields.
+`~/.milk/config.json` — see [docs/guides/providers.md](../guides/providers.md) for the full `agents`/provider field reference, [docs/guides/workflows.md](../guides/workflows.md#customizing-the-rules-block) for the `rules` block, and [docs/guides/tooling.md](../guides/tooling.md) for `agent_tools`/`mcp_servers`. This section covers the remaining root-level behavior fields.
 
 ```json
 {
@@ -307,11 +307,11 @@ Ordered list of editor commands tried by `/config open` and `/open`; first found
 
 ### `max_background_agents` field
 
-Maximum concurrent `spawn_background_agent` jobs (ADR-0043) per session; non-positive or unset falls back to `3`. See [docs/operations.md — Background sub-agents](operations.md#background-sub-agents).
+Maximum concurrent `spawn_background_agent` jobs (ADR-0043) per session; non-positive or unset falls back to `3`. See [docs/guides/operations.md — Background sub-agents](../guides/operations.md#background-sub-agents).
 
 ### `background_agent_timeout_minutes` field
 
-Per-job hard timeout for a `spawn_background_agent` job (ADR-0043), in minutes, once it starts executing; non-positive or unset falls back to `20`. See [docs/operations.md — Background sub-agents](operations.md#background-sub-agents).
+Per-job hard timeout for a `spawn_background_agent` job (ADR-0043), in minutes, once it starts executing; non-positive or unset falls back to `20`. See [docs/guides/operations.md — Background sub-agents](../guides/operations.md#background-sub-agents).
 
 ```json
 "config_editors": ["code --wait", "$EDITOR", "nano"]
@@ -327,11 +327,11 @@ Which releases count as updates: `"pre"` (default) includes pre-releases, `"stab
 
 ### `acp_resume` field
 
-Resume-by-default adoption over ACP (`milk serve --acp`): when on (the default), `session/new` adopts the working directory's most recent stored session — with mandatory bounded history replay and a one-line notice — instead of starting empty. It is the TUI's `--continue` default mapped onto the entry point ACP clients actually call. Set `false` for strict-spec behavior (`session/new` always starts fresh); the per-request escape hatch is `_meta.milk.fresh: true`. Full semantics in [docs/acp-integration.md — Session resume, list, and history replay](acp-integration.md#session-resume-list-and-history-replay).
+Resume-by-default adoption over ACP (`milk serve --acp`): when on (the default), `session/new` adopts the working directory's most recent stored session — with mandatory bounded history replay and a one-line notice — instead of starting empty. It is the TUI's `--continue` default mapped onto the entry point ACP clients actually call. Set `false` for strict-spec behavior (`session/new` always starts fresh); the per-request escape hatch is `_meta.milk.fresh: true`. Full semantics in [docs/reference/acp-integration.md — Session resume, list, and history replay](acp-integration.md#session-resume-list-and-history-replay).
 
 ### ACP session parity
 
-The TUI and `milk serve --acp` share one session model — one conversation per working directory — and one session store, so a conversation continues the same way whichever surface opens it: TUI `--continue` ≈ ACP `session/new` adopting (the `acp_resume` default), TUI `--new` ≈ `acp_resume: false` or a per-request `_meta.milk.fresh: true`, and the in-chat vocabulary is one set on both surfaces: `/sessions` (renamed from `/list`), `/new`/`/clear`, `/resume <id|prefix|name>` ≈ `session/resume`, `/drop`. Over ACP a switch rebinds the conversation's store session behind its fixed wire handle (view rebinding — see [ADR-0051](adr/0051-acp-conversation-view-rebinding.md)). Session management over ACP (`session/list`/`resume`/`close`/delete, the session slash commands, `/export [session <id|prefix>] [json|<path>]`) and standard chat-history replay are specified in [docs/acp-integration.md](acp-integration.md).
+The TUI and `milk serve --acp` share one session model — one conversation per working directory — and one session store, so a conversation continues the same way whichever surface opens it: TUI `--continue` ≈ ACP `session/new` adopting (the `acp_resume` default), TUI `--new` ≈ `acp_resume: false` or a per-request `_meta.milk.fresh: true`, and the in-chat vocabulary is one set on both surfaces: `/sessions` (renamed from `/list`), `/new`/`/clear`, `/resume <id|prefix|name>` ≈ `session/resume`, `/drop`. Over ACP a switch rebinds the conversation's store session behind its fixed wire handle (view rebinding — see [ADR-0051](../adr/0051-acp-conversation-view-rebinding.md)). Session management over ACP (`session/list`/`resume`/`close`/delete, the session slash commands, `/export [session <id|prefix>] [json|<path>]`) and standard chat-history replay are specified in [docs/reference/acp-integration.md](acp-integration.md).
 
 ### `experimental_lazy_history_management` field
 

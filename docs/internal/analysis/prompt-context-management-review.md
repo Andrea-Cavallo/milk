@@ -58,7 +58,7 @@ in a third-party repo, not a live instruction — but worth knowing if you read 
   per-turn history array (`runner.go:266-280`), not folded into the cached system prompt.
 - History: `sessionToUnifiedMessages` → `buildAgentHistory`, trimmed by `trimLocalMessages`
   against a char budget (`message_budget_chars`/`local_context_budget_chars`, default 24000,
-  `docs/providers.md:673,702`).
+  `docs/guides/providers.md:673,702`).
 - Tool-result truncation: `capMemToolResult` (`local.go:1787-1813`) is a **tail-cut** — keeps the
   head, drops the tail, appends `"... (truncated)"`.
 - Prompt caching: OpenAI-compat implicit caching is read-only telemetry (parses
@@ -76,7 +76,7 @@ in a third-party repo, not a live instruction — but worth knowing if you read 
 2. **Context management is hard truncation, not summarization.** `trimLocalMessages` and the
    session "brick" builder both drop the *oldest* turns verbatim past a char budget; there is no
    LLM-driven compaction step. Facts are silently and permanently lost mid-session. Docs are
-   honest about this (`docs/providers.md:672-673`) but it's a real functional gap.
+   honest about this (`docs/guides/providers.md:672-673`) but it's a real functional gap.
 3. **Tail-cut tool-result truncation discards the part that usually matters.** For shell/build/
    test output, the error or exit status is typically at the *end* — `capMemToolResult` keeps the
    head and cuts the tail, the opposite of what's useful.
@@ -227,7 +227,7 @@ every real file path regex-extracted from the prompt text, plus `--read` for mil
 context temp files. Recommend updating/removing that memory entry. Residual limitation: file
 discovery still depends on the calling agent naming exact paths in its prompt text — no
 repo-map-driven discovery, and no MCP wiring for smolagents (that one's an explicitly-deferred
-non-bug per `docs/tooling.md:207`).
+non-bug per `docs/guides/tooling.md:207`).
 
 ---
 

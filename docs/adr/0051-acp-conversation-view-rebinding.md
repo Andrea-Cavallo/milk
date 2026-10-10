@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-10-09
 - **Issue:** Session-management refactor — plan D4
-  ([docs/session-management-refactor-plan.md](../session-management-refactor-plan.md)):
+  ([docs/internal/plans/session-management-refactor-plan.md](https://github.com/scoutme/milk/blob/main/docs/internal/plans/session-management-refactor-plan.md)):
   make `/new`, `/resume` and `/drop` work in a chat typed into an ACP client,
   not just in the milk TUI.
 
@@ -92,7 +92,7 @@ rebinds back to its first session.
   vocabulary already expresses everything, which is the point of the design.
 - A client sees freshly-ID'd messages after a switch (and after a switch
   back, the original IDs again). Documented deviation stands — "agents are
-  not required to retain `messageId`s"; `docs/acp-integration.md`'s "Message
+  not required to retain `messageId`s"; `docs/reference/acp-integration.md`'s "Message
   identity" section carries the note.
-- `docs/acp-integration.md`'s "Session commands and view rebinding"
+- `docs/reference/acp-integration.md`'s "Session commands and view rebinding"
   subsection is the user-facing spec of these rules.

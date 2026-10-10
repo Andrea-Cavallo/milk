@@ -4,7 +4,7 @@
 //
 // The committed artifact is docs/schema/stream-json.schema.json (whole-document
 // json.MarshalIndent per design §8.3) — the exact path ADR-0050 and
-// docs/machine-readable-output-design.md cite; it may not be renamed without a
+// docs/internal/design/machine-readable-output-design.md cite; it may not be renamed without a
 // superseding ADR. Regenerate with:
 //
 //	go generate ./internal/transport/streamjson/schema
@@ -30,7 +30,7 @@ const SchemaID = "https://github.com/scoutme/milk/docs/schema/stream-json.schema
 // cache_read/cache_creation naming rationale demanded by design §6.4.
 const Description = `Validates ONE line of milk's batch machine-readable output stream
 (milk "prompt" --output-format stream-json), the JSONL wire ratified in
-ADR-0049 and locked in detail by docs/machine-readable-output-design.md §6
+ADR-0049 and locked in detail by docs/internal/design/machine-readable-output-design.md §6
 (event catalog) and §8.3 (batch conventions).
 
 Framing rules the schema cannot express (enforced by the golden-file contract

@@ -68,7 +68,7 @@ var (
 		"multi-value":            "tab-completion-and-multi-value-parameters",
 		"multi-value parameters": "tab-completion-and-multi-value-parameters",
 
-		// Machine-readable output (docs/tooling.md §Machine-readable output —
+		// Machine-readable output (docs/guides/tooling.md §Machine-readable output —
 		// the ADR-0049/0050 batch + embedding wire contract).
 		"machine-readable-output": "machine-readable-output",
 		"machine readable output": "machine-readable-output",
@@ -91,7 +91,7 @@ var (
 
 func init() {
 	index = map[string]section{}
-	for _, name := range []string{"spec.md", "providers.md", "workflows.md", "tooling.md", "operations.md"} {
+	for _, name := range []string{"reference/spec.md", "guides/providers.md", "guides/workflows.md", "guides/tooling.md", "guides/operations.md"} {
 		data, err := docs.FS.ReadFile(name)
 		if err != nil {
 			continue

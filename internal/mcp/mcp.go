@@ -136,7 +136,7 @@ type Client struct {
 	// because the server needs the interactive /mcp auth flow (no token, or an
 	// expired one with no refresh token) — the TUI turns it into the same
 	// "run /mcp auth <server>" notice the claude-cli path emits
-	// (docs/tooling.md "Authorizing"). Rearmed by the next successful Connect.
+	// (docs/guides/tooling.md "Authorizing"). Rearmed by the next successful Connect.
 	onAuthRequired func(serverName string)
 	authNotified   bool
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the llama.cpp server for milk.
-# Reads configuration from ~/.milk/llama.env if present (see docs/setup.md).
+# Reads configuration from ~/.milk/llama.env if present (see docs/guides/providers.md).
 set -euo pipefail
 
 # Defaults — override in ~/.milk/llama.env
@@ -21,13 +21,13 @@ fi
 
 if [[ ! -x "$LLAMA_BIN" ]]; then
   echo "error: llama-server not found at $LLAMA_BIN" >&2
-  echo "       Set LLAMA_BIN or follow docs/setup.md" >&2
+  echo "       Set LLAMA_BIN or follow docs/guides/providers.md" >&2
   exit 1
 fi
 
 if [[ ! -f "$LLAMA_MODEL" ]]; then
   echo "error: model not found at $LLAMA_MODEL" >&2
-  echo "       Set LLAMA_MODEL or follow docs/setup.md" >&2
+  echo "       Set LLAMA_MODEL or follow docs/guides/providers.md" >&2
   exit 1
 fi
 

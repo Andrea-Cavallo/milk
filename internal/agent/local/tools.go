@@ -579,7 +579,7 @@ func spawnBackgroundAgentSchema() map[string]any {
 }
 
 // cancelBackgroundAgentSchema is the schema for the cancel_background_agent
-// tool (docs/prompt-context-management-review.md §8 rec #12) — the
+// tool (docs/internal/analysis/prompt-context-management-review.md §8 rec #12) — the
 // model-facing counterpart to the human-only `/bg stop` command, letting the
 // spawning agent itself cancel a job it decided is no longer needed. Gated
 // identically to spawnBackgroundAgentSchema (only appended when

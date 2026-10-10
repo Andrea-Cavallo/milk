@@ -5,7 +5,7 @@ file per recorded one-shot run (the whole run: the JSONL event stream from
 `system`/`init` to the terminal `result`). They are the executable form of the
 locked batch contract: [ADR-0050](../../../../docs/adr/0050-batch-stream-json-contract.md)
 (§6 catalog + §8.3 conventions, design doc
-[docs/machine-readable-output-design.md](../../../../docs/machine-readable-output-design.md)).
+[docs/internal/design/machine-readable-output-design.md](../../../../docs/internal/design/machine-readable-output-design.md)).
 
 ## Files
 

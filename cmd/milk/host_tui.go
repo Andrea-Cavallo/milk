@@ -10,7 +10,7 @@ import (
 
 // tuiHost implements events.Host for the TUI by wrapping the existing,
 // unchanged tuiInputReader/m.notify machinery — Phase 1 of
-// docs/machine-readable-output-design.md. See internal/events's package doc
+// docs/internal/design/machine-readable-output-design.md. See internal/events's package doc
 // for scope: State is a deliberate no-op here (see the design doc's Phase 1
 // status note for why), and Notify/Elicit are exercised only by tests today
 // — makeLocalPermAsk's RequestPermission call is the one production path

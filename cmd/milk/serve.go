@@ -17,7 +17,7 @@ import (
 var flagServeACP bool
 
 // serveCmd is `milk serve --acp` — the ACP v2 JSON-RPC stdio agent server
-// (docs/machine-readable-output-design.md §5/§7). Distinct from the
+// (docs/internal/design/machine-readable-output-design.md §5/§7). Distinct from the
 // existing, unrelated serverCmd (`milk server start|stop|status`, which
 // manages the local inference server process).
 var serveCmd = &cobra.Command{

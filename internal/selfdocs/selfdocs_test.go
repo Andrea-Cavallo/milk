@@ -52,7 +52,7 @@ func TestLookup_KnownAliasesResolve(t *testing.T) {
 }
 
 // TestLookup_MachineReadableOutputTopic pins the `machine-readable-output`
-// topic registered against docs/tooling.md's "Machine-readable output"
+// topic registered against docs/guides/tooling.md's "Machine-readable output"
 // section: it must mirror that section's contractual surface — the CLI flags,
 // the ACP entry point, the JSON Schema link and the design §6 reference — so
 // an agent looking up the topic gets the machine contract, not a stub.

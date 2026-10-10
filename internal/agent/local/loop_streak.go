@@ -17,7 +17,7 @@ import (
 // Several of the thresholds and detectors in this file are similarly scoped
 // to loop-detection mechanisms in MiMo-Code, compared directly during a
 // 2026-09-29 prompt/context-management review — see
-// docs/prompt-context-management-review.md for the full comparison and the
+// docs/internal/analysis/prompt-context-management-review.md for the full comparison and the
 // reasoning behind each value. These are independent implementations that
 // converged on comparable numbers/structure, not ports of MiMo-Code's code.
 

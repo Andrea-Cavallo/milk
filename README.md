@@ -22,7 +22,7 @@ Build from source instead (`git clone` + `task build`, or in one line):
 curl -fsSL https://raw.githubusercontent.com/scoutme/milk/main/install-from-source.sh | sh
 ```
 
-Requires Go 1.21+. See [docs/getting-started.md](docs/getting-started.md) for what to do next.
+Requires Go 1.21+. See [docs/start/getting-started.md](docs/start/getting-started.md) for what to do next.
 
 ## What it does
 
@@ -38,7 +38,7 @@ Requires Go 1.21+. See [docs/getting-started.md](docs/getting-started.md) for wh
 
 **Measure** — token usage by role (`/usage`), OpenTelemetry file exporters (`/metrics`, `/otel`), and `milk eval` — run the same scenarios against different agents and compare LLM-judged quality, tokens, cache efficiency, and latency side-by-side.
 
-**Embed** — `milk serve --acp` runs milk as a long-lived [Agent Client Protocol](https://agentclientprotocol.com) v2 agent an editor can spawn and drive over JSON-RPC; `--output-format json|stream-json` gives one-shot prompts a machine-readable alternative to the TUI for scripts and CI. See [docs/acp-integration.md](docs/acp-integration.md) for exactly what's implemented today.
+**Embed** — `milk serve --acp` runs milk as a long-lived [Agent Client Protocol](https://agentclientprotocol.com) v2 agent an editor can spawn and drive over JSON-RPC; `--output-format json|stream-json` gives one-shot prompts a machine-readable alternative to the TUI for scripts and CI. See [docs/reference/acp-integration.md](docs/reference/acp-integration.md) for exactly what's implemented today.
 
 ## Backends
 
@@ -91,7 +91,7 @@ milk eval run --agents "milk-tui[--agent,mimo-local]"    # pin a specific config
 milk eval report --results eval/results                 # re-print the last report
 ```
 
-See [docs/eval.md](docs/eval.md) for scenario format, per-adapter options, and judge configuration.
+See [docs/reference/eval.md](docs/reference/eval.md) for scenario format, per-adapter options, and judge configuration.
 
 ## Prerequisites
 
@@ -100,7 +100,7 @@ See [docs/eval.md](docs/eval.md) for scenario format, per-adapter options, and j
 - `aider-chat` pip package — only if using the `aider-cli` provider
 - `smolagents[litellm]` pip package — only if using the `subprocess`/smolagent provider
 
-See [docs/getting-started.md](docs/getting-started.md) for the fastest path to a working setup, [docs/providers.md](docs/providers.md) for provider-specific configuration (including a reference local setup with NVIDIA GPU, Ubuntu/WSL2, llama.cpp from source), and [docs/eval.md](docs/eval.md) for evaluating and comparing agents.
+See [docs/start/getting-started.md](docs/start/getting-started.md) for the fastest path to a working setup, [docs/guides/providers.md](docs/guides/providers.md) for provider-specific configuration (including a reference local setup with NVIDIA GPU, Ubuntu/WSL2, llama.cpp from source), and [docs/reference/eval.md](docs/reference/eval.md) for evaluating and comparing agents.
 
 ## Acknowledgments
 
@@ -112,4 +112,4 @@ milk's own, not ports:
 - **[MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code)** (Xiaomi's fork of OpenCode) — compared for loop-detection thresholds (the doom-loop gate, n-gram repetition monitor), prompt-caching breakpoint strategy, and checkpoint/distillation memory design.
 - **[OpenCode](https://github.com/anomalyco/opencode)** — compared for `AGENTS.md` project-instruction loading, sub-agent context isolation (`ForkContext`), and prompt-caching strategy.
 
-See [docs/prompt-context-management-review.md](docs/prompt-context-management-review.md) for the full comparison and what came out of it.
+See [docs/internal/analysis/prompt-context-management-review.md](docs/internal/analysis/prompt-context-management-review.md) for the full comparison and what came out of it.

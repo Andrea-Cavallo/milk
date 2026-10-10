@@ -1,6 +1,6 @@
 package main
 
-// Resume-by-default adoption pins (docs/acp-session-resume-plan.md D2/§4):
+// Resume-by-default adoption pins (docs/internal/plans/acp-session-resume-plan.md D2/§4):
 // session/new adopts the cwd's most-recent stored session iff acp_resume is
 // on, `_meta.milk.fresh` is not true, no live session exists for that cwd in
 // this process, the candidate wasn't closed this process, and the store holds

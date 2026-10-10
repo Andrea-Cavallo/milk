@@ -72,7 +72,7 @@ var _ acp.Handler = (*acpServer)(nil)
 // found" error — the correct way to express "not implemented yet" here (see
 // MethodNotFoundError's doc comment); the remaining deferred surface
 // (auth/*, the legacy v1 session/load) is listed
-// in docs/acp-integration.md's known gaps. (elicitation is wired the other
+// in docs/reference/acp-integration.md's known gaps. (elicitation is wired the other
 // way — the setup wizard sends elicitation/create to the client; see
 // acp_initwizard.go.)
 func (s *acpServer) HandleRequest(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -177,7 +177,7 @@ func (s *acpServer) handleSessionNew(params json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("session/new: cwd is required")
 	}
 
-	// Resume-by-default adoption (docs/acp-session-resume-plan.md D2): when
+	// Resume-by-default adoption (docs/internal/plans/acp-session-resume-plan.md D2): when
 	// the request is clearly the continuation case, session/new continues
 	// the cwd's most recent conversation instead of starting empty — the
 	// TUI's --continue default mapped onto the entry point clients actually
@@ -208,7 +208,7 @@ func (s *acpServer) handleSessionNew(params json.RawMessage) (any, error) {
 }
 
 // adoptCandidate returns the stored session session/new should adopt, or nil
-// to start fresh. Full adoption rule (docs/acp-session-resume-plan.md D2):
+// to start fresh. Full adoption rule (docs/internal/plans/acp-session-resume-plan.md D2):
 // adopt the most-recent stored session for req.cwd iff
 //  1. config acp_resume is on (default on),
 //  2. the request's _meta.milk.fresh is not true,
@@ -272,7 +272,7 @@ func (s *acpServer) currentConfig() config.Config {
 
 // registerACPSession builds an acpSession around sess (fresh or loaded) and
 // wires it into the server — the shared tail of session/new, session/resume
-// and resume-by-default adoption (docs/acp-session-resume-plan.md §3.2).
+// and resume-by-default adoption (docs/internal/plans/acp-session-resume-plan.md §3.2).
 func (s *acpServer) registerACPSession(sess *session.Session) (*acpSession, error) {
 	cfg := s.currentConfig()
 
@@ -302,7 +302,7 @@ type resumeResult struct {
 	sessionID acp.SessionID
 }
 
-// sessionListPageSize is the session/list page size (docs/acp-session-resume-plan.md D4).
+// sessionListPageSize is the session/list page size (docs/internal/plans/acp-session-resume-plan.md D4).
 const sessionListPageSize = 50
 
 // handleSessionList implements session/list (D4): every stored session,

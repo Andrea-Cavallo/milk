@@ -20,7 +20,7 @@ const (
 // acp.ACPHost/acp.Conn — mirrors host_tui.go's tuiHost structurally. Built
 // once per ACP session (acp_session.go) and wired for local-provider agents'
 // permission asks (makeLocalPermAsk) only — see
-// docs/machine-readable-output-design.md's status note for why
+// docs/internal/design/machine-readable-output-design.md's status note for why
 // claude-cli-as-escalation isn't wired through this.
 type acpHost struct {
 	host *acp.ACPHost

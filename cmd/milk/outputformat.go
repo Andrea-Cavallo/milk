@@ -13,7 +13,7 @@ import (
 )
 
 // outputFormat is the validated value of --output-format. See
-// docs/machine-readable-output-design.md §5/§6 and this file's accompanying
+// docs/internal/design/machine-readable-output-design.md §5/§6 and this file's accompanying
 // Phase (batch mode) status note for scope — this is intentionally a narrow
 // slice of the full event catalog, not full fidelity.
 type outputFormat string

@@ -252,7 +252,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// json/stream-json discard the raw passthrough (stdout becomes
 	// events-only per design §8.3) and capture the final text via onResponse
 	// instead — see outputformat.go and this file's status note in
-	// docs/machine-readable-output-design.md for scope.
+	// docs/internal/design/machine-readable-output-design.md for scope.
 	out := io.Writer(os.Stdout)
 	var enc *streamjson.Encoder
 	var onResponse func(string)
@@ -1691,7 +1691,7 @@ func trimLocalMessages(msgs []local.Message, budgetChars int) ([]local.Message, 
 // agent is nil, there is nothing worth summarizing, or the summarization
 // call itself fails (unsupported provider, network error, etc.) — a failed
 // compaction attempt must never block the turn.
-// See docs/prompt-context-management-review.md §8 rec #4.
+// See docs/internal/analysis/prompt-context-management-review.md §8 rec #4.
 func trimLocalMessagesWithCompaction(ctx context.Context, agent *local.Agent, sess *session.Session, msgs []local.Message, budgetChars int) ([]local.Message, bool) {
 	idx := trimSplitIndex(msgs, budgetChars)
 	if idx == 0 {

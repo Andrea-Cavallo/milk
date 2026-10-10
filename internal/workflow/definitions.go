@@ -94,7 +94,7 @@ type Stage struct {
 	// false: workflow roles are isolated from memory by design (a fresh
 	// scratch session per role, no session-orientation context) — this is a
 	// deliberate per-stage escape hatch, not a change to that default. See
-	// docs/prompt-context-management-review.md §8 rec #12.
+	// docs/internal/analysis/prompt-context-management-review.md §8 rec #12.
 	UseMemory bool `yaml:"use_memory,omitempty" json:"use_memory,omitempty"`
 
 	// loop / parallel_group

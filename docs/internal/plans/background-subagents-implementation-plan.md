@@ -153,11 +153,11 @@ This is a companion feature to ADR-0034 (Agent-as-Tool): that ADR lets an agent 
 
 ### Phase 7 — Docs
 
-**Files:** `docs/tooling.md`, `docs/operations.md`, `docs/spec.md`, `CLAUDE.md`
+**Files:** `docs/guides/tooling.md`, `docs/guides/operations.md`, `docs/reference/spec.md`, `CLAUDE.md`
 
-1. `docs/tooling.md`: add `spawn_background_agent` to the built-in tool list (§ built-in tools), with a short explanation and a pointer to ADR-0043.
-2. `docs/operations.md`: add `max_background_agents` to the config/operations reference table.
-3. `docs/spec.md`: add `max_background_agents` to the config field table.
+1. `docs/guides/tooling.md`: add `spawn_background_agent` to the built-in tool list (§ built-in tools), with a short explanation and a pointer to ADR-0043.
+2. `docs/guides/operations.md`: add `max_background_agents` to the config/operations reference table.
+3. `docs/reference/spec.md`: add `max_background_agents` to the config field table.
 4. `CLAUDE.md`: extend the existing "Token tracking: subagents and workflows" section's role-string table with `primary:subagent` (locally-spawned) alongside the existing Claude-CLI-observed `escalation:subagent`/`escalation:workflow`, and add a one-line pointer to ADR-0043 under "Key design decisions."
 
 ---

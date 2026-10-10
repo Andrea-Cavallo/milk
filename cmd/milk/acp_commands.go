@@ -44,7 +44,7 @@ type acpTurn struct {
 // nearly all of them these days (wizards, workflows and background jobs
 // included). Only genuinely TUI-bound commands (panels, colorization,
 // attachments, editor launching, …) are deliberately absent — see
-// docs/acp-integration.md.
+// docs/reference/acp-integration.md.
 func acpCommandTable() []acpCommand {
 	viaTUI := func(cmd string) func(*acpSession, string) (string, string) {
 		return func(as *acpSession, rest string) (string, string) {

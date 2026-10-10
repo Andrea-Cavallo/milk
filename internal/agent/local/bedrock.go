@@ -248,7 +248,7 @@ func appendSystemCachePoint(system []bedrockSystem) []bedrockSystem {
 // a fallback anchor, degrading the worst case to "recompute only the
 // removed message" instead. This is the same double-buffer strategy
 // MiMo-Code and OpenCode converged on independently — see
-// docs/prompt-context-management-review.md §8 rec #11. Bedrock allows up to
+// docs/internal/analysis/prompt-context-management-review.md §8 rec #11. Bedrock allows up to
 // 4 cache breakpoints total; this uses at most 3 (1 system + 2 message) to
 // leave headroom.
 //

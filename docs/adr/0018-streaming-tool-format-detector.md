@@ -259,7 +259,7 @@ auto-detection is strictly better UX.
 - Integration smoke test: send a fenced-JSON tool call through `streamCompletion`
   and verify no markup reaches `out`
 
-### Step 5 — `docs/memory-design.md` / `README.md`
+### Step 5 — `docs/internal/design/memory-design.md` / `README.md`
 
 - Document `--chat-template` as optional (recommended for performance, not
   required for correctness)

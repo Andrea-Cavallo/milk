@@ -1679,7 +1679,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		// per-request trim only ever shrinks a throwaway copy of msgs for
 		// one outgoing HTTP call — it never shrinks msgs itself, so the same
 		// oversized condition recurs every iteration for the rest of a long
-		// turn (see docs/session-2026-10-01-primary-overload-analysis.md).
+		// turn (see docs/internal/analysis/session-2026-10-01-primary-overload-analysis.md).
 		// messagesContentBytes is a cheap heuristic for *whether to check at
 		// all*; the exact marshaled-byte trim in streamCompletionOnce still
 		// runs on every request regardless, as the final safety net.
@@ -2048,7 +2048,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	// marker specifically so it doesn't lump a budget-exhausted step in
 	// with a loop-detector kill under the same "terminated by loop
 	// detection" message — see
-	// docs/prompt-context-management-review.md §8 rec #10.
+	// docs/internal/analysis/prompt-context-management-review.md §8 rec #10.
 	resp := iterationBudgetExhaustedMarker + "\n\n" + summarizeToolTrail(msgs, "")
 	if a.onResponseSegment != nil && resp != "" {
 		a.onResponseSegment(resp)
@@ -2167,7 +2167,7 @@ func retryBackgroundTask(ctx context.Context, jobID, model string, fn func() (st
 // injected as extra orientation. Deliberately reuses that existing capped
 // summary rather than snapshotting the raw, unbounded conversation array
 // the way OpenCode/MiMo-Code's ForkContext otherwise does — see
-// docs/prompt-context-management-review.md §9.3: this is inspired by that
+// docs/internal/analysis/prompt-context-management-review.md §9.3: this is inspired by that
 // mechanism, scoped down to fit milk's existing isolation-by-default safety
 // posture rather than a port of it.
 func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer, mem *memory.Store) (string, session.TokenUsage, error) {
@@ -3204,7 +3204,7 @@ func messagesContentBytes(msgs []Message) int {
 // oldest content piecemeal on every subsequent request for the rest of the
 // turn. Called from runToolLoop after payload-size trims have fired
 // a.payloadCompactionThreshold times in a row within the current
-// turn — see docs/escalation-and-context-enhancements-plan.md Track B Phase 2
+// turn — see docs/internal/plans/escalation-and-context-enhancements-plan.md Track B Phase 2
 // for why a request-local trim alone can't fix the thrashing it was
 // originally meant to describe: that trim builds a smaller copy for one
 // outgoing request only and never shrinks runToolLoop's own, ever-growing
@@ -4048,7 +4048,7 @@ var ErrCompactionUnsupported = errors.New("compaction summarization not supporte
 // Summarize asks the model for a concise summary of text — used to compact
 // conversation history that would otherwise be hard-dropped once it exceeds
 // the message budget (see cmd/milk/main.go's trimLocalMessagesWithCompaction
-// and docs/prompt-context-management-review.md §8 rec #4). It is a plain,
+// and docs/internal/analysis/prompt-context-management-review.md §8 rec #4). It is a plain,
 // single-shot, non-streaming, tool-free completion call — deliberately not
 // routed through Run/runToolLoop, which carry tool-calling, memory, and
 // percept side effects that have no place in a one-off summarization call.

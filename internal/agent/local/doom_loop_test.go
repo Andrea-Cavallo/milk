@@ -64,7 +64,7 @@ func TestDoomLoopGate_InteractiveApprove_ContinuesAndResets(t *testing.T) {
 
 // TestDoomLoopGate_InteractiveDeny_Escalates: a denial is itself a strong
 // signal the primary model isn't handling the task well, so — as of
-// docs/escalation-and-context-enhancements-plan.md Track A Phase 3 — a
+// docs/internal/plans/escalation-and-context-enhancements-plan.md Track A Phase 3 — a
 // denied doom_loop ask escalates to a more capable agent instead of just
 // terminating the turn, whenever a real escalation path exists (ordinary
 // live turn: not a workflow step, not a background job, not a tool-agent
