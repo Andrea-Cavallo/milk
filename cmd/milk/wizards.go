@@ -1209,11 +1209,28 @@ func (m model) rebuildRunners() (model, tea.Cmd) {
 		// Local HTTP provider. The fresh agent starts without blocking on
 		// credential refresh (same as startup) — warm-up is kicked off below,
 		// once the runners are swapped.
-		newAgent := wireLocal(local.NewFromConfig(applyFreshAWSCreds(cfg, activeLocalAgentConfig(cfg))))
+		freshAC := applyFreshAWSCreds(cfg, activeLocalAgentConfig(cfg))
+		// Launch run_cmd when the server isn't up yet — startup does this
+		// synchronously before its availability Ping (runTUI), and a rebuild
+		// must too or the fresh agent reads unavailable and every turn falls
+		// back to escalation until a restart.
+		if freshAC.RunCmd != "" && !isReachable(freshAC.URL) {
+			m.appendTranscript(milkTag() + " starting local inference server…\n")
+			if err := ensureServerRunning(m.ctx, freshAC.URL, freshAC.RunCmd, freshAC.Name); err != nil {
+				m.appendTranscript(fmt.Sprintf("%s warning: run_cmd failed: %v\n", milkTag(), err))
+			}
+		}
+		newAgent := wireLocal(local.NewFromConfig(freshAC))
 		m.agents.local = newAgent
 		m.agents.subprocessPrimary = nil
 		m.agents.localAvail = newAgent.Ping(m.ctx) == nil
 		m.agents.primary = newLocalRunner(newAgent, primaryName)
+	}
+	if m.agents.primary != nil && !m.agents.localAvail {
+		// Make the fallback visible instead of silently routing around the
+		// configured primary — turns re-check availability and pick the
+		// primary up as soon as it answers (see refreshTurnAvailability).
+		m.appendTranscript(fmt.Sprintf("%s warning: %s primary agent unreachable — turns fall back to escalation until it answers\n", milkTag(), primaryName))
 	}
 
 	// The escalation side shares one claude-cli agent with buildTUIAgents'

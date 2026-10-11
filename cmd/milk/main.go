@@ -393,6 +393,17 @@ func buildPrimaryRunner(_ context.Context, cfg config.Config, cwd string, sess *
 		return r, nil, nil
 	}
 
+	// Launch run_cmd when the configured server isn't up yet — the same
+	// synchronous start the TUI startup path does before its availability
+	// Ping — so callers that build runners mid-session (ACP's buildRunners on
+	// /config init, single-prompt) don't come up with an unreachable primary
+	// just because the server wasn't started.
+	if startAC := activeLocalAgentConfig(cfg); startAC.RunCmd != "" && !isReachable(startAC.URL) {
+		if err := ensureServerRunning(context.Background(), startAC.URL, startAC.RunCmd, startAC.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "%s warning: run_cmd failed: %v\n", milkTag(), err)
+		}
+	}
+
 	ac := applyFreshAWSCreds(cfg, primaryAC)
 	la := local.NewFromConfig(ac)
 	if od, err := config.OtelDir(); err == nil {

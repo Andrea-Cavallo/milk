@@ -3779,8 +3779,10 @@ func spinnerTick() tea.Cmd {
 
 // runTurn routes a prompt to the appropriate agent, writing output to out.
 func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agents *dispatchAgents, input string, out io.Writer, ir ...inputReader) error {
-	localAvail := agents.localAvail
-	escalationAvail := agents.escalationAvail
+	// An agent that read unavailable when the runners were built may just not
+	// have been up yet — re-check instead of freezing the fallback until a
+	// restart (see refreshTurnAvailability).
+	localAvail, escalationAvail := refreshTurnAvailability(ctx, rtr, agents)
 
 	rt, routeErr := routeTurn(ctx, st, rtr, input, localAvail, escalationAvail)
 	if routeErr != nil {

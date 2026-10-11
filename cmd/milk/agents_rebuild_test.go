@@ -2,10 +2,32 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
+	"github.com/scoutme/milk/internal/router"
 )
+
+// newRebuildTestModel builds the minimum model rebuildRunners needs — with
+// the transcript accumulators newModel sets up (appendTranscript writes to
+// them on the warning paths).
+func newRebuildTestModel(t *testing.T, cfg config.Config) model {
+	t.Helper()
+	return model{
+		ctx:               context.Background(),
+		st:                &interactiveState{cfg: cfg, cwd: t.TempDir()},
+		transcript:        &strings.Builder{},
+		transcriptNoThink: &strings.Builder{},
+	}
+}
 
 // TestAgentConfigChanged pins what triggers a live runner rebuild on config
 // hot-reload: only changes that affect what rebuildRunners constructs.
@@ -55,7 +77,7 @@ func TestRebuildRunners_SubprocessProviders(t *testing.T) {
 		},
 		EscalationAgent: "aid",
 	}
-	m := model{ctx: context.Background(), st: &interactiveState{cfg: cfg, cwd: t.TempDir()}}
+	m := newRebuildTestModel(t, cfg)
 	m, _ = m.rebuildRunners()
 
 	if _, ok := m.agents.primary.(*subprocessRunner); !ok {
@@ -88,7 +110,7 @@ func TestRebuildRunners_LocalPrimary(t *testing.T) {
 			{Name: "qwen", Provider: "local", URL: "://invalid", Model: "qwen2.5-coder"},
 		},
 	}
-	m := model{ctx: context.Background(), st: &interactiveState{cfg: cfg, cwd: t.TempDir()}}
+	m := newRebuildTestModel(t, cfg)
 	m, _ = m.rebuildRunners()
 
 	if m.agents.local == nil {
@@ -136,5 +158,97 @@ func TestRefreshMCPForRole_CLIPrimaryDoesNotClobberEscalation(t *testing.T) {
 	}
 	if m2.agents.primary == TurnRunner(primary) {
 		t.Error("primary runner must be swapped for one carrying the server list")
+	}
+}
+
+// TestRefreshTurnAvailability_SelfHeals pins the per-turn availability
+// re-check: an agent that read unavailable when the runners were built (server
+// still booting, config reloaded while it was down) must be picked up as soon
+// as it answers, instead of freezing the escalation fallback until a restart.
+func TestRefreshTurnAvailability_SelfHeals(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	cfg := config.Config{Agents: []config.AgentConfig{{Name: "a", Provider: "local", URL: srv.URL, Model: "m"}}}
+	agent := local.NewFromConfig(cfg.Agents[0])
+	agents := &dispatchAgents{
+		primary: newLocalRunner(agent, "a"),
+		local:   agent,
+		// Built while the server was down — the frozen state being tested.
+		localAvail: false,
+	}
+	rtr := router.New(cfg, nil)
+
+	localAvail, _ := refreshTurnAvailability(context.Background(), rtr, agents)
+	srv.Close()
+	if !localAvail {
+		t.Error("a healthy primary must self-heal to available")
+	}
+	if !agents.localAvail {
+		t.Error("the recovered flag must stick on the agent set")
+	}
+}
+
+// TestRefreshTurnAvailability_DownAgentStaysDownBounded pins the other side:
+// a genuinely unreachable agent keeps falling back — and the re-check is
+// bounded so it can never stall the turn.
+func TestRefreshTurnAvailability_DownAgentStaysDownBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close() // now refuses connections
+
+	agent := local.NewFromConfig(config.AgentConfig{Name: "d", URL: url, Model: "m"})
+	agents := &dispatchAgents{primary: newLocalRunner(agent, "d"), localAvail: false}
+
+	start := time.Now()
+	localAvail, _ := refreshTurnAvailability(context.Background(), router.New(config.Config{}, nil), agents)
+	if localAvail {
+		t.Error("an unreachable primary must stay unavailable")
+	}
+	if agents.localAvail {
+		t.Error("the agent set must not record an unreachable agent as available")
+	}
+	if elapsed := time.Since(start); elapsed > availPingTimeout+2*time.Second {
+		t.Errorf("re-check took %v — it must be bounded by availPingTimeout", elapsed)
+	}
+}
+
+// TestRebuildRunners_StartsRunCmdServer pins the /config init regression: a
+// local provider committed with a run_cmd must have its server started by the
+// live rebuild (as startup does), so the configured primary is available
+// immediately instead of falling back to escalation until a restart.
+func TestRebuildRunners_StartsRunCmdServer(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available to serve as a test inference server")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	// Keep PID/log files out of the real home directory.
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() { _, _ = serverStop("qwen") })
+
+	cfg := config.Config{
+		Agent: "qwen",
+		Agents: []config.AgentConfig{{
+			Name:     "qwen",
+			Provider: "local",
+			URL:      fmt.Sprintf("http://127.0.0.1:%d", port),
+			Model:    "m",
+			// exec replaces the sh -c wrapper so serverStop's PID is the
+			// server itself.
+			RunCmd: fmt.Sprintf("exec python3 -m http.server %d --bind 127.0.0.1", port),
+		}},
+	}
+	m := newRebuildTestModel(t, cfg)
+	m, _ = m.rebuildRunners()
+
+	if !m.agents.localAvail {
+		t.Fatal("rebuild must start run_cmd and see the primary as available")
+	}
+	if _, ok := m.agents.primary.(*localRunner); !ok {
+		t.Fatalf("primary runner = %T, want *localRunner", m.agents.primary)
 	}
 }

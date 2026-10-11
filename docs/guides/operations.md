@@ -239,6 +239,8 @@ On success: `[milk] config reloaded`. On error: `[milk] config reload error: <re
 
 **Not hot-reloaded**: a running turn's config snapshot, and MCP OAuth authorization (still requires the interactive `/mcp auth <server>` flow).
 
+**Availability is never frozen**: a rebuilt runner with a `run_cmd` has its server started right away (as at startup), and if an agent still reads unavailable when the runners were built — server booting, or config reloaded while it was down — every turn re-checks it (bounded, so a dead host can't stall a turn) and routes to it again as soon as it answers. No restart needed to recover.
+
 ### Recovering from a corrupted `config.json`
 
 Two safety nets:
