@@ -235,9 +235,9 @@ milk watches `~/.milk/config.json` while the TUI is running; a save from another
 
 On success: `[milk] config reloaded`. On error: `[milk] config reload error: <reason>` — the existing in-memory config is kept, nothing crashes.
 
-**Hot-reloaded**: scalar fields (`direct_bash`, `show_reasoning`, `sticky_escalation`, routing rules, OTel settings, …), agent configs (effective next turn), and MCP server connections (stale connections closed and the toolset rebuilt for affected roles, gated on an actual change — a turn already in flight keeps its original snapshot).
+**Hot-reloaded**: scalar fields (`direct_bash`, `show_reasoning`, `sticky_escalation`, routing rules, OTel settings, …), agent configurations — when the `agents` list, `agent`/`escalation_agent`, or the agent-as-tool list changes, the primary/escalation runners are rebuilt in place (`[milk] agents rebuilt from config`; claude-cli, subprocess/aider-cli and local providers all included) and take effect on the next turn — and MCP server connections (stale connections closed and the toolset rebuilt for affected roles, gated on an actual change — a turn already in flight keeps its original snapshot). The same rebuild runs when `/config init` or `/agent add`/`/agent switch` commit a change, so a configured agent is usable immediately — no restart.
 
-**Not hot-reloaded**: a running turn's config snapshot, new `TurnRunner` instances for the `agents` list (built next turn), and MCP OAuth authorization (still requires the interactive `/mcp auth <server>` flow).
+**Not hot-reloaded**: a running turn's config snapshot, and MCP OAuth authorization (still requires the interactive `/mcp auth <server>` flow).
 
 ### Recovering from a corrupted `config.json`
 

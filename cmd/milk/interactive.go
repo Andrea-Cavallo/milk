@@ -242,7 +242,7 @@ const interactiveHelp = `
   /config init           run the setup wizard (configure primary + escalation agents)
   /config open           open config in $EDITOR / system default editor
   /init                  alias for /config init — run the setup wizard
-  /reload                re-parse config.json immediately (same as the auto-watcher)
+  /reload                re-parse config.json immediately (same as the auto-watcher) — agent changes rebuild the runners for the next turn
   /open <file>           open any file in $EDITOR (agent can also call the open_file tool)
   /setup telegram        configure Telegram remote oversight interactively
   /setup telegram on     enable Telegram (credentials must already be configured)

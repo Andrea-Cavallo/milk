@@ -15,8 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/scoutme/milk/internal/agent/aider"
 	"github.com/scoutme/milk/internal/agent/claude"
 	"github.com/scoutme/milk/internal/agent/local"
+	"github.com/scoutme/milk/internal/agent/smolagent"
 	"github.com/scoutme/milk/internal/agent/subprocess"
 	"github.com/scoutme/milk/internal/agentprompt"
 	"github.com/scoutme/milk/internal/config"
@@ -791,6 +793,37 @@ type subprocessRunner struct {
 	name       string
 	mcpServers []config.MCPServerConfig
 	mcpToolSet *mcp.ToolSet
+}
+
+// buildSubprocessAgent constructs the subprocess agent for ac — smolagent
+// (deploying the bundled milk-smolagent script when no explicit bin is set) or
+// aider-cli — and applies the shared log-context/debug-log wiring. Used by the
+// live-rebuild path; buildPrimaryRunner/buildEscalationRunner inline the same
+// construction for the startup paths.
+func buildSubprocessAgent(ac config.AgentConfig, cfg config.Config) (*subprocess.Agent, error) {
+	var sp *subprocess.Agent
+	switch {
+	case ac.IsSubprocess():
+		if ac.Bin == "" {
+			scriptPath, err := ensureSmolagentScript()
+			if err != nil {
+				return nil, fmt.Errorf("deploy milk-smolagent: %w", err)
+			}
+			ac.Bin = scriptPath
+		}
+		sp = smolagent.New(ac)
+	case ac.IsAiderCLI():
+		sp = aider.New(ac)
+	default:
+		return nil, fmt.Errorf("unsupported subprocess provider: %s", ac.Provider)
+	}
+	sp = sp.WithLogContext(cfg.Otel.LogContext)
+	if dbg, err := openSubprocessDebugLog(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "%s warning: cannot open subprocess debug log: %v\n", milkTag(), err)
+	} else if dbg != nil {
+		sp = sp.WithDebugLog(dbg)
+	}
+	return sp, nil
 }
 
 func newSubprocessRunner(agent *subprocess.Agent, name string) *subprocessRunner {
