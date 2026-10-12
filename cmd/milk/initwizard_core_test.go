@@ -24,7 +24,7 @@ func localWizardOpts(numAgents int) initWizardOpts {
 func TestInitWizardApply_LocalProviderFlow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	st, banner := initWizardStart()
+	st, banner := initWizardStart("")
 	if !strings.Contains(banner, "setup wizard") {
 		t.Fatalf("banner = %q, want the setup-wizard banner", banner)
 	}
@@ -85,7 +85,7 @@ func TestInitWizardApply_LocalProviderFlow(t *testing.T) {
 func TestInitWizardApply_BearerFlow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	st, _ := initWizardStart()
+	st, _ := initWizardStart("")
 	opts := localWizardOpts(0)
 
 	initWizardApply(st, "orb", opts)                          // name
@@ -128,7 +128,7 @@ func TestInitWizardApply_BearerFlow(t *testing.T) {
 func TestInitWizardApply_ValidationReprompts(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	st, _ := initWizardStart()
+	st, _ := initWizardStart("")
 	opts := localWizardOpts(1)
 
 	initWizardApply(st, "", opts) // name → provider
@@ -155,7 +155,7 @@ func TestInitWizardApply_ValidationReprompts(t *testing.T) {
 func TestInitWizardApply_OpenEditorQuestionTUI(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	st, _ := initWizardStart()
+	st, _ := initWizardStart("")
 	opts := initWizardOpts{NumAgents: 1, OfferOpenEditor: true}
 
 	initWizardApply(st, "", opts)                      // name
@@ -229,14 +229,14 @@ func TestConfigShowRendered(t *testing.T) {
 	if err := config.Save(config.Config{Agent: "x", Agents: []config.AgentConfig{{Name: "x", URL: "http://localhost:1", Model: "m", Provider: "local"}}}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	out, err := renderConfigShow()
+	out, err := renderConfigShow("")
 	if err != nil {
 		t.Fatalf("renderConfigShow: %v", err)
 	}
 	if !strings.Contains(out, "```json") || !strings.Contains(out, "config") {
 		t.Errorf("renderConfigShow = %q, want fenced JSON", out)
 	}
-	jout, err := renderConfigJSON()
+	jout, err := renderConfigJSON("")
 	if err != nil {
 		t.Fatalf("renderConfigJSON: %v", err)
 	}

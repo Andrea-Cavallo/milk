@@ -32,7 +32,7 @@ func TestHandleInitWizardKey_CommitRebuildsRunners(t *testing.T) {
 	cfg := config.Config{}
 	st := &interactiveState{cfg: cfg, cwd: t.TempDir()}
 	m := newModel(context.Background(), st, router.New(cfg, nil), dispatchAgents{}, nil)
-	m.pendingInit, _ = initWizardStart()
+	m.pendingInit, _ = initWizardStart("")
 
 	answer := func(s string) {
 		t.Helper()

@@ -34,13 +34,13 @@ var (
 // without the write-back on the boring path, every surface would re-hit the
 // release feed on every start while up to date and the shared 24h debounce
 // would never hold. cfg is mutated and saved to the auto-detected scope.
-func updateCheck(ctx context.Context, cfg *config.Config) (*updater.Release, error) {
+func updateCheck(ctx context.Context, cfg *config.Config, dir string) (*updater.Release, error) {
 	rel, err := updater.CheckLatest(ctx, version, cfg.UpdateCheckIncludePrerelease())
 	if err != nil {
 		return nil, err
 	}
 	cfg.UpdateLastCheck = time.Now().UTC().Format(time.RFC3339)
-	_ = saveLocalOrGlobal(*cfg)
+	_ = saveLocalOrGlobal(*cfg, dir)
 	if rel != nil && rel.Tag == cfg.UpdateSkippedVersion {
 		return nil, nil
 	}
@@ -65,9 +65,9 @@ func updateInstall(ctx context.Context, rel *updater.Release, progress func(done
 // skipUpdateRelease records tag as the skipped release in config. The skip
 // is honored by every check path afterwards (updateCheck's filter) until a
 // newer release appears.
-func skipUpdateRelease(cfg *config.Config, tag string) {
+func skipUpdateRelease(cfg *config.Config, tag string, dir string) {
 	cfg.UpdateSkippedVersion = tag
-	_ = saveLocalOrGlobal(*cfg)
+	_ = saveLocalOrGlobal(*cfg, dir)
 }
 
 // updateAvailableNotice is the out-of-band "new release" line, used by the

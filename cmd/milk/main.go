@@ -151,6 +151,12 @@ func run(cmd *cobra.Command, args []string) error {
 
 	prompt := strings.TrimSpace(strings.Join(args, " "))
 
+	// Initial load: global base (config.Dir() — ~/.milk or the
+	// --config-root/MILK_CONFIG_ROOT state root) merged with the process-cwd
+	// overlay, which is the selected dir until a session binds. If the
+	// session resolved below lives under another directory, run() and
+	// runREPL re-merge against its dir (LoadMergedIn) before anything reads
+	// cfg — this is NOT the only merge point.
 	cfg, err := config.LoadMerged()
 	startupWarning := ""
 	if err != nil {
@@ -215,6 +221,14 @@ func run(cmd *cobra.Command, args []string) error {
 	sess, err := loadSessionForRun(cwd)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
+	}
+	// A session resolved by id can live under another directory — reload so
+	// its project-local config (the currently selected dir) applies to this
+	// run instead of the launch cwd's.
+	if sess.CWD != "" && sess.CWD != cwd {
+		if fresh, ferr := config.LoadMergedIn(sess.CWD); ferr == nil {
+			cfg = fresh
+		}
 	}
 
 	sessionStart := time.Now()
@@ -2322,18 +2336,18 @@ func promptLocalOrGlobal() string {
 // then silently flipped every later command's scope default to "local".
 func saveConfigForScope(cfg config.Config, scope string) error {
 	if scope == "local" {
-		if err := ensureLocalConfig(); err != nil {
+		if err := ensureLocalConfig(""); err != nil {
 			return err
 		}
 	}
 	return config.SaveScope(cfg, scope)
 }
 
-// ensureLocalConfig creates .milk/config.json with a minimal empty object if
-// it doesn't exist yet. Called after the user answers "Y" to the scope prompt
-// but no local config file is present.
-func ensureLocalConfig() error {
-	p, err := config.LocalConfigPath()
+// ensureLocalConfig creates .milk/config.json under dir ("" = process cwd)
+// with a minimal empty object if it doesn't exist yet. Called after the user
+// answers "Y" to the scope prompt but no local config file is present.
+func ensureLocalConfig(dir string) error {
+	p, err := config.LocalConfigPathIn(dir)
 	if err != nil {
 		return err
 	}
@@ -2433,7 +2447,7 @@ func runConfigOpen() error {
 		if err != nil {
 			return err
 		}
-		if err := ensureLocalConfig(); err != nil {
+		if err := ensureLocalConfig(""); err != nil {
 			return err
 		}
 		cfgPath = p
@@ -2565,7 +2579,7 @@ func init() {
 
 			fmt.Printf("current version: %s\n", version)
 			fmt.Println("checking for updates…")
-			rel, err := updateCheck(ctx, &cfg)
+			rel, err := updateCheck(ctx, &cfg, "")
 			if err != nil {
 				return fmt.Errorf("update check: %w", err)
 			}

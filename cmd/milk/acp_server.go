@@ -220,7 +220,7 @@ func (s *acpServer) handleSessionNew(params json.RawMessage) (any, error) {
 // preserve "new thread" inside a running client and stop an explicitly closed
 // thread from resurrecting; only the first open of a workspace adopts.
 func (s *acpServer) adoptCandidate(req acp.NewSessionRequest) *session.Session {
-	if !s.currentConfig().ACPResumeEnabled() { // 1
+	if !s.currentConfig("").ACPResumeEnabled() { // 1
 		return nil
 	}
 	if milkMeta, _ := req.Meta["milk"].(map[string]any); milkMeta["fresh"] == true { // 2
@@ -261,10 +261,12 @@ func (s *acpServer) adoptCandidate(req acp.NewSessionRequest) *session.Session {
 // currentConfig returns the freshest usable config: re-read from disk — a
 // serve process outlives any single session, and /config init (or an external
 // editor) may have rewritten the config since startup, so a decision or
-// session created afterwards must see it, not the startup snapshot. Falls
-// back to the startup config when the file can't be read.
-func (s *acpServer) currentConfig() config.Config {
-	if fresh, err := config.LoadMerged(); err == nil {
+// session created afterwards must see it, not the startup snapshot. dir is
+// the session's directory: the project-local overlay resolves against the
+// *currently selected* dir ("" = process cwd), never a fixed default.
+// Falls back to the startup config when the file can't be read.
+func (s *acpServer) currentConfig(dir string) config.Config {
+	if fresh, err := config.LoadMergedIn(dir); err == nil {
 		return fresh
 	}
 	return s.cfg
@@ -274,7 +276,7 @@ func (s *acpServer) currentConfig() config.Config {
 // wires it into the server — the shared tail of session/new, session/resume
 // and resume-by-default adoption (docs/internal/plans/acp-session-resume-plan.md §3.2).
 func (s *acpServer) registerACPSession(sess *session.Session) (*acpSession, error) {
-	cfg := s.currentConfig()
+	cfg := s.currentConfig(sess.CWD)
 
 	as, err := newACPSession(cfg, sess, s.conn, acp.SessionID(sess.ID))
 	if err != nil {

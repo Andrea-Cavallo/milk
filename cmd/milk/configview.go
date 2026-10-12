@@ -21,9 +21,12 @@ import (
 // renderConfigJSON returns the bare /config output: a header naming the config
 // scope followed by the merged config as a fenced JSON block. The caller owns
 // presentation details beyond that (the TUI forces a colorize, ACP strips the
-// header's ANSI).
-func renderConfigJSON() (string, error) {
-	_, _, merged, hasLocal, err := config.LoadWithLocal()
+// header's ANSI). dir is the currently selected directory the local overlay
+// resolved against ("" = process cwd) — see activeConfigDir; the header names
+// the *actual* paths so a sandboxed root (--config-root/MILK_CONFIG_ROOT) or
+// a project-local override is never mislabeled as ~/.milk.
+func renderConfigJSON(dir string) (string, error) {
+	_, _, merged, hasLocal, err := config.LoadWithLocalIn(dir)
 	if err != nil {
 		return "", err
 	}
@@ -31,25 +34,31 @@ func renderConfigJSON() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshalling config: %w", err)
 	}
-	header := milkTag() + " ~/.milk/config.json"
+	globalPath := config.ConfigPathLabel()
+	header := milkTag() + " " + globalPath
 	if hasLocal {
-		header = milkTag() + " merged config (global + local overrides)"
+		localPath, lerr := config.LocalConfigPathIn(dir)
+		if lerr != nil {
+			localPath = filepath.Join(config.LocalConfigDir, "config.json")
+		}
+		header = milkTag() + " merged config (global: " + globalPath + " + local: " + localPath + ")"
 	}
 	return header + "\n```json\n" + string(data) + "\n```\n", nil
 }
 
 // renderConfigShow returns the /config show output: the merged config with a
 // per-field [global]/[local]/[default] source annotation, plus the full merged
-// JSON behind a details block.
-func renderConfigShow() (string, error) {
-	global, local, merged, hasLocal, err := config.LoadWithLocal()
+// JSON behind a details block. dir is the currently selected directory (see
+// renderConfigJSON).
+func renderConfigShow(dir string) (string, error) {
+	global, local, merged, hasLocal, err := config.LoadWithLocalIn(dir)
 	if err != nil {
 		return "", err
 	}
 
 	if !hasLocal {
 		data, _ := json.MarshalIndent(merged, "", "  ")
-		return milkTag() + " no local config — all values from global\n```json\n" + string(data) + "\n```\n", nil
+		return milkTag() + " no local config — all values from global (" + config.ConfigPathLabel() + ")\n```json\n" + string(data) + "\n```\n", nil
 	}
 
 	// Build source annotations per top-level field.
@@ -100,21 +109,43 @@ func renderConfigShow() (string, error) {
 }
 
 // configOpenTarget returns the config file the "open" action targets — the
-// local config when one exists (its unset fields inherit from global), else
-// the global config — plus whether the target is the local one. Shared by the
+// local config when one exists in dir (its unset fields inherit from global),
+// else the global config — plus whether the target is the local one. dir is
+// the currently selected directory ("" = process cwd). Shared by the
 // TUI (commands.go), the CLI (main.go's runConfigOpen uses the same rule) and
 // the ACP server (acp_commands.go) so the hosts never disagree on which file
 // "open" means.
-func configOpenTarget() (path string, local bool, err error) {
-	if config.HasLocalConfig() {
-		p, err := config.LocalConfigPath()
+func configOpenTarget(dir string) (path string, local bool, err error) {
+	if config.HasLocalConfigIn(dir) {
+		p, err := config.LocalConfigPathIn(dir)
 		return p, true, err
 	}
-	dir, err := config.Dir()
+	d, err := config.Dir()
 	if err != nil {
 		return "", false, err
 	}
-	return filepath.Join(dir, "config.json"), false, nil
+	return filepath.Join(d, "config.json"), false, nil
+}
+
+// activeConfigDir returns the directory project-local config must resolve
+// against for st: the bound session's CWD — the *currently selected*
+// directory, which is what the user chose in the host (the ACP client's
+// workspace dir, or the /resume'd session's dir) — falling back to the
+// session-start cwd, then to "" (= process cwd, for stateless contexts).
+// Project-local config follows this, never a fixed default: resuming a
+// session stored under another directory must merge *that* directory's
+// .milk/config.json.
+func activeConfigDir(st *interactiveState) string {
+	if st == nil {
+		return ""
+	}
+	if st.sess != nil && st.sess.CWD != "" {
+		return st.sess.CWD
+	}
+	if st.cwd != "" {
+		return st.cwd
+	}
+	return ""
 }
 
 // openPathDetached makes path appear in the user's desktop environment by

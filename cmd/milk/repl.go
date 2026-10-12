@@ -1915,7 +1915,7 @@ func (m model) Init() tea.Cmd {
 			// updateCheck (not the raw updater call): the skipped-release
 			// filter and the last-check write-back apply to the startup
 			// check too — a skipped release must not nag again on restart.
-			rel, err := updateCheck(ctx, &cfg)
+			rel, err := updateCheck(ctx, &cfg, activeConfigDir(m.st))
 			if err != nil || rel == nil {
 				return nil
 			}
@@ -3901,6 +3901,15 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
 	}
+	// A session resolved by id can live under another directory than the
+	// launch cwd — reload so the currently selected dir's project-local
+	// config merges (and the agents built below see it), not the launch
+	// dir's.
+	if sess.CWD != "" && sess.CWD != cwd {
+		if fresh, ferr := config.LoadMergedIn(sess.CWD); ferr == nil {
+			cfg = fresh
+		}
+	}
 
 	sessionStart := time.Now()
 	obsShutdown := initObs(cfg)
@@ -4401,11 +4410,14 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 
 	// Start a config watcher so the TUI updates automatically when config.json
 	// changes on disk (e.g. the user edits it in another terminal). The dual
-	// watcher monitors both the global config and any local .milk/config.json,
-	// deep-merging them on every change.
+	// watcher monitors both the global config and the startup session's local
+	// .milk/config.json (the selected dir — sess.CWD), deep-merging them on
+	// every change. A later /resume into another directory re-merges inline
+	// (see handleSlash's session-switch block); the watcher keeps watching the
+	// startup binding's file.
 	if cfgDir, cfgDirErr := config.Dir(); cfgDirErr == nil {
 		cfgPath := cfgDir + "/config.json"
-		localPath, _ := config.LocalConfigPath()
+		localPath, _ := config.LocalConfigPathIn(sess.CWD)
 		watcher, watchErr := config.NewDualWatcher(cfgPath, localPath, func(newCfg config.Config, err error) {
 			p.Send(configReloadMsg{cfg: newCfg, err: err})
 		})

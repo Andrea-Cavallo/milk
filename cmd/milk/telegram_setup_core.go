@@ -25,7 +25,7 @@ var (
 // setTelegramEnabledCfg toggles the oversight backend without touching the
 // stored credentials, saving the config. Enabling without credentials is an
 // error; the error text is what both hosts show to the user.
-func setTelegramEnabledCfg(cfg *config.Config, on bool) error {
+func setTelegramEnabledCfg(cfg *config.Config, on bool, dir string) error {
 	ro := cfg.RemoteOversight
 	if ro == nil {
 		ro = &config.RemoteOversightConfig{}
@@ -39,7 +39,7 @@ func setTelegramEnabledCfg(cfg *config.Config, on bool) error {
 	} else {
 		ro.Backend = ""
 	}
-	if err := saveLocalOrGlobal(*cfg); err != nil {
+	if err := saveLocalOrGlobal(*cfg, dir); err != nil {
 		return fmt.Errorf("error saving config: %w", err)
 	}
 	return nil
@@ -48,7 +48,7 @@ func setTelegramEnabledCfg(cfg *config.Config, on bool) error {
 // commitTelegramCfg stores freshly validated credentials and enables the
 // backend — the setup wizard's final step. Error text matches the TUI's
 // historic wording.
-func commitTelegramCfg(cfg *config.Config, token string, chatID int64) error {
+func commitTelegramCfg(cfg *config.Config, token string, chatID int64, dir string) error {
 	ro := cfg.RemoteOversight
 	if ro == nil {
 		ro = &config.RemoteOversightConfig{}
@@ -60,7 +60,7 @@ func commitTelegramCfg(cfg *config.Config, token string, chatID int64) error {
 	ro.Telegram.Token = token
 	ro.Telegram.ChatID = chatID
 	cfg.RemoteOversight = ro
-	if err := saveLocalOrGlobal(*cfg); err != nil {
+	if err := saveLocalOrGlobal(*cfg, dir); err != nil {
 		return fmt.Errorf("error saving config: %w", err)
 	}
 	return nil

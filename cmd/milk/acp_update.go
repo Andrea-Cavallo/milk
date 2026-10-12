@@ -26,7 +26,7 @@ func acpUpdate(t *acpTurn, rest string) (string, string) {
 	case "", "check":
 		ctx, cancel := context.WithTimeout(t.ctx, 15*time.Second)
 		defer cancel()
-		rel, err := updateCheck(ctx, &as.st.cfg)
+		rel, err := updateCheck(ctx, &as.st.cfg, activeConfigDir(as.st))
 		if err != nil {
 			return milkTag() + " update check failed: " + err.Error(), ""
 		}
@@ -47,7 +47,7 @@ func acpUpdate(t *acpTurn, rest string) (string, string) {
 		if rel == nil {
 			ctx, cancel := context.WithTimeout(t.ctx, 15*time.Second)
 			var err error
-			rel, err = updateCheck(ctx, &as.st.cfg)
+			rel, err = updateCheck(ctx, &as.st.cfg, activeConfigDir(as.st))
 			cancel()
 			if err != nil {
 				return milkTag() + " update check failed: " + err.Error(), ""
@@ -57,7 +57,7 @@ func acpUpdate(t *acpTurn, rest string) (string, string) {
 		if rel == nil {
 			return fmt.Sprintf("%s no update available (%s)", milkTag(), version), ""
 		}
-		skipUpdateRelease(&as.st.cfg, rel.Tag)
+		skipUpdateRelease(&as.st.cfg, rel.Tag, activeConfigDir(as.st))
 		as.srv.setUpdateRelease(nil)
 		return fmt.Sprintf("%s update %s skipped — it will not be announced again", milkTag(), rel.Tag), ""
 	}
@@ -178,7 +178,7 @@ func (s *acpServer) backgroundUpdateCheck(ctx context.Context) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	rel, err := updateCheck(cctx, &cfg)
+	rel, err := updateCheck(cctx, &cfg, "")
 	if err != nil || rel == nil {
 		return
 	}

@@ -33,7 +33,7 @@ func withSandboxedConfigDirs(t *testing.T) (home, cwd string) {
 func TestPreferredSaveScope_NoLocalConfig_ReturnsGlobal(t *testing.T) {
 	withSandboxedConfigDirs(t)
 
-	if got := preferredSaveScope(); got != "global" {
+	if got := preferredSaveScope(""); got != "global" {
 		t.Errorf("expected global scope with no local config, got %q", got)
 	}
 }
@@ -49,7 +49,7 @@ func TestPreferredSaveScope_WithLocalConfig_ReturnsLocal(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if got := preferredSaveScope(); got != "local" {
+	if got := preferredSaveScope(""); got != "local" {
 		t.Errorf("expected local scope with a local config present, got %q", got)
 	}
 }
@@ -57,7 +57,7 @@ func TestPreferredSaveScope_WithLocalConfig_ReturnsLocal(t *testing.T) {
 func TestSaveLocalOrGlobal_NoLocalConfig_WritesGlobal(t *testing.T) {
 	home, cwd := withSandboxedConfigDirs(t)
 
-	if err := saveLocalOrGlobal(config.Config{Agent: "test-agent"}); err != nil {
+	if err := saveLocalOrGlobal(config.Config{Agent: "test-agent"}, ""); err != nil {
 		t.Fatalf("saveLocalOrGlobal: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".milk", "config.json")); err != nil {
@@ -79,7 +79,7 @@ func TestSaveLocalOrGlobal_WithLocalConfig_WritesLocal(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := saveLocalOrGlobal(config.Config{Agent: "test-agent"}); err != nil {
+	if err := saveLocalOrGlobal(config.Config{Agent: "test-agent"}, ""); err != nil {
 		t.Fatalf("saveLocalOrGlobal: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(cwd, ".milk", "config.json"))

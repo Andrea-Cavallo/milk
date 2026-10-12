@@ -285,7 +285,7 @@ func (m model) commitAddAgent(ac config.AgentConfig) model {
 	if isFirst {
 		m.st.cfg.Agent = ac.Name
 	}
-	if err := saveLocalOrGlobal(m.st.cfg); err != nil {
+	if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {
 		m.appendTranscript(fmt.Sprintf("%s error saving config: %v\n", milkTag(), err))
 		return m
 	}
@@ -674,7 +674,7 @@ func (m model) commitAddMCP(sc config.MCPServerConfig) model {
 	if updated {
 		verb = "updated"
 	}
-	if err := saveLocalOrGlobal(m.st.cfg); err != nil {
+	if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {
 		m.appendTranscript(fmt.Sprintf("%s error saving config: %v\n", milkTag(), err))
 		return m
 	}
@@ -735,7 +735,7 @@ func copilotHostname(u string) string {
 // core in initwizard_core.go owns the state and the banner+first prompt; the
 // TUI's per-Enter answer handling is handleInitWizardKey below.
 func (m model) handleConfigInitCmd() (tea.Model, tea.Cmd) {
-	st, banner := initWizardStart()
+	st, banner := initWizardStart(activeConfigDir(m.st))
 	m.pendingInit = st
 	m.appendTranscript(banner + initWizardPrompt(st))
 	m.ta.Reset()
@@ -1351,7 +1351,7 @@ func (m model) commitSwitchAgent(st *switchAgentState) (model, tea.Cmd) {
 	case "escalation":
 		m.st.cfg.EscalationAgent = name
 	}
-	if err := saveLocalOrGlobal(m.st.cfg); err != nil {
+	if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {
 		m.appendTranscript(fmt.Sprintf("%s warning: could not persist switch: %v\n", milkTag(), err))
 	}
 
