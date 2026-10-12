@@ -128,11 +128,11 @@ func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Conf
 		}
 	}
 	la = wireLocalAgent(la, localAgentWiring{
-		permStore:  wiring.permStore,
-		permAsk:    wiring.permAsk,
-		bgPermAsk:  wiring.bgPermAsk,
-		safetyAsk:  wiring.safetyAsk,
-		skipPerms:  wiring.skipPerms,
+		permStore: wiring.permStore,
+		permAsk:   wiring.permAsk,
+		bgPermAsk: wiring.bgPermAsk,
+		safetyAsk: wiring.safetyAsk,
+		skipPerms: wiring.skipPerms,
 	})
 	la = la.WithSkipPermissions(cliAgentConfig(cfg).DangerouslySkipPermissions)
 
