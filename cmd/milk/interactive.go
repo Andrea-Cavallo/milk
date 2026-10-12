@@ -900,21 +900,16 @@ func execLearn(fact string, st *interactiveState) string {
 }
 
 // execSkipPerms handles /skip-permissions [on|off].
+// execSkipPerms is /skip-permissions over the TUI: the shared grammar
+// (execSkipPermsCore), applied to the session flag and styled for the
+// transcript.
 func execSkipPerms(sub string, st *interactiveState) string {
-	switch strings.TrimSpace(sub) {
-	case "on":
-		st.skipPermissions = true
-		return milkTag() + " " + red("dangerously_skip_permissions ON") + " — all agents will auto-approve tool uses"
-	case "off":
-		st.skipPermissions = false
-		return milkTag() + " dangerously_skip_permissions OFF — agents will prompt before running tools"
-	default:
-		state := "off"
-		if st.skipPermissions {
-			state = red("on")
-		}
-		return fmt.Sprintf("%s dangerously_skip_permissions is %s  (use /skip-permissions on|off)", milkTag(), state)
+	next, msg := execSkipPermsCore(sub, st.skipPermissions)
+	st.skipPermissions = next
+	if next {
+		return milkTag() + " " + red(msg)
 	}
+	return milkTag() + " " + msg
 }
 
 // execColorize handles /colorize [off|fenced|balanced|full].
