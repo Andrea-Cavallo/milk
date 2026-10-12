@@ -11,18 +11,15 @@ import (
 	"github.com/scoutme/milk/internal/transport/acp"
 )
 
-// acpCommand is one slash command available over ACP. The table is the single
-// source of truth: what session/prompt executes and what
-// available_commands_update advertises are both derived from it, so a command
-// can never be advertised without a handler. hidden rows are executable but
-// never advertised (the /list deprecation window: the alias must keep working
-// while the rename settles).
+// acpCommand is one ACP host binding: the handler for a registry command
+// (slashcmd.go). Name, description, argument hint and hidden-ness all come
+// from the registry — this table binds behavior only, so what
+// session/prompt executes and what available_commands_update advertises can
+// never drift from the command language the TUI documents. hidden rows are
+// executable but never advertised (the /list deprecation window: the alias
+// must keep working while the rename settles).
 type acpCommand struct {
-	name string // with leading "/", matching the TUI's slashCommands
-	desc string
-	hint string
-	// hidden: run, but keep out of /help and available_commands_update.
-	hidden bool
+	name string // registry name, with the leading "/"
 	// run returns output text for the client and, optionally, a prompt to
 	// dispatch as an ordinary turn afterwards (/escalate <msg>, /primary <msg>).
 	run func(as *acpSession, rest string) (output, dispatch string)
@@ -53,45 +50,54 @@ func acpCommandTable() []acpCommand {
 		}
 	}
 	return []acpCommand{
-		{name: cmdWorkflow, desc: "run a workflow, or resume, inspect or clear the saved one", hint: "<name> <task> [--<role> <agent>] | resume | status | clear", runTurn: acpWorkflowCmd},
-		{name: cmdSessions, desc: "list stored sessions for this directory (* = current)", hint: "[all]", run: acpSessionsCmd},
-		{name: cmdNew, desc: "start a fresh session (the current one stays resumable)", hint: "[name]", run: acpNewCmd},
-		{name: cmdClear, desc: "alias for /new — start a fresh session", hint: "[name]", run: acpNewCmd},
-		{name: cmdResume, desc: "switch this conversation to a stored session", hint: sessionRefHint, run: acpResumeCmd},
-		{name: cmdDrop, desc: "delete the current session, or the referenced one", hint: "[" + sessionRefHint + "]", run: acpDropCmd},
-		{name: cmdListLegacy, desc: "deprecated alias for /sessions", hidden: true, run: func(as *acpSession, rest string) (string, string) {
+		{name: cmdWorkflow, runTurn: acpWorkflowCmd},
+		{name: cmdSessions, run: acpSessionsCmd},
+		{name: cmdNew, run: acpNewCmd},
+		{name: cmdClear, run: acpNewCmd},
+		{name: cmdResume, run: acpResumeCmd},
+		{name: cmdDrop, run: acpDropCmd},
+		{name: cmdListLegacy, run: func(as *acpSession, rest string) (string, string) {
 			out, dispatch := acpSessionsCmd(as, rest)
 			return milkTag() + " /list is deprecated — use /sessions\n\n" + out, dispatch
 		}},
-		{name: cmdEscalate, desc: "pin all turns to the escalation agent, or force one turn with a message", hint: "[fresh] [<message>]", run: viaTUI(cmdEscalate)},
-		{name: cmdPrimary, desc: "pin all turns to the primary agent, or force one turn with a message", hint: "[<message>]", run: viaTUI(cmdPrimary)},
-		{name: cmdLearn, desc: "store a persistent memory", hint: "<fact>", run: viaTUI(cmdLearn)},
-		{name: cmdMemory, desc: "list stored percepts (session and global)", hint: "[global|session|<pattern>]", run: viaTUI(cmdMemory)},
-		{name: cmdUsage, desc: "show token usage by model and role", hint: "", run: viaTUI(cmdUsage)},
-		{name: cmdMetrics, desc: "show recent metric values", hint: "", run: viaTUI(cmdMetrics)},
-		{name: cmdExport, desc: "print the session transcript (or another session's), or write it to a file", hint: "[json|<path>|session <id>]", run: viaTUI(cmdExport)},
-		{name: cmdTasks, desc: "list the session's and global tasks", hint: "", run: acpTasks},
-		{name: cmdTask, desc: "mark a task done", hint: "done <id>", run: acpTask},
-		{name: cmdBg, desc: "list, start or stop background agents", hint: "[list|start <task>|stop <id>]", run: acpBg},
-		{name: cmdSkipPerms, desc: "approve every tool call without asking, or go back to asking", hint: "[on|off]", run: acpSkipPerms},
-		{name: cmdPermissions, desc: "show the permission timed-answer policy, or override it for this session", hint: "[default allow|deny [safety] | timeout <seconds> [safety]]", run: acpPermissions},
-		{name: cmdThink, desc: "show or hide model reasoning in this session", hint: "[on|off]", run: acpThink},
-		{name: cmdConfig, desc: "print the config, run the setup wizard, or open the config file", hint: "[show|init|open]", run: acpConfig},
-		{name: cmdInit, desc: "run the setup wizard (alias for /config init)", hint: "", run: acpInit},
-		{name: cmdSetup, desc: "configure Telegram remote oversight (status, enable, disable, or the setup wizard)", hint: "telegram [on|off|status]", run: acpSetup},
-		{name: cmdAgent, desc: "list configured agents", hint: "[list]", run: acpAgent},
-		{name: cmdUpdate, desc: "check for milk updates, install one, or skip a release", hint: "check|status|install|skip", runTurn: acpUpdate},
-		{name: "/help", desc: "list the commands available in this session", hint: "", run: acpHelp},
+		{name: cmdEscalate, run: viaTUI(cmdEscalate)},
+		{name: cmdPrimary, run: viaTUI(cmdPrimary)},
+		{name: cmdLearn, run: viaTUI(cmdLearn)},
+		{name: cmdMemory, run: viaTUI(cmdMemory)},
+		{name: cmdUsage, run: viaTUI(cmdUsage)},
+		{name: cmdMetrics, run: viaTUI(cmdMetrics)},
+		{name: cmdExport, run: viaTUI(cmdExport)},
+		{name: cmdTasks, run: acpTasks},
+		{name: cmdTask, run: acpTask},
+		{name: cmdBg, run: acpBg},
+		{name: cmdSkipPerms, run: acpSkipPerms},
+		{name: cmdPermissions, run: acpPermissions},
+		{name: cmdThink, run: acpThink},
+		{name: cmdConfig, run: acpConfig},
+		{name: cmdInit, run: acpInit},
+		{name: cmdSetup, run: acpSetup},
+		{name: cmdAgent, run: acpAgent},
+		{name: cmdUpdate, runTurn: acpUpdate},
+		{name: "/help", run: acpHelp},
 	}
+}
+
+// acpSpec returns the registry entry for a binding's name. The binding
+// table is pinned to the registry by TestRegistry_ACPSurface — an unknown
+// name is a bug, not a runtime possibility.
+func acpSpec(name string) cmdSpec {
+	spec, _ := specFor(name)
+	return spec
 }
 
 func acpAdvertisedCommands() []acp.AvailableCommand {
 	out := make([]acp.AvailableCommand, 0, len(acpCommandTable()))
 	for _, c := range acpCommandTable() {
-		if c.hidden {
+		spec := acpSpec(c.name)
+		if spec.hidden {
 			continue
 		}
-		out = append(out, acp.Command(c.name, c.desc, c.hint))
+		out = append(out, acp.Command(spec.name, spec.desc, spec.hint))
 	}
 	return out
 }
@@ -124,14 +130,15 @@ func acpHelp(*acpSession, string) (string, string) {
 	var b strings.Builder
 	b.WriteString("Commands available over ACP:\n")
 	for _, c := range acpCommandTable() {
-		if c.hidden {
+		spec := acpSpec(c.name)
+		if spec.hidden {
 			continue
 		}
-		sig := c.name
-		if c.hint != "" {
-			sig += " " + c.hint
+		sig := spec.name
+		if spec.hint != "" {
+			sig += " " + spec.hint
 		}
-		fmt.Fprintf(&b, "  %s — %s\n", sig, c.desc)
+		fmt.Fprintf(&b, "  %s — %s\n", sig, spec.desc)
 	}
 	return strings.TrimRight(b.String(), "\n"), ""
 }
