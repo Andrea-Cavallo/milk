@@ -953,11 +953,16 @@ func (m model) handleInitWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			NumAgents:       len(m.st.cfg.Agents),
 			OfferOpenEditor: true,
 		})
+		var rebuildCmd tea.Cmd
 		if res.Committed != nil {
-			// Apply the new config to the live state so the session picks
-			// it up immediately.
+			// Apply the new config to the live state AND rebuild the runners
+			// from it, so the configured agent takes over on the next turn
+			// without restarting milk (the ACP host does the same in its
+			// commitInitWizard → buildRunners path).
 			m.st.cfg = *res.Committed
 			m.hasInferenceAgent = res.Committed.HasInferenceAgent()
+			m, rebuildCmd = m.rebuildRunners()
+			m.appendTranscript(milkTag() + " agents rebuilt from config — active now, no restart needed\n")
 		}
 		if res.Output != "" || res.Prompt != "" {
 			m.appendTranscript(res.Output + res.Prompt)
@@ -971,7 +976,7 @@ func (m model) handleInitWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			newM, _ := m.handleConfigOpenCmd()
 			m = newM.(model)
 		}
-		return m, nil
+		return m, rebuildCmd
 	}
 	var cmd tea.Cmd
 	cmd = m.updateTA(msg)

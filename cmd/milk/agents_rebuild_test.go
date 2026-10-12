@@ -11,10 +11,63 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/router"
 )
+
+// TestHandleInitWizardKey_CommitRebuildsRunners pins the /config init wiring
+// that a live end-to-end run caught missing once: when the wizard commit
+// carries a config, the TUI must rebuild the runners from it — the configured
+// agent has to be usable on the next turn without a restart.
+func TestHandleInitWizardKey_CommitRebuildsRunners(t *testing.T) {
+	// The commit really writes config.json — keep it off the developer's ~/.milk.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MILK_CONFIG_ROOT", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	cfg := config.Config{}
+	st := &interactiveState{cfg: cfg, cwd: t.TempDir()}
+	m := newModel(context.Background(), st, router.New(cfg, nil), dispatchAgents{}, nil)
+	m.pendingInit, _ = initWizardStart()
+
+	answer := func(s string) {
+		t.Helper()
+		m.ta.SetValue(s)
+		res, _ := m.handleInitWizardKey(tea.KeyMsg{Type: tea.KeyEnter})
+		m = res.(model)
+	}
+
+	answer("mock")       // agent name
+	answer("1")          // provider: local
+	answer(srv.URL)      // server URL
+	answer("default")    // run_cmd: skip
+	answer("mock-model") // model
+	answer("default")    // context window: skip
+	answer("n")          // escalation: no — this answer commits the config
+
+	if !m.hasInferenceAgent {
+		t.Error("the wizard commit must mark an inference agent as configured")
+	}
+	if _, ok := m.agents.primary.(*localRunner); !ok {
+		t.Fatalf("after the commit the primary runner is %T, want *localRunner", m.agents.primary)
+	}
+	if !m.agents.localAvail {
+		t.Error("a healthy primary must read available right after the commit")
+	}
+	if got := m.transcript.String(); !strings.Contains(got, "agents rebuilt from config") {
+		t.Errorf("the commit must announce the live rebuild; transcript:\n%s", got)
+	}
+
+	// The editor question follows the commit; answering it finishes the wizard.
+	answer("n")
+	if m.pendingInit != nil {
+		t.Error("the wizard must be finished after the editor question")
+	}
+}
 
 // newRebuildTestModel builds the minimum model rebuildRunners needs — with
 // the transcript accumulators newModel sets up (appendTranscript writes to
