@@ -43,7 +43,7 @@ func findAgentByName(cfg config.Config, name string) (config.AgentConfig, bool) 
 // single-prompt CLI mode), existingMCP is nil and a fresh connection is opened.
 //
 // No session callbacks are wired — RunToolCall passes nil for session everywhere.
-func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Config, existingMCP *mcp.ToolSet, mem *memory.Store, caller memory.Consumer) (TurnRunner, error) {
+func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Config, existingMCP *mcp.ToolSet, mem *memory.Store, caller memory.Consumer, wiring localAgentWiring) (TurnRunner, error) {
 	if ac.IsCLI() {
 		if !ac.DangerouslySkipPermissions {
 			return nil, fmt.Errorf(
@@ -115,11 +115,25 @@ func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Conf
 	la.WithLogContext(cfg.Otel.LogContext)
 	// No WithOnTokens: tool-agent calls are stateless — no session to record tokens into.
 
-	if cwd, err := os.Getwd(); err == nil {
-		if lp, err := local.OpenPermStore(cwd); err == nil {
-			la.WithPermissions(lp, nil)
+	// Permission handling goes through the shared wiring (issue #188): a
+	// tool-agent must ask exactly like the session's own agents — the old
+	// WithPermissions(lp, nil) wired a grant store with a nil ask, so these
+	// agents could never prompt at all. Keep the best-effort store fallback
+	// (and the config's skip flag) for callers with no host wiring at all.
+	if wiring.permStore == nil {
+		if cwd, err := os.Getwd(); err == nil {
+			if lp, err := local.OpenPermStore(cwd); err == nil {
+				wiring.permStore = lp
+			}
 		}
 	}
+	la = wireLocalAgent(la, localAgentWiring{
+		permStore:  wiring.permStore,
+		permAsk:    wiring.permAsk,
+		bgPermAsk:  wiring.bgPermAsk,
+		safetyAsk:  wiring.safetyAsk,
+		skipPerms:  wiring.skipPerms,
+	})
 	la = la.WithSkipPermissions(cliAgentConfig(cfg).DangerouslySkipPermissions)
 
 	if dbg, err := openLocalDebugLog(cfg); err != nil {
@@ -154,7 +168,7 @@ func getOrBuildToolRunner(ctx context.Context, agentName string, cfg config.Conf
 	if da.mcpToolSets != nil {
 		existingMCP = da.mcpToolSets[agentName]
 	}
-	tr, err := buildToolRunner(ctx, ac, cfg, existingMCP, mem, caller)
+	tr, err := buildToolRunner(ctx, ac, cfg, existingMCP, mem, caller, da.agentWiring)
 	if err != nil {
 		return nil, err
 	}

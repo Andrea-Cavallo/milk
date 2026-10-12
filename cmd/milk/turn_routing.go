@@ -27,6 +27,11 @@ type routedTurn struct {
 	// Fallback is "escalation" or "primary" when the router's choice was
 	// unavailable and Target differs from it, else "".
 	Fallback string
+	// SingleTurnEscalate records that this turn went to escalation only
+	// because of a one-shot /escalate <prompt> override (the flag routeTurn
+	// just consumed). noteTurnSucceeded uses it to keep the one-shot form
+	// from becoming auto-sticky — see there.
+	SingleTurnEscalate bool
 }
 
 // availPingTimeout bounds the per-turn availability re-check so an
@@ -86,6 +91,10 @@ func pingTurnTarget(ctx context.Context, r TurnRunner) bool {
 func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, input string, localAvail, escalationAvail bool) (routedTurn, error) {
 	forceEscalate := st.forceEscalate || st.stickyEscalate || st.autoStickyEscalate
 	forcePrimary := st.forcePrimary || st.stickyPrimary
+	// The one-shot /escalate <prompt> form, captured before the flag is
+	// consumed below — noteTurnSucceeded needs to know a turn reached
+	// escalation this way (issue #188).
+	singleTurnEscalate := st.forceEscalate
 
 	// Route first (fast); the per-agent turn timeout is applied by the caller
 	// once the target is known.
@@ -104,7 +113,7 @@ func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, in
 	}
 	st.forcePrimary = false
 
-	rt := routedTurn{Decision: decision, Target: resolveTarget(decision.Target, localAvail, escalationAvail)}
+	rt := routedTurn{Decision: decision, Target: resolveTarget(decision.Target, localAvail, escalationAvail), SingleTurnEscalate: singleTurnEscalate}
 	switch {
 	case rt.Target == decision.Target:
 	case rt.Target == router.TargetEscalation:
@@ -131,11 +140,13 @@ func clearRoutingPins(st *interactiveState) {
 // to the escalation agent, keep later turns there so the escalation agent
 // doesn't lose continuity between turns. Disabled by sticky_escalation: false.
 //
-// (The single-turn forceEscalate flag has already been consumed by routeTurn
-// when this runs, so it cannot be consulted here; a `/escalate <prompt>` turn
-// therefore also becomes auto-sticky, as it always has in the TUI.)
-func noteTurnSucceeded(st *interactiveState, target router.Target) {
-	if target == router.TargetEscalation && !st.stickyEscalate && st.cfg.StickyEscalationEnabled() {
+// The one-shot form — /escalate <prompt> (rt.SingleTurnEscalate) — does NOT
+// become auto-sticky (issue #188 decision): the user asked for exactly one
+// turn on escalation. The sticky meanings of "stay on escalation" are the
+// pin (/escalate with no prompt) and the router's own choice; a forcePrimary
+// turn breaks an existing auto-sticky (see routeTurn).
+func noteTurnSucceeded(st *interactiveState, rt routedTurn) {
+	if rt.Target == router.TargetEscalation && !rt.SingleTurnEscalate && !st.stickyEscalate && st.cfg.StickyEscalationEnabled() {
 		st.autoStickyEscalate = true
 	}
 }

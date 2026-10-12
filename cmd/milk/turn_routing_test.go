@@ -65,7 +65,7 @@ func TestAutoSticky_KeepsLaterTurnsOnEscalationUntilPrimaryOverride(t *testing.T
 	rtr := router.New(st.cfg, nil)
 
 	// The router sends a turn to escalation and it succeeds: later turns stay there.
-	noteTurnSucceeded(st, router.TargetEscalation)
+	noteTurnSucceeded(st, routedTurn{Target: router.TargetEscalation})
 	if !st.autoStickyEscalate {
 		t.Fatal("auto-sticky not set after a successful escalation turn")
 	}
@@ -100,11 +100,28 @@ func TestNoteTurnSucceeded_Conditions(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			st := routingState(t)
 			c.mutate(st)
-			noteTurnSucceeded(st, c.target)
+			noteTurnSucceeded(st, routedTurn{Target: c.target})
 			if st.autoStickyEscalate != c.want {
 				t.Errorf("autoStickyEscalate = %v, want %v", st.autoStickyEscalate, c.want)
 			}
 		})
+	}
+}
+
+// TestNoteTurnSucceeded_SingleTurnOverrideNotSticky pins the issue #188
+// decision: a one-shot /escalate <prompt> turns exactly one turn into an
+// escalation turn and must not become auto-sticky — only a router-decided
+// escalation (or the /escalate pin) keeps later turns there.
+func TestNoteTurnSucceeded_SingleTurnOverrideNotSticky(t *testing.T) {
+	st := routingState(t)
+	noteTurnSucceeded(st, routedTurn{Target: router.TargetEscalation, SingleTurnEscalate: true})
+	if st.autoStickyEscalate {
+		t.Error("a single-turn /escalate <prompt> must not become auto-sticky")
+	}
+	// …while the same turn without the one-shot flag still sticks.
+	noteTurnSucceeded(st, routedTurn{Target: router.TargetEscalation})
+	if !st.autoStickyEscalate {
+		t.Error("a router-decided escalation turn must become auto-sticky")
 	}
 }
 

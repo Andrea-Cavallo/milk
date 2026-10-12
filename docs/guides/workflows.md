@@ -97,7 +97,7 @@ ESCALATION_WAITING   → user passes --primary → back to ROUTING
 - **`/escalate` alone** (no inline prompt) pins every subsequent turn to the escalation agent until `/primary` or Ctrl-C — shown as `<agent> (pinned)`.
 - **`/primary` alone** does the same for the primary agent.
 - **`/escalate <prompt>` / `/primary <prompt>`** is a single-turn override; normal routing resumes after.
-- **Auto-sticky**: when the router escalates *without* an explicit `/escalate`, milk automatically keeps subsequent turns on the escalation agent (`<agent> (sticky)`) to avoid the cold-start context penalty on every turn. Cleared by `/primary` or a single-turn override. Disable globally with `"sticky_escalation": false`; explicit pinning is unaffected by this setting.
+- **Auto-sticky**: when the router escalates *without* an explicit `/escalate`, milk automatically keeps subsequent turns on the escalation agent (`<agent> (sticky)`) to avoid the cold-start context penalty on every turn. A one-shot `/escalate <prompt>` turns exactly one turn into an escalation turn and never becomes auto-sticky. Cleared by `/primary` or a single-turn override. Disable globally with `"sticky_escalation": false`; explicit pinning is unaffected by this setting.
 
 ### Context handoff
 

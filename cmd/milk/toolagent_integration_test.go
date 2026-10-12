@@ -55,7 +55,7 @@ func TestBuildToolRunner_CLIIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	runner, err := buildToolRunner(ctx, ac, config.Config{}, nil, nil, memory.ConsumerAll)
+	runner, err := buildToolRunner(ctx, ac, config.Config{}, nil, nil, memory.ConsumerAll, localAgentWiring{})
 	if err != nil {
 		t.Fatalf("buildToolRunner: %v", err)
 	}

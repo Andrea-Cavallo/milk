@@ -18,11 +18,19 @@ const (
 )
 
 // decideFollowup applies the rules:
+//   - nothing drainable (pending == 0): skip — a follow-up turn with nothing
+//     to report just burns a turn. This is the shared home of the guard both
+//     hosts used to keep inline (issue #188): a user-started job fires both
+//     the per-job and the wave-done notification, so the first follow-up
+//     drains the results and the second must find nothing to do;
 //   - a wave of agent-spawned jobs (waitForWholeWave) follows up only once no
 //     job is still active — a newer wave's own completion asks again;
 //   - a user-started job follows up as soon as it ends;
 //   - if a turn is running (busy), the request is deferred, not dropped.
-func decideFollowup(waitForWholeWave bool, activeJobs int, busy bool) followupDecision {
+func decideFollowup(waitForWholeWave bool, activeJobs, pending int, busy bool) followupDecision {
+	if pending == 0 {
+		return followupSkip
+	}
 	if waitForWholeWave && activeJobs > 0 {
 		return followupSkip
 	}

@@ -67,6 +67,11 @@ type dispatchAgents struct {
 	localAvail        bool
 	escalationAvail   bool
 	toolRunners       map[string]TurnRunner // lazily built tool-agent runners, keyed by agent name
+	// agentWiring is the host callback set buildToolRunner applies to
+	// lazily-built tool-agent runners (issue #188) so they ask for
+	// permissions exactly like the session's own agents. Zero value = no
+	// host wiring (headless callers), which keeps the pre-#188 defaults.
+	agentWiring localAgentWiring
 	// mcpToolSets holds the live MCP ToolSet for each agent that has MCP servers
 	// configured, keyed by agent name. Used by /mcp list and /mcp reconnect.
 	mcpToolSets map[string]*mcp.ToolSet
@@ -3351,16 +3356,8 @@ func (m model) maybeAutoFollowupBackgroundJobs(waitForWholeWave bool) (tea.Model
 		m.pendingUserBackgroundFollowup = false
 		return m, nil
 	}
-	if mgr.PendingCount() == 0 {
-		// A user-job completion fires both the per-job and the batch-done
-		// message; the first one's turn drains the results, so the second
-		// (deferred until that turn ends) finds nothing to report and would
-		// only burn a turn.
-		applyFollowupDecision(waitForWholeWave, followupSkip, &m.pendingBackgroundFollowup, &m.pendingUserBackgroundFollowup)
-		return m, nil
-	}
 	busy := m.busy || m.pendingPerm != nil || m.pendingDirectBash != nil || m.ptyPane != nil
-	d := decideFollowup(waitForWholeWave, mgr.ActiveCount(), busy)
+	d := decideFollowup(waitForWholeWave, mgr.ActiveCount(), mgr.PendingCount(), busy)
 	applyFollowupDecision(waitForWholeWave, d, &m.pendingBackgroundFollowup, &m.pendingUserBackgroundFollowup)
 	if d != followupNow {
 		return m, nil
@@ -3705,35 +3702,31 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 			st.notifier.NotifyToolResult(context.Background(), name, result, isError)
 		}
 	}
+	// The host wiring — one struct applied by wireLocalAgent (issue #188).
+	// It also goes onto dispatchAgents so lazily-built agent-as-tool runners
+	// ask exactly like the session's own agents instead of never asking.
+	wiring := localAgentWiring{
+		permStore:           localPermStore,
+		permAsk:             localPermAsk,
+		bgPermAsk:           localBgPermAsk,
+		safetyAsk:           localSafetyAsk,
+		skipPerms:           func() bool { return st.skipPermissions },
+		onOpenFile:          localOpenFile,
+		onRetract:           localOnRetract,
+		onToolUse:           localOnToolUse,
+		onToolResult:        localOnToolResult,
+		onThinking:          func(text string) { send(thinkChunkMsg{text: text}) },
+		onReasoningPromoted: func() { send(reasoningPromotedMsg{}) },
+		taskStore:           m.taskStore,
+		mgr:                 agents.backgroundMgr,
+	}
 	if agents.local != nil {
-		tuiLocalAgent := agents.local.
-			WithSkipPermissions(st.skipPermissions).
-			WithPermissions(localPermStore, localPermAsk).
-			WithBackgroundPermissionAsk(localBgPermAsk).
-			WithSafetyAsk(localSafetyAsk).
-			WithOnOpenFile(localOpenFile).
-			WithOnRetract(localOnRetract).
-			WithOnToolUse(localOnToolUse).
-			WithOnToolResult(localOnToolResult).
-			WithOnThinking(func(text string) { send(thinkChunkMsg{text: text}) }).
-			WithOnReasoningPromoted(func() { send(reasoningPromotedMsg{}) })
-		tuiLocalAgent.SetBackgroundManager(agents.backgroundMgr)
+		tuiLocalAgent := wireLocalAgent(agents.local, wiring)
 		tuiAgents.local = tuiLocalAgent
 		tuiAgents.primary = newLocalRunner(tuiLocalAgent, agents.primary.Name())
 	}
 	if agents.escalationLocal != nil {
-		tuiEscLocal := agents.escalationLocal.
-			WithSkipPermissions(st.skipPermissions).
-			WithPermissions(localPermStore, localPermAsk).
-			WithBackgroundPermissionAsk(localBgPermAsk).
-			WithSafetyAsk(localSafetyAsk).
-			WithOnOpenFile(localOpenFile).
-			WithOnRetract(localOnRetract).
-			WithOnToolUse(localOnToolUse).
-			WithOnToolResult(localOnToolResult).
-			WithOnThinking(func(text string) { send(thinkChunkMsg{text: text}) }).
-			WithOnReasoningPromoted(func() { send(reasoningPromotedMsg{}) })
-		tuiEscLocal.SetBackgroundManager(agents.backgroundMgr)
+		tuiEscLocal := wireLocalAgent(agents.escalationLocal, wiring)
 		tuiAgents.escalationLocal = tuiEscLocal
 		// agents.escalation can legitimately be nil in minimal embeddings
 		// (tests, single-agent setups) — fall back to the configured name
@@ -3744,6 +3737,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		}
 		tuiAgents.escalation = newLocalRunner(tuiEscLocal, escName)
 	}
+	tuiAgents.agentWiring = wiring
 	return tuiAgents, cliPC
 }
 
@@ -3889,7 +3883,7 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 		if !segmentsFired && lastResponseText != "" {
 			st.notifier.NotifyResponse(turnCtx, agentName, lastResponseText)
 		}
-		noteTurnSucceeded(st, target)
+		noteTurnSucceeded(st, rt)
 	}
 	return turnErr
 }
