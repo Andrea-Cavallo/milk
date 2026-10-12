@@ -2115,7 +2115,30 @@ func SetDebugLogFilenamePrefixForTest(prefix string) func() {
 	return func() { debugLogFilenamePrefix = previous }
 }
 
+// rootOverride, when non-empty (SetRoot — the --config-root flag), replaces
+// ~/.milk as milk's state root: config.json, sessions, memory, jobs, history,
+// otel, mcp_oauth, servers … The project-local .milk/config.json is untouched
+// (it merges from the working directory either way).
+var rootOverride string
+
+// SetRoot redirects milk's state root to root; empty restores the default
+// (~/.milk, or $MILK_CONFIG_ROOT). Call before any config/store access.
+// Returns the previous override so callers (tests) can restore it.
+func SetRoot(root string) (previous string) {
+	previous = rootOverride
+	rootOverride = root
+	return previous
+}
+
+// Dir returns milk's state root: the SetRoot override, else $MILK_CONFIG_ROOT,
+// else ~/.milk. Everything milk persists lives under this directory.
 func Dir() (string, error) {
+	if rootOverride != "" {
+		return filepath.Abs(rootOverride)
+	}
+	if env := strings.TrimSpace(os.Getenv("MILK_CONFIG_ROOT")); env != "" {
+		return filepath.Abs(env)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

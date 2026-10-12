@@ -6,24 +6,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/scoutme/milk/internal/config"
 )
 
 const maxPersistedHistory = 500
 
 func globalHistoryPath() (string, error) {
-	home, err := os.UserHomeDir()
+	base, err := config.Dir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".milk", "input_history"), nil
+	return filepath.Join(base, "input_history"), nil
 }
 
 func sessionHistoryPath(sessID string) (string, error) {
-	home, err := os.UserHomeDir()
+	base, err := config.Dir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".milk", "sessions")
+	dir := filepath.Join(base, "sessions")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

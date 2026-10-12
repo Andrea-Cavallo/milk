@@ -12,6 +12,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -294,9 +295,15 @@ func commitInitWizardConfig(st *initWizardState) (config.Config, string, error) 
 		return cfg, "", err
 	}
 
-	scopeLabel := "~/.milk/config.json"
-	if config.HasLocalConfig() {
-		scopeLabel = ".milk/config.json"
+	scopeLabel := ".milk/config.json"
+	if !config.HasLocalConfig() {
+		// The real path — honors --config-root/MILK_CONFIG_ROOT, so a
+		// sandboxed setup doesn't claim to have written ~/.milk.
+		if dir, err := config.Dir(); err == nil {
+			scopeLabel = filepath.Join(dir, "config.json")
+		} else {
+			scopeLabel = "config.json"
+		}
 	}
 	provider := st.primary.Provider
 	if provider == "" {

@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/scoutme/milk/internal/config"
 )
 
 // PermStore persists tool grants for the local agent.
-// Grants are stored per working directory at ~/.milk/permissions/<cwd-hash>.json,
+// Grants are stored per working directory at <state-root>/permissions/<cwd-hash>.json
+// (state root = ~/.milk, or --config-root/MILK_CONFIG_ROOT),
 // mirroring the per-project structure of Claude's claudesettings store.
 type PermStore struct {
 	path string
@@ -25,11 +28,11 @@ type permFile struct {
 // OpenPermStore returns a PermStore for the given working directory.
 // The file is created on first write; reads on a missing file return empty grants.
 func OpenPermStore(cwd string) (*PermStore, error) {
-	home, err := os.UserHomeDir()
+	base, err := config.Dir()
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(home, ".milk", "permissions")
+	dir := filepath.Join(base, "permissions")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}

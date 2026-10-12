@@ -1643,3 +1643,51 @@ func TestInitConfig_GeneratedFileIncludesMemory(t *testing.T) {
 		t.Errorf("Memory block must be prepopulated with effective values, got %+v", cfg.Memory)
 	}
 }
+
+// TestDir_RootOverride pins the --config-root sandbox: SetRoot (the flag's
+// mechanism) and $MILK_CONFIG_ROOT must both redirect the state root, and the
+// derived paths (config.json, sessions, memory, otel, mcp_oauth) must follow.
+func TestDir_RootOverride(t *testing.T) {
+	sandbox := t.TempDir()
+
+	prev := SetRoot(sandbox)
+	defer SetRoot(prev)
+
+	dir, err := Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	if want, _ := filepath.Abs(sandbox); dir != want {
+		t.Errorf("Dir() = %q, want %q", dir, want)
+	}
+	if got := filepath.Base(dir); got == ".milk" {
+		t.Error("sandboxed Dir() must not be the default ~/.milk")
+	}
+	for _, derived := range []func() (string, error){OtelDir, MCPOAuthDir, ModelsDevCachePath} {
+		p, err := derived()
+		if err != nil {
+			t.Fatalf("derived path: %v", err)
+		}
+		if !strings.HasPrefix(p, dir+string(filepath.Separator)) {
+			t.Errorf("derived path %q must live under the state root %q", p, dir)
+		}
+	}
+}
+
+// TestDir_EnvFallback pins $MILK_CONFIG_ROOT (what child processes inherit)
+// when no explicit override is set.
+func TestDir_EnvFallback(t *testing.T) {
+	sandbox := t.TempDir()
+	t.Setenv("MILK_CONFIG_ROOT", sandbox)
+
+	prev := SetRoot("")
+	defer SetRoot(prev)
+
+	dir, err := Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	if want, _ := filepath.Abs(sandbox); dir != want {
+		t.Errorf("Dir() = %q, want %q", dir, want)
+	}
+}

@@ -60,6 +60,7 @@ var (
 	flagLocal        bool   // --local: write to .milk/config.json (project-local)
 	flagGlobal       bool   // --global: write to ~/.milk/config.json (global)
 	flagOutputFormat string // --output-format: text|json|stream-json for one-shot prompts
+	flagConfigRoot   string // --config-root: alternate milk state root instead of ~/.milk
 )
 
 // Set via -ldflags at build time.
@@ -91,6 +92,15 @@ any hosted endpoint).`,
 }
 
 func init() {
+	// --config-root (or $MILK_CONFIG_ROOT) sandboxes all milk state —
+	// config.json, sessions, memory, jobs, history, otel, mcp_oauth … — so a
+	// clean setup can be driven without touching ~/.milk. Applied before any
+	// command runs, and exported so child processes stay in the same root.
+	rootCmd.PersistentFlags().StringVar(&flagConfigRoot, "config-root", "", "Milk state root (config.json, sessions, memory, otel, …) instead of ~/.milk; default $MILK_CONFIG_ROOT. Use for a clean sandboxed setup")
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		return applyConfigRoot(flagConfigRoot)
+	}
+
 	rootCmd.Flags().BoolVar(&flagEscalate, "escalate", false, "Force route to escalation agent for this turn")
 	rootCmd.Flags().BoolVar(&flagPrimary, "primary", false, "Force route to primary agent for this turn")
 	rootCmd.Flags().BoolVar(&flagNew, "new", false, "Start a new session")
@@ -109,6 +119,26 @@ func init() {
 	rootCmd.AddCommand(serverCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(eval.Command())
+}
+
+// applyConfigRoot points milk's state root at dir when set (the --config-root
+// flag; $MILK_CONFIG_ROOT is honored directly by config.Dir) and exports
+// MILK_CONFIG_ROOT so child processes — run_cmd inference servers, subprocess
+// agents, nested milk runs — stay in the same sandbox. Empty keeps the
+// default ~/.milk.
+func applyConfigRoot(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving --config-root: %w", err)
+	}
+	config.SetRoot(abs)
+	if err := os.Setenv("MILK_CONFIG_ROOT", abs); err != nil {
+		return fmt.Errorf("exporting MILK_CONFIG_ROOT: %w", err)
+	}
+	return nil
 }
 
 func run(cmd *cobra.Command, args []string) error {
