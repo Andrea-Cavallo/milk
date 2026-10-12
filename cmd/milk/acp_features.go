@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,7 +11,6 @@ import (
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/livebuf"
-	"github.com/scoutme/milk/internal/session"
 	"github.com/scoutme/milk/internal/tasks"
 	"github.com/scoutme/milk/internal/transport/acp"
 )
@@ -121,12 +119,10 @@ func (as *acpSession) setupBackground(hasLocalAgent bool) {
 	if !hasLocalAgent {
 		return
 	}
-	cfg := as.cfg
-	mgr := local.NewManager(context.Background(), cfg.EffectiveMaxBackgroundAgents())
-	mgr.SetJobTimeout(cfg.EffectiveBackgroundAgentTimeout())
-	if dir, err := config.Dir(); err == nil && as.sess.ID != "" {
-		mgr.SetStateFile(dir + "/jobs/" + as.sess.ID + ".json")
-	}
+	// Shared manager construction (issue #188); the onStart/onDone/
+	// onBatchDone hooks below are ACP's own (client notifications + the
+	// follow-up plumbing).
+	mgr := newBackgroundManager(context.Background(), as.cfg, as.sess.ID)
 	var stopsMu sync.Mutex
 	stops := map[string]func(){}
 	mgr.SetOnStart(func(j *local.Job) {
@@ -157,30 +153,15 @@ func (as *acpSession) setupBackground(hasLocalAgent bool) {
 	as.mgr = mgr
 }
 
-// spawnUserJob starts a background job on the user's behalf (/bg start),
-// preferring the escalation agent's local backend like the TUI does.
+// spawnUserJob starts a background job on the user's behalf (/bg start) — the
+// shared /bg-start core (userJobPlan/userJobRunner, issue #188), the same
+// plan the TUI's spawnUserBackgroundAgent makes.
 func (as *acpSession) spawnUserJob(task string) string {
-	agent := as.escLocalAgent
-	ac := as.cfg.EscalationAgentConfig()
-	if agent == nil {
-		agent = as.localAgent
-		ac = as.cfg.ActiveAgent()
+	agent, modelName, label, ok := userJobPlan(as.cfg, as.escLocalAgent, as.localAgent, task)
+	if as.mgr == nil || !ok {
+		return userJobUnavailableMsg
 	}
-	if as.mgr == nil || agent == nil {
-		return "background agents unavailable — no inference-server-backed agent configured"
-	}
-	modelName := ac.Model
-	if modelName == "" {
-		modelName = ac.Name
-	}
-	label := task
-	if len(label) > 60 {
-		label = label[:57] + "..."
-	}
-	cwd, mem := as.st.cwd, as.mem
-	job := as.mgr.Spawn(label, task, "user", modelName, func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
-		return agent.RunBackgroundTask(ctx, jobID, cwd, task, "", out, mem)
-	})
+	job := as.mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, as.st.cwd, task, as.mem))
 	return fmt.Sprintf("background agent %s started: %s", job.ID, label)
 }
 

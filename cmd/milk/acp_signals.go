@@ -63,17 +63,13 @@ func (as *acpSession) surfaceVerdicts(vs []loop.Verdict) {
 		if v.Confidence < 0.5 {
 			continue
 		}
-		msg := v.Message
 		as.loopMu.Lock()
-		pinned := as.st.stickyEscalate
+		pinned := as.st.stickyEscalate || as.st.autoStickyEscalate
 		as.loopMu.Unlock()
-		if v.Signal == loop.SignalTokenVelocity && !pinned {
-			msg += " — consider /escalate"
-		}
-		line := strings.TrimSpace(loopSignalLine(v, msg))
-		if v.ShouldInterrupt {
-			line += " — turn auto-interrupted"
-		}
+		// Shared message rules (loopVerdictMsg, issue #188): the
+		// token_velocity escalation suggestion and the auto-interrupt
+		// marker — the same line the TUI shows.
+		line := strings.TrimSpace(loopSignalLine(v, loopVerdictMsg(v, pinned)))
 		as.notify(acp.AgentMessageChunk(as.liveID("warn"), line))
 		n := (&acp.Mapper{Session: as.id}).LoopWarning(v, 0, 0)
 		as.conn.Notify(n.Method, n.Params) //nolint:errcheck // see above

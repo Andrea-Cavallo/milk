@@ -236,25 +236,25 @@ func (as *acpSession) buildRunners(cfg config.Config) error {
 		as.setupBackground(localAgent != nil || isLocalRunner(escalationRunner))
 	}
 
-	// wireLocal applies everything an ACP session adds to a local-provider agent.
+	// The host wiring: the same localAgentWiring struct the TUI builds
+	// (issue #188) — only the callbacks differ, wireLocalAgent applies them
+	// in the one shared place.
+	permStore, _ := local.OpenPermStore(cwd) //nolint:errcheck // nil disables persistent grants, same as every other best-effort call site
+	wiring := localAgentWiring{
+		permStore:    permStore,
+		permAsk:      as.askPermissionWithOversight,
+		bgPermAsk:    as.backgroundPermissionAsk,
+		safetyAsk:    as.safetyAsk,
+		skipPerms:    as.skipPerms.Load,
+		onOpenFile:   func(path string) error { return acpOpenFile(cwd, path) },
+		onToolUse:    as.onLocalToolUse,
+		onToolResult: as.onLocalToolResult,
+		onThinking:   as.onThinking,
+		taskStore:    as.taskStore,
+		mgr:          as.mgr,
+	}
 	wireLocal := func(a *local.Agent) *local.Agent {
-		permStore, _ := local.OpenPermStore(cwd) //nolint:errcheck // nil disables persistent grants, same as every other best-effort call site
-		wired := a.
-			WithPermissions(permStore, as.askPermissionWithOversight).
-			WithSkipPermissionsFunc(as.skipPerms.Load).
-			WithBackgroundPermissionAsk(as.backgroundPermissionAsk).
-			WithSafetyAsk(as.safetyAsk).
-			WithOnOpenFile(func(path string) error { return acpOpenFile(cwd, path) }).
-			WithOnToolUse(as.onLocalToolUse).
-			WithOnToolResult(as.onLocalToolResult).
-			WithOnThinking(as.onThinking)
-		if as.taskStore != nil {
-			wired = wired.WithTaskStore(tasks.NewAdapter(as.taskStore))
-		}
-		if as.mgr != nil {
-			wired.SetBackgroundManager(as.mgr)
-		}
-		return wired
+		return wireLocalAgent(a, wiring)
 	}
 
 	if localAgent != nil {
@@ -299,6 +299,7 @@ func (as *acpSession) buildRunners(cfg config.Config) error {
 	as.da.localAvail = primaryRunner != nil
 	as.da.escalationAvail = escalationRunner != nil
 	as.da.backgroundMgr = as.mgr
+	as.da.agentWiring = wiring
 	return nil
 }
 
@@ -673,7 +674,7 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 		if !segmentsFired && lastResponseText != "" {
 			notify.NotifyResponse(turnCtx, agentName, lastResponseText)
 		}
-		noteTurnSucceeded(as.st, target)
+		noteTurnSucceeded(as.st, rt)
 	}
 
 	stopReason := acp.StopReasonEndTurn

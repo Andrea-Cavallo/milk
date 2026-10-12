@@ -67,6 +67,11 @@ type dispatchAgents struct {
 	localAvail        bool
 	escalationAvail   bool
 	toolRunners       map[string]TurnRunner // lazily built tool-agent runners, keyed by agent name
+	// agentWiring is the host callback set buildToolRunner applies to
+	// lazily-built tool-agent runners (issue #188) so they ask for
+	// permissions exactly like the session's own agents. Zero value = no
+	// host wiring (headless callers), which keeps the pre-#188 defaults.
+	agentWiring localAgentWiring
 	// mcpToolSets holds the live MCP ToolSet for each agent that has MCP servers
 	// configured, keyed by agent name. Used by /mcp list and /mcp reconnect.
 	mcpToolSets map[string]*mcp.ToolSet
@@ -1500,18 +1505,13 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 			IsUserTurn:    false,
 		})
 		for _, v := range verdicts {
-			msg := v.Message
-			// token_velocity is the one cross-turn signal with no mid-turn
-			// equivalent to act on (it's only ever known once the turn that
-			// triggered it has already finished — see internal/loop/detector.go's
-			// Feed) and no auto-interrupt (high consumption can be
-			// perfectly legitimate for real work). The only lever available
-			// is suggesting escalation for the *next* turn, and only when
-			// the session isn't already headed there — a sticky-escalated
-			// session has nothing new to suggest.
-			if v.Signal == loop.SignalTokenVelocity && !m.st.stickyEscalate && !m.st.autoStickyEscalate {
-				msg += " — consider /escalate"
-			}
+			// Shared message rules (loopVerdictMsg, issue #188): the
+			// token_velocity escalation suggestion (only when the session
+			// isn't already headed to escalation) and the auto-interrupt
+			// marker. The two tiers below stay the TUI's own surface
+			// decision: high-confidence verdicts reach the transcript,
+			// lower ones only the status-bar warning.
+			msg := loopVerdictMsg(v, m.st.stickyEscalate || m.st.autoStickyEscalate)
 			if v.Confidence >= 0.8 {
 				m.appendTranscript(yellow(loopSignalLine(v, msg)))
 				if m.loopDetector != nil && v.ShouldInterrupt {
@@ -2173,7 +2173,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Intra-turn loop detection: feed chunk and check for repetition.
 		if m.loopDetector != nil {
 			for _, v := range m.loopDetector.FeedChunk(msg.text) {
-				m.appendTranscript(yellow("\n" + loopSignalLine(v, v.Message)))
+				m.appendTranscript(yellow("\n" + loopSignalLine(v, loopVerdictMsg(v, m.st.stickyEscalate || m.st.autoStickyEscalate))))
 				if v.ShouldInterrupt {
 					m.loopInterrupt = true
 					m.loopInterruptLabel = loopSignalLabel(v)
@@ -2198,7 +2198,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// repetition threshold — see internal/loop.
 		if m.loopDetector != nil {
 			for _, v := range m.loopDetector.FeedReasoningChunk(msg.text) {
-				m.appendTranscript(yellow("\n" + loopSignalLine(v, v.Message)))
+				m.appendTranscript(yellow("\n" + loopSignalLine(v, loopVerdictMsg(v, m.st.stickyEscalate || m.st.autoStickyEscalate))))
 				if v.ShouldInterrupt {
 					m.loopInterrupt = true
 					m.loopInterruptLabel = loopSignalLabel(v)
@@ -3288,26 +3288,14 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	send := func(msg tea.Msg) { m.st.program.Send(msg) }
 	ir0 := &tuiInputReader{send: send}
 	tuiAgents, _ := m.buildTUIAgents(send, ir0)
-	agent := tuiAgents.escalationLocal
-	modelName := m.st.cfg.EscalationAgentConfig().Model
-	if modelName == "" {
-		modelName = m.st.cfg.EscalationAgentConfig().Name
-	}
-	if agent == nil {
-		agent = tuiAgents.local
-		modelName = m.st.cfg.ActiveAgent().Model
-		if modelName == "" {
-			modelName = m.st.cfg.ActiveAgent().Name
-		}
-	}
-	if mgr == nil || agent == nil {
-		m.appendTranscript("\n" + dimWrap("⚙ background agent unavailable — no inference-server-backed agent configured") + "\n")
+	// Agent preference (escalation-local, else primary), model-name
+	// fallback, label and spawn body are the shared /bg-start core
+	// (userJobPlan/userJobRunner, issue #188) — the same plan ACP's
+	// spawnUserJob makes.
+	agent, modelName, label, ok := userJobPlan(m.st.cfg, tuiAgents.escalationLocal, tuiAgents.local, task)
+	if mgr == nil || !ok {
+		m.appendTranscript("\n" + dimWrap("⚙ "+userJobUnavailableMsg) + "\n")
 		return m, nil
-	}
-
-	label := task
-	if len(label) > 60 {
-		label = label[:57] + "..."
 	}
 	cwd := m.st.cwd
 	// Perform the spawn inside a tea.Cmd so that the Manager's onStart
@@ -3316,9 +3304,7 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	// Update deadlocks because the event loop goroutine is the only reader
 	// of that channel and it is blocked waiting for Update to return.
 	return m, func() tea.Msg {
-		job := mgr.Spawn(label, task, "user", modelName, func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
-			return agent.RunBackgroundTask(ctx, jobID, cwd, task, "", out, m.mem)
-		})
+		job := mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, cwd, task, m.mem))
 		return backgroundSpawnedMsg{jobID: job.ID, label: label}
 	}
 }
@@ -3351,16 +3337,8 @@ func (m model) maybeAutoFollowupBackgroundJobs(waitForWholeWave bool) (tea.Model
 		m.pendingUserBackgroundFollowup = false
 		return m, nil
 	}
-	if mgr.PendingCount() == 0 {
-		// A user-job completion fires both the per-job and the batch-done
-		// message; the first one's turn drains the results, so the second
-		// (deferred until that turn ends) finds nothing to report and would
-		// only burn a turn.
-		applyFollowupDecision(waitForWholeWave, followupSkip, &m.pendingBackgroundFollowup, &m.pendingUserBackgroundFollowup)
-		return m, nil
-	}
 	busy := m.busy || m.pendingPerm != nil || m.pendingDirectBash != nil || m.ptyPane != nil
-	d := decideFollowup(waitForWholeWave, mgr.ActiveCount(), busy)
+	d := decideFollowup(waitForWholeWave, mgr.ActiveCount(), mgr.PendingCount(), busy)
 	applyFollowupDecision(waitForWholeWave, d, &m.pendingBackgroundFollowup, &m.pendingUserBackgroundFollowup)
 	if d != followupNow {
 		return m, nil
@@ -3705,35 +3683,31 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 			st.notifier.NotifyToolResult(context.Background(), name, result, isError)
 		}
 	}
+	// The host wiring — one struct applied by wireLocalAgent (issue #188).
+	// It also goes onto dispatchAgents so lazily-built agent-as-tool runners
+	// ask exactly like the session's own agents instead of never asking.
+	wiring := localAgentWiring{
+		permStore:           localPermStore,
+		permAsk:             localPermAsk,
+		bgPermAsk:           localBgPermAsk,
+		safetyAsk:           localSafetyAsk,
+		skipPerms:           func() bool { return st.skipPermissions },
+		onOpenFile:          localOpenFile,
+		onRetract:           localOnRetract,
+		onToolUse:           localOnToolUse,
+		onToolResult:        localOnToolResult,
+		onThinking:          func(text string) { send(thinkChunkMsg{text: text}) },
+		onReasoningPromoted: func() { send(reasoningPromotedMsg{}) },
+		taskStore:           m.taskStore,
+		mgr:                 agents.backgroundMgr,
+	}
 	if agents.local != nil {
-		tuiLocalAgent := agents.local.
-			WithSkipPermissions(st.skipPermissions).
-			WithPermissions(localPermStore, localPermAsk).
-			WithBackgroundPermissionAsk(localBgPermAsk).
-			WithSafetyAsk(localSafetyAsk).
-			WithOnOpenFile(localOpenFile).
-			WithOnRetract(localOnRetract).
-			WithOnToolUse(localOnToolUse).
-			WithOnToolResult(localOnToolResult).
-			WithOnThinking(func(text string) { send(thinkChunkMsg{text: text}) }).
-			WithOnReasoningPromoted(func() { send(reasoningPromotedMsg{}) })
-		tuiLocalAgent.SetBackgroundManager(agents.backgroundMgr)
+		tuiLocalAgent := wireLocalAgent(agents.local, wiring)
 		tuiAgents.local = tuiLocalAgent
 		tuiAgents.primary = newLocalRunner(tuiLocalAgent, agents.primary.Name())
 	}
 	if agents.escalationLocal != nil {
-		tuiEscLocal := agents.escalationLocal.
-			WithSkipPermissions(st.skipPermissions).
-			WithPermissions(localPermStore, localPermAsk).
-			WithBackgroundPermissionAsk(localBgPermAsk).
-			WithSafetyAsk(localSafetyAsk).
-			WithOnOpenFile(localOpenFile).
-			WithOnRetract(localOnRetract).
-			WithOnToolUse(localOnToolUse).
-			WithOnToolResult(localOnToolResult).
-			WithOnThinking(func(text string) { send(thinkChunkMsg{text: text}) }).
-			WithOnReasoningPromoted(func() { send(reasoningPromotedMsg{}) })
-		tuiEscLocal.SetBackgroundManager(agents.backgroundMgr)
+		tuiEscLocal := wireLocalAgent(agents.escalationLocal, wiring)
 		tuiAgents.escalationLocal = tuiEscLocal
 		// agents.escalation can legitimately be nil in minimal embeddings
 		// (tests, single-agent setups) — fall back to the configured name
@@ -3744,6 +3718,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		}
 		tuiAgents.escalation = newLocalRunner(tuiEscLocal, escName)
 	}
+	tuiAgents.agentWiring = wiring
 	return tuiAgents, cliPC
 }
 
@@ -3889,7 +3864,7 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 		if !segmentsFired && lastResponseText != "" {
 			st.notifier.NotifyResponse(turnCtx, agentName, lastResponseText)
 		}
-		noteTurnSucceeded(st, target)
+		noteTurnSucceeded(st, rt)
 	}
 	return turnErr
 }
@@ -4259,18 +4234,9 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 		escalationAvail:   escalationAvail,
 		mcpToolSets:       mcpToolSets,
 		mcpServersSeen:    mcpServersSeen,
-		// Constructed once per session, not per turn (ADR-0043): ctx here is
-		// the session/TUI-root context, not any single turn's cancellable
-		// one — see the Manager doc comment for why that distinction matters.
-		backgroundMgr: local.NewManager(ctx, cfg.EffectiveMaxBackgroundAgents()),
-	}
-	agents.backgroundMgr.SetJobTimeout(cfg.EffectiveBackgroundAgentTimeout())
-	// Persist job records (ADR-0043 triage): a killed milk leaves each job's
-	// last-known status, result and heartbeat timestamp on disk — see
-	// internal/agent/local's jobstore.go. Best-effort: a home dir milk can't
-	// write to just means no persistence, never a failed session.
-	if cfgDir, dirErr := config.Dir(); dirErr == nil && sess.ID != "" {
-		agents.backgroundMgr.SetStateFile(cfgDir + "/jobs/" + sess.ID + ".json")
+		// Constructed once per session, not per turn (ADR-0043) — shared
+		// construction in newBackgroundManager (issue #188).
+		backgroundMgr: newBackgroundManager(ctx, cfg, sess.ID),
 	}
 
 	m := newModel(ctx, st, rtr, agents, mem)

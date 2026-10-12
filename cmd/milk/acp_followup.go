@@ -35,16 +35,8 @@ func (as *acpSession) requestFollowup(waitForWholeWave bool) {
 		return
 	}
 	wave, user := &as.pendingWaveFollowup, &as.pendingUserFollowup
-	if mgr.PendingCount() == 0 {
-		// ACP-only guard: a client prompt may have drained the results
-		// already, and a follow-up with nothing to report is a wasted turn.
-		as.mu.Lock()
-		applyFollowupDecision(waitForWholeWave, followupSkip, wave, user)
-		as.mu.Unlock()
-		return
-	}
 	locked := as.turnMu.TryLock()
-	d := decideFollowup(waitForWholeWave, mgr.ActiveCount(), !locked)
+	d := decideFollowup(waitForWholeWave, mgr.ActiveCount(), mgr.PendingCount(), !locked)
 	if d != followupNow && locked {
 		as.turnMu.Unlock()
 	}

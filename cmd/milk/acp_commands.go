@@ -288,22 +288,13 @@ func acpCommandNames() string {
 	return strings.Join(names, ", ")
 }
 
+// acpSkipPerms is /skip-permissions over ACP: the shared grammar
+// (execSkipPermsCore), applied to the session's atomic and returned as a
+// plain slash result.
 func acpSkipPerms(as *acpSession, rest string) (string, string) {
-	switch strings.TrimSpace(rest) {
-	case "on":
-		as.skipPerms.Store(true)
-		return "dangerously_skip_permissions ON — all tool calls are approved without asking", ""
-	case "off":
-		as.skipPerms.Store(false)
-		return "dangerously_skip_permissions OFF — tool calls ask for permission again", ""
-	case "":
-		state := "off"
-		if as.skipPerms.Load() {
-			state = "on"
-		}
-		return "dangerously_skip_permissions is " + state + "  (use /skip-permissions on|off)", ""
-	}
-	return "usage: /skip-permissions [on|off]", ""
+	next, msg := execSkipPermsCore(rest, as.skipPerms.Load())
+	as.skipPerms.Store(next)
+	return msg, ""
 }
 
 // acpPermissions is /permissions over ACP — the same grammar as the TUI's

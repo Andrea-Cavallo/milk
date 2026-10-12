@@ -4,21 +4,28 @@ import "testing"
 
 func TestDecideFollowup(t *testing.T) {
 	cases := []struct {
-		name   string
-		wave   bool
-		active int
-		busy   bool
-		want   followupDecision
+		name    string
+		wave    bool
+		active  int
+		pending int
+		busy    bool
+		want    followupDecision
 	}{
-		{"wave done and idle", true, 0, false, followupNow},
-		{"wave still has active jobs", true, 2, false, followupSkip},
-		{"wave still active beats busy", true, 1, true, followupSkip},
-		{"wave done but busy", true, 0, true, followupRetryLater},
-		{"user job idle, others still running", false, 3, false, followupNow},
-		{"user job but busy", false, 3, true, followupRetryLater},
+		{"wave done and idle", true, 0, 1, false, followupNow},
+		{"wave still has active jobs", true, 2, 1, false, followupSkip},
+		{"wave still active beats busy", true, 1, 1, true, followupSkip},
+		{"wave done but busy", true, 0, 1, true, followupRetryLater},
+		{"user job idle, others still running", false, 3, 1, false, followupNow},
+		{"user job but busy", false, 3, 1, true, followupRetryLater},
+		// The shared nothing-to-report guard (issue #188): a user-job
+		// completion fires both the per-job and the wave-done signal, so the
+		// second one must not run an empty follow-up turn.
+		{"nothing pending skips even when idle", true, 0, 0, false, followupSkip},
+		{"user-job second signal with nothing pending", false, 0, 0, false, followupSkip},
+		{"nothing pending wins over busy (no retry)", false, 0, 0, true, followupSkip},
 	}
 	for _, c := range cases {
-		if got := decideFollowup(c.wave, c.active, c.busy); got != c.want {
+		if got := decideFollowup(c.wave, c.active, c.pending, c.busy); got != c.want {
 			t.Errorf("%s: decideFollowup = %v, want %v", c.name, got, c.want)
 		}
 	}
