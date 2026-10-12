@@ -224,7 +224,7 @@ const interactiveHelp = `
   /workflow                                          list available workflows
   /workflow <name> [<task>] [--<role> <agent> ...]   start a registered workflow, e.g. dev (designer→generator→evaluator),
                                                       pair (adds a user checkpoint before each verdict), swarm (concurrent
-                                                      items + a final pass) — or a custom one from ~/.milk/workflows/
+                                                      items + a final pass) — or a custom one from the workflows dir under milk's state root
   /workflow status                                   show the running (or saved) workflow
   /workflow cancel                                   stop the running workflow; /workflow resume continues it
   /workflow resume                                   resume workflow from last checkpoint
@@ -242,7 +242,7 @@ const interactiveHelp = `
   /server stop [<agent>]            stop the server tracked for an agent
 
 ── Setup ─────────────────────────────────────────────────────────────────
-  /config                print the current config (~/.milk/config.json)
+  /config                print the current config (merged global + local overrides)
   /config show           print the merged config tagged [global]/[local]/[default]
   /config init           run the setup wizard (configure primary + escalation agents)
   /config open           open config in $EDITOR / system default editor

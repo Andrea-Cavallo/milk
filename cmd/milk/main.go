@@ -2000,9 +2000,15 @@ func runInitWizard() error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	scopeLabel := "~/.milk/config.json"
+	// The real written path — honors --config-root and $MILK_CONFIG_ROOT, so
+	// a sandboxed setup doesn't claim to have written ~/.milk.
+	scopeLabel := config.ConfigPathLabel()
 	if scope == "local" {
-		scopeLabel = ".milk/config.json"
+		if p, perr := config.LocalConfigPath(); perr == nil {
+			scopeLabel = p
+		} else {
+			scopeLabel = filepath.Join(config.LocalConfigDir, "config.json")
+		}
 	}
 	fmt.Println()
 	fmt.Printf("config written to %s\n", scopeLabel)
@@ -2034,7 +2040,7 @@ var configCmd = &cobra.Command{
 
 func init() {
 	configCmd.PersistentFlags().BoolVar(&flagLocal, "local", false, "Write to .milk/config.json in the current directory (project-local)")
-	configCmd.PersistentFlags().BoolVar(&flagGlobal, "global", false, "Write to ~/.milk/config.json (global default)")
+	configCmd.PersistentFlags().BoolVar(&flagGlobal, "global", false, "Write to the global config (state root's config.json, default)")
 
 	configCmd.AddCommand(&cobra.Command{
 		Use:   "init",
