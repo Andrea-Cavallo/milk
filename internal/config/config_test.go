@@ -1643,3 +1643,131 @@ func TestInitConfig_GeneratedFileIncludesMemory(t *testing.T) {
 		t.Errorf("Memory block must be prepopulated with effective values, got %+v", cfg.Memory)
 	}
 }
+
+// TestDir_RootOverride pins the --config-root sandbox: SetRoot (the flag's
+// mechanism) and $MILK_CONFIG_ROOT must both redirect the state root, and the
+// derived paths (config.json, sessions, memory, otel, mcp_oauth) must follow.
+func TestDir_RootOverride(t *testing.T) {
+	sandbox := t.TempDir()
+
+	prev := SetRoot(sandbox)
+	defer SetRoot(prev)
+
+	dir, err := Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	if want, _ := filepath.Abs(sandbox); dir != want {
+		t.Errorf("Dir() = %q, want %q", dir, want)
+	}
+	if got := filepath.Base(dir); got == ".milk" {
+		t.Error("sandboxed Dir() must not be the default ~/.milk")
+	}
+	for _, derived := range []func() (string, error){OtelDir, MCPOAuthDir, ModelsDevCachePath} {
+		p, err := derived()
+		if err != nil {
+			t.Fatalf("derived path: %v", err)
+		}
+		if !strings.HasPrefix(p, dir+string(filepath.Separator)) {
+			t.Errorf("derived path %q must live under the state root %q", p, dir)
+		}
+	}
+}
+
+// TestDir_EnvFallback pins $MILK_CONFIG_ROOT (what child processes inherit)
+// when no explicit override is set.
+func TestDir_EnvFallback(t *testing.T) {
+	sandbox := t.TempDir()
+	t.Setenv("MILK_CONFIG_ROOT", sandbox)
+
+	prev := SetRoot("")
+	defer SetRoot(prev)
+
+	dir, err := Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	if want, _ := filepath.Abs(sandbox); dir != want {
+		t.Errorf("Dir() = %q, want %q", dir, want)
+	}
+}
+
+// TestConfigPathLabel_FollowsStateRoot pins the display label: it must name
+// the real state-root config.json (honoring $MILK_CONFIG_ROOT and SetRoot,
+// the --config-root mechanism) — never a hardcoded ~/.milk claim.
+func TestConfigPathLabel_FollowsStateRoot(t *testing.T) {
+	envRoot := t.TempDir()
+	t.Setenv("MILK_CONFIG_ROOT", envRoot)
+
+	prev := SetRoot("")
+	defer SetRoot(prev)
+
+	if want, _ := filepath.Abs(filepath.Join(envRoot, "config.json")); ConfigPathLabel() != want {
+		t.Errorf("ConfigPathLabel() = %q, want %q", ConfigPathLabel(), want)
+	}
+
+	flagRoot := t.TempDir()
+	prev2 := SetRoot(flagRoot)
+	defer SetRoot(prev2)
+	if want, _ := filepath.Abs(filepath.Join(flagRoot, "config.json")); ConfigPathLabel() != want {
+		t.Errorf("ConfigPathLabel() under SetRoot = %q, want %q", ConfigPathLabel(), want)
+	}
+}
+
+// TestLoadWithLocalIn_FollowsGivenDir pins the session-dir semantics of the
+// project-local overlay: it resolves against the *given* dir (the bound
+// session's cwd — the currently selected directory), not the process cwd.
+// Resuming a session stored under another project must merge THAT project's
+// .milk/config.json over the global base.
+func TestLoadWithLocalIn_FollowsGivenDir(t *testing.T) {
+	root := t.TempDir()
+	globalPath := filepath.Join(root, "config.json")
+	if err := os.WriteFile(globalPath, []byte(`{"agent":"global","context_budget_chars":5000}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("MILK_CONFIG", globalPath)
+
+	mkProj := func(name, agent string) string {
+		dir := filepath.Join(root, name)
+		milkDir := filepath.Join(dir, ".milk")
+		if err := os.MkdirAll(milkDir, 0o700); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(milkDir, "config.json"), []byte(`{"agent":"`+agent+`"}`), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		return dir
+	}
+	projA := mkProj("projA", "agent-a")
+	projB := mkProj("projB", "agent-b")
+
+	// The process cwd is projA while the session lives under projB.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(projA); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer os.Chdir(orig)
+
+	merged, err := LoadMergedIn(projB)
+	if err != nil {
+		t.Fatalf("LoadMergedIn: %v", err)
+	}
+	if merged.Agent != "agent-b" {
+		t.Errorf("merged agent = %q, want the given dir's overlay (agent-b) — the process-cwd overlay leaked in", merged.Agent)
+	}
+	if merged.ContextBudgetChars != 5000 {
+		t.Errorf("merged context_budget = %d, want the global base value 5000", merged.ContextBudgetChars)
+	}
+	if !HasLocalConfigIn(projB) {
+		t.Error("HasLocalConfigIn(projB) = false, want true")
+	}
+
+	// The empty-dir fallback is the process cwd (projA).
+	_, _, m2, hasLocal, err := LoadWithLocalIn("")
+	if err != nil || !hasLocal || m2.Agent != "agent-a" {
+		t.Errorf("LoadWithLocalIn(\"\") = (agent=%q, hasLocal=%v, err=%v), want the process-cwd overlay agent-a", m2.Agent, hasLocal, err)
+	}
+}

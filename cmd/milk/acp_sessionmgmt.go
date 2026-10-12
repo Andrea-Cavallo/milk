@@ -41,6 +41,15 @@ import (
 func (as *acpSession) rebind(sess *session.Session) error {
 	as.sess = sess
 	as.st.sess = sess
+	// Re-merge config for the newly bound session BEFORE anything reads it:
+	// project-local config follows the session's directory — the currently
+	// selected dir — so /resume into another project must pick up that
+	// project's .milk/config.json, not the server-launch default. Falls back
+	// to the current copy when the files can't be read.
+	if fresh, ferr := config.LoadMergedIn(sess.CWD); ferr == nil {
+		as.cfg = fresh
+		as.st.cfg = fresh
+	}
 	// Replay IDs: plain hist-* on the first binding (already-replayed panes
 	// keep patching), session-qualified after any rebind (acp_history.go).
 	if sess.ID == as.firstBindingID {

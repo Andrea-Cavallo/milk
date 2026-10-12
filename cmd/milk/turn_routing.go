@@ -29,6 +29,56 @@ type routedTurn struct {
 	Fallback string
 }
 
+// availPingTimeout bounds the per-turn availability re-check so an
+// unreachable host can't stall a turn.
+const availPingTimeout = 3 * time.Second
+
+// refreshTurnAvailability re-checks any agent that reads unavailable before
+// routing a turn. Availability is captured when the runners are built
+// (startup, /config init commit, config reload) — but the agent may simply
+// not have been up *yet* (server still booting, run_cmd started after the
+// check, config reloaded while it was down), and a frozen false would route
+// every turn to the other agent until a restart. Returns the flags this turn
+// should route with. Where the agent set is shared the recovered flag sticks;
+// the TUI's per-turn copy re-checks on later turns — one bounded health ping
+// while an agent reads down, nothing once it reads up.
+func refreshTurnAvailability(ctx context.Context, rtr *router.Router, agents *dispatchAgents) (localAvail, escalationAvail bool) {
+	localAvail = agents.localAvail
+	if !localAvail && pingTurnTarget(ctx, agents.primary) {
+		localAvail = true
+		agents.localAvail = true
+		// A router built while the primary was down has no classifier — put
+		// the classification step back.
+		if agents.local != nil {
+			rtr.SetLocalAgent(agents.local)
+		}
+	}
+	escalationAvail = agents.escalationAvail
+	if !escalationAvail && pingTurnTarget(ctx, agents.escalation) {
+		escalationAvail = true
+		agents.escalationAvail = true
+	}
+	return localAvail, escalationAvail
+}
+
+// pingTurnTarget reports whether a dispatch target's agent answers right now.
+// The local HTTP agent's ping is bounded so an unreachable host can't stall
+// the turn; cli/subprocess pings are local process checks. False when the
+// runner has no pingable agent.
+func pingTurnTarget(ctx context.Context, r TurnRunner) bool {
+	switch t := r.(type) {
+	case *localRunner:
+		pingCtx, cancel := context.WithTimeout(ctx, availPingTimeout)
+		defer cancel()
+		return t.agent.Ping(pingCtx) == nil
+	case *cliRunner:
+		return t.agent.Ping() == nil
+	case *subprocessRunner:
+		return t.agent.Ping() == nil
+	}
+	return false
+}
+
 // routeTurn routes input for st's session. localAvail / escalationAvail say
 // whether each agent can run; a decision for an unavailable one falls back to
 // the other. It consumes the single-turn flags (forceEscalate, forcePrimary);

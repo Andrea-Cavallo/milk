@@ -63,6 +63,11 @@ type initWizardState struct {
 	step    initWizardStep
 	primary config.AgentConfig
 	escCLI  bool // whether to use default claude-cli escalation
+	// cwd is the directory the wizard resolves project-local config against
+	// — the host's currently selected directory (activeConfigDir); "" = the
+	// process cwd. Set by initWizardStart, so a sandboxed/foreign session
+	// dir writes .milk/config.json in the right place.
+	cwd string
 	// limits step
 	contextWindowTokens int // context_window_tokens (0 = not set); message_budget_chars/
 	// max_tool_iterations are auto-derived from this by AgentMessageBudget/
@@ -219,7 +224,7 @@ const interactiveHelp = `
   /workflow                                          list available workflows
   /workflow <name> [<task>] [--<role> <agent> ...]   start a registered workflow, e.g. dev (designer→generator→evaluator),
                                                       pair (adds a user checkpoint before each verdict), swarm (concurrent
-                                                      items + a final pass) — or a custom one from ~/.milk/workflows/
+                                                      items + a final pass) — or a custom one from the workflows dir under milk's state root
   /workflow status                                   show the running (or saved) workflow
   /workflow cancel                                   stop the running workflow; /workflow resume continues it
   /workflow resume                                   resume workflow from last checkpoint
@@ -237,12 +242,12 @@ const interactiveHelp = `
   /server stop [<agent>]            stop the server tracked for an agent
 
 ── Setup ─────────────────────────────────────────────────────────────────
-  /config                print the current config (~/.milk/config.json)
+  /config                print the current config (merged global + local overrides)
   /config show           print the merged config tagged [global]/[local]/[default]
   /config init           run the setup wizard (configure primary + escalation agents)
   /config open           open config in $EDITOR / system default editor
   /init                  alias for /config init — run the setup wizard
-  /reload                re-parse config.json immediately (same as the auto-watcher)
+  /reload                re-parse config.json immediately (same as the auto-watcher) — agent changes rebuild the runners for the next turn
   /open <file>           open any file in $EDITOR (agent can also call the open_file tool)
   /setup telegram        configure Telegram remote oversight interactively
   /setup telegram on     enable Telegram (credentials must already be configured)
@@ -924,7 +929,7 @@ func execColorize(sub string, st *interactiveState) string {
 		return fmt.Sprintf("%s unknown mode %q — valid values: off, fenced, balanced, full (experimental)", milkTag(), sub)
 	}
 	st.cfg.Colorization = sub
-	if err := saveLocalOrGlobal(st.cfg); err != nil {
+	if err := saveLocalOrGlobal(st.cfg, activeConfigDir(st)); err != nil {
 		return fmt.Sprintf("%s set colorization to %s (config save failed: %v)", milkTag(), bold(sub), err)
 	}
 	return fmt.Sprintf("%s colorization set to %s", milkTag(), bold(sub))
@@ -1192,7 +1197,7 @@ func runToolScopeOp(toolName, scopeSeg string, st *interactiveState, op toolScop
 	for _, sc := range scopes {
 		msgs = append(msgs, op.apply(toolName, sc, st))
 	}
-	if err := saveLocalOrGlobal(st.cfg); err != nil {
+	if err := saveLocalOrGlobal(st.cfg, activeConfigDir(st)); err != nil {
 		msgs = append(msgs, fmt.Sprintf("%s %s tool-agent %q (config save failed: %v)", milkTag(), op.past, toolName, err))
 	}
 	return strings.Join(msgs, "\n")
@@ -1587,7 +1592,7 @@ func execMCPAdd(rest string, st *interactiveState) string {
 		Timeout:   fields["timeout"],
 	}
 	updated := config.UpsertMCPServer(&st.cfg, entry)
-	if err := saveLocalOrGlobal(st.cfg); err != nil {
+	if err := saveLocalOrGlobal(st.cfg, activeConfigDir(st)); err != nil {
 		return fmt.Sprintf("%s added MCP server %q (config save failed: %v)", milkTag(), name, err)
 	}
 	verb := "added"
@@ -1625,7 +1630,7 @@ func execMCPRemove(name string, st *interactiveState) string {
 	if !removeMCPServer(&st.cfg, name) {
 		return fmt.Sprintf("%s MCP server %q not found", milkTag(), name)
 	}
-	if err := saveLocalOrGlobal(st.cfg); err != nil {
+	if err := saveLocalOrGlobal(st.cfg, activeConfigDir(st)); err != nil {
 		return fmt.Sprintf("%s removed MCP server %q (config save failed: %v)", milkTag(), name, err)
 	}
 	return fmt.Sprintf("%s MCP server %q removed", milkTag(), name)
@@ -1642,7 +1647,7 @@ func execMCPSetEnabled(name string, enabled bool, st *interactiveState) string {
 	if !enabled {
 		verb = "disabled"
 	}
-	if err := saveLocalOrGlobal(st.cfg); err != nil {
+	if err := saveLocalOrGlobal(st.cfg, activeConfigDir(st)); err != nil {
 		return fmt.Sprintf("%s %s MCP server %q (config save failed: %v)", milkTag(), verb, name, err)
 	}
 	return fmt.Sprintf("%s MCP server %q %s", milkTag(), name, verb)
@@ -1807,7 +1812,7 @@ func execMCPAssign(rest string, assign bool, st *interactiveState) string {
 		}
 	}
 	if changed {
-		if err := saveLocalOrGlobal(st.cfg); err != nil {
+		if err := saveLocalOrGlobal(st.cfg, activeConfigDir(st)); err != nil {
 			msgs = append(msgs, fmt.Sprintf("%s %sed %s (config save failed: %v)", milkTag(), verb, quotedNames(servers), err))
 		}
 	}

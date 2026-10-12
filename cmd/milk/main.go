@@ -60,6 +60,7 @@ var (
 	flagLocal        bool   // --local: write to .milk/config.json (project-local)
 	flagGlobal       bool   // --global: write to ~/.milk/config.json (global)
 	flagOutputFormat string // --output-format: text|json|stream-json for one-shot prompts
+	flagConfigRoot   string // --config-root: alternate milk state root instead of ~/.milk
 )
 
 // Set via -ldflags at build time.
@@ -91,6 +92,15 @@ any hosted endpoint).`,
 }
 
 func init() {
+	// --config-root (or $MILK_CONFIG_ROOT) sandboxes all milk state —
+	// config.json, sessions, memory, jobs, history, otel, mcp_oauth … — so a
+	// clean setup can be driven without touching ~/.milk. Applied before any
+	// command runs, and exported so child processes stay in the same root.
+	rootCmd.PersistentFlags().StringVar(&flagConfigRoot, "config-root", "", "Milk state root (config.json, sessions, memory, otel, …) instead of ~/.milk; default $MILK_CONFIG_ROOT. Use for a clean sandboxed setup")
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		return applyConfigRoot(flagConfigRoot)
+	}
+
 	rootCmd.Flags().BoolVar(&flagEscalate, "escalate", false, "Force route to escalation agent for this turn")
 	rootCmd.Flags().BoolVar(&flagPrimary, "primary", false, "Force route to primary agent for this turn")
 	rootCmd.Flags().BoolVar(&flagNew, "new", false, "Start a new session")
@@ -111,6 +121,26 @@ func init() {
 	rootCmd.AddCommand(eval.Command())
 }
 
+// applyConfigRoot points milk's state root at dir when set (the --config-root
+// flag; $MILK_CONFIG_ROOT is honored directly by config.Dir) and exports
+// MILK_CONFIG_ROOT so child processes — run_cmd inference servers, subprocess
+// agents, nested milk runs — stay in the same sandbox. Empty keeps the
+// default ~/.milk.
+func applyConfigRoot(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving --config-root: %w", err)
+	}
+	config.SetRoot(abs)
+	if err := os.Setenv("MILK_CONFIG_ROOT", abs); err != nil {
+		return fmt.Errorf("exporting MILK_CONFIG_ROOT: %w", err)
+	}
+	return nil
+}
+
 func run(cmd *cobra.Command, args []string) error {
 	if flagList {
 		return runList(flagListAll)
@@ -121,6 +151,12 @@ func run(cmd *cobra.Command, args []string) error {
 
 	prompt := strings.TrimSpace(strings.Join(args, " "))
 
+	// Initial load: global base (config.Dir() — ~/.milk or the
+	// --config-root/MILK_CONFIG_ROOT state root) merged with the process-cwd
+	// overlay, which is the selected dir until a session binds. If the
+	// session resolved below lives under another directory, run() and
+	// runREPL re-merge against its dir (LoadMergedIn) before anything reads
+	// cfg — this is NOT the only merge point.
 	cfg, err := config.LoadMerged()
 	startupWarning := ""
 	if err != nil {
@@ -185,6 +221,14 @@ func run(cmd *cobra.Command, args []string) error {
 	sess, err := loadSessionForRun(cwd)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
+	}
+	// A session resolved by id can live under another directory — reload so
+	// its project-local config (the currently selected dir) applies to this
+	// run instead of the launch cwd's.
+	if sess.CWD != "" && sess.CWD != cwd {
+		if fresh, ferr := config.LoadMergedIn(sess.CWD); ferr == nil {
+			cfg = fresh
+		}
 	}
 
 	sessionStart := time.Now()
@@ -391,6 +435,17 @@ func buildPrimaryRunner(_ context.Context, cfg config.Config, cwd string, sess *
 			r = r.withMCPToolSet(servers, ts)
 		}
 		return r, nil, nil
+	}
+
+	// Launch run_cmd when the configured server isn't up yet — the same
+	// synchronous start the TUI startup path does before its availability
+	// Ping — so callers that build runners mid-session (ACP's buildRunners on
+	// /config init, single-prompt) don't come up with an unreachable primary
+	// just because the server wasn't started.
+	if startAC := activeLocalAgentConfig(cfg); startAC.RunCmd != "" && !isReachable(startAC.URL) {
+		if err := ensureServerRunning(context.Background(), startAC.URL, startAC.RunCmd, startAC.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "%s warning: run_cmd failed: %v\n", milkTag(), err)
+		}
 	}
 
 	ac := applyFreshAWSCreds(cfg, primaryAC)
@@ -1945,9 +2000,15 @@ func runInitWizard() error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	scopeLabel := "~/.milk/config.json"
+	// The real written path — honors --config-root and $MILK_CONFIG_ROOT, so
+	// a sandboxed setup doesn't claim to have written ~/.milk.
+	scopeLabel := config.ConfigPathLabel()
 	if scope == "local" {
-		scopeLabel = ".milk/config.json"
+		if p, perr := config.LocalConfigPath(); perr == nil {
+			scopeLabel = p
+		} else {
+			scopeLabel = filepath.Join(config.LocalConfigDir, "config.json")
+		}
 	}
 	fmt.Println()
 	fmt.Printf("config written to %s\n", scopeLabel)
@@ -1979,7 +2040,7 @@ var configCmd = &cobra.Command{
 
 func init() {
 	configCmd.PersistentFlags().BoolVar(&flagLocal, "local", false, "Write to .milk/config.json in the current directory (project-local)")
-	configCmd.PersistentFlags().BoolVar(&flagGlobal, "global", false, "Write to ~/.milk/config.json (global default)")
+	configCmd.PersistentFlags().BoolVar(&flagGlobal, "global", false, "Write to the global config (state root's config.json, default)")
 
 	configCmd.AddCommand(&cobra.Command{
 		Use:   "init",
@@ -2281,18 +2342,18 @@ func promptLocalOrGlobal() string {
 // then silently flipped every later command's scope default to "local".
 func saveConfigForScope(cfg config.Config, scope string) error {
 	if scope == "local" {
-		if err := ensureLocalConfig(); err != nil {
+		if err := ensureLocalConfig(""); err != nil {
 			return err
 		}
 	}
 	return config.SaveScope(cfg, scope)
 }
 
-// ensureLocalConfig creates .milk/config.json with a minimal empty object if
-// it doesn't exist yet. Called after the user answers "Y" to the scope prompt
-// but no local config file is present.
-func ensureLocalConfig() error {
-	p, err := config.LocalConfigPath()
+// ensureLocalConfig creates .milk/config.json under dir ("" = process cwd)
+// with a minimal empty object if it doesn't exist yet. Called after the user
+// answers "Y" to the scope prompt but no local config file is present.
+func ensureLocalConfig(dir string) error {
+	p, err := config.LocalConfigPathIn(dir)
 	if err != nil {
 		return err
 	}
@@ -2392,7 +2453,7 @@ func runConfigOpen() error {
 		if err != nil {
 			return err
 		}
-		if err := ensureLocalConfig(); err != nil {
+		if err := ensureLocalConfig(""); err != nil {
 			return err
 		}
 		cfgPath = p
@@ -2524,7 +2585,7 @@ func init() {
 
 			fmt.Printf("current version: %s\n", version)
 			fmt.Println("checking for updates…")
-			rel, err := updateCheck(ctx, &cfg)
+			rel, err := updateCheck(ctx, &cfg, "")
 			if err != nil {
 				return fmt.Errorf("update check: %w", err)
 			}

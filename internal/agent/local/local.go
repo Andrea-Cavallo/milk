@@ -1610,8 +1610,8 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 				len(pendingImages), a.model)
 		} else {
 			userMsg.Content = modelPrompt + fmt.Sprintf(
-				"\n\n<system-reminder>%d image attachment(s) were dropped — this agent (%s) is not configured for vision input. Set \"vision\": true on its entry in ~/.milk/config.json if the model actually supports image input.</system-reminder>",
-				len(pendingImages), a.model)
+				"\n\n<system-reminder>%d image attachment(s) were dropped — this agent (%s) is not configured for vision input. Set \"vision\": true on its entry in %s if the model actually supports image input.</system-reminder>",
+				len(pendingImages), a.model, config.ConfigPathLabel())
 			pendingImages = nil // nothing can use them this turn — don't forward stale images to an unrelated later tool call
 		}
 	}
@@ -2653,8 +2653,8 @@ Action streak detected: %s. You are stuck in a non-progressing loop. Stop and tr
 				msgs = append(msgs, Message{Role: "user", ContentParts: parts})
 			} else {
 				msgs = append(msgs, Message{Role: "user", Content: fmt.Sprintf(
-					"<system-reminder>Tool %q returned an image, but this agent (%s) is not configured for vision input — the image was dropped. Set \"vision\": true on its entry in ~/.milk/config.json if the model actually supports image input, or switch to a vision-capable agent to view it.</system-reminder>",
-					toolCalls[i].Function.Name, a.model)})
+					"<system-reminder>Tool %q returned an image, but this agent (%s) is not configured for vision input — the image was dropped. Set \"vision\": true on its entry in %s if the model actually supports image input, or switch to a vision-capable agent to view it.</system-reminder>",
+					toolCalls[i].Function.Name, a.model, config.ConfigPathLabel())})
 			}
 		}
 		if outcome.escalate {

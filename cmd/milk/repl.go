@@ -83,6 +83,17 @@ type dispatchAgents struct {
 	backgroundMgr *local.Manager
 }
 
+// agentConfigChanged reports whether a config change touches anything
+// rebuildRunners constructs — the agent entries, the active-agent selections,
+// or the agent-as-tool list (whose lazily-built runners pin old agents).
+// Everything else hot-reloads without a runner rebuild.
+func agentConfigChanged(a, b config.Config) bool {
+	return a.Agent != b.Agent ||
+		a.EscalationAgent != b.EscalationAgent ||
+		!reflect.DeepEqual(a.Agents, b.Agents) ||
+		!reflect.DeepEqual(a.AgentTools, b.AgentTools)
+}
+
 // refreshMCPToolSets rebuilds the MCP toolset for the primary and escalation
 // agents when their EffectiveMCPServers has changed since it was last built
 // — on a config-write event (the config-watcher reload path, or right after
@@ -107,15 +118,34 @@ func (m model) refreshMCPToolSets() model {
 // longer matches what was last built for it. Returns changed=true when a
 // rebuild happened.
 func (m model) refreshMCPForRole(role AgentRole, agentName string) (model, bool) {
+	return m.refreshMCPForRoleForce(role, agentName, false)
+}
+
+// refreshMCPForRoleForce is refreshMCPForRole with the "already up to date"
+// short-circuit disabled. rebuildRunners uses it after replacing the runners:
+// the mcpServersSeen cache still describes the replaced runners, so every
+// toolset/server list must be re-attached even when the server config itself
+// is unchanged.
+func (m model) refreshMCPForRoleForce(role AgentRole, agentName string, force bool) (model, bool) {
 	if agentName == "" {
-		return m, false
-	}
-	newServers := m.st.cfg.EffectiveMCPServers(agentName)
-	if reflect.DeepEqual(newServers, m.agents.mcpServersSeen[agentName]) {
 		return m, false
 	}
 	if m.agents.mcpServersSeen == nil {
 		m.agents.mcpServersSeen = map[string][]config.MCPServerConfig{}
+	}
+	newServers := m.st.cfg.EffectiveMCPServers(agentName)
+	if !force && reflect.DeepEqual(newServers, m.agents.mcpServersSeen[agentName]) {
+		return m, false
+	}
+	if force && len(newServers) == 0 {
+		// Nothing to attach — the fresh runner starts without a toolset, the
+		// same as the startup wiring. Just drop the stale bookkeeping.
+		if old := m.agents.mcpToolSets[agentName]; old != nil {
+			old.Close(m.ctx)
+			delete(m.agents.mcpToolSets, agentName)
+		}
+		m.agents.mcpServersSeen[agentName] = newServers
+		return m, false
 	}
 	m.agents.mcpServersSeen[agentName] = newServers
 
@@ -182,7 +212,12 @@ func (m model) refreshMCPForRole(role AgentRole, agentName string) (model, bool)
 		// connects directly via --mcp-config, regenerated fresh every turn
 		// (internal/agent/claude/claude.go writeMCPConfigFile). Only the
 		// cached server-name list needs updating.
-		m.agents.escalation = r.withMCPServers(newServers)
+		newRunner := r.withMCPServers(newServers)
+		if role == RolePrimary {
+			m.agents.primary = newRunner
+		} else {
+			m.agents.escalation = newRunner
+		}
 	}
 	return m, true
 }
@@ -1880,7 +1915,7 @@ func (m model) Init() tea.Cmd {
 			// updateCheck (not the raw updater call): the skipped-release
 			// filter and the last-check write-back apply to the startup
 			// check too — a skipped release must not nag again on restart.
-			rel, err := updateCheck(ctx, &cfg)
+			rel, err := updateCheck(ctx, &cfg, activeConfigDir(m.st))
 			if err != nil || rel == nil {
 				return nil
 			}
@@ -2620,9 +2655,19 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		oldCfg.UpdateLastCheck, newCfg.UpdateLastCheck = "", ""
 		oldCfg.UpdateSkippedVersion, newCfg.UpdateSkippedVersion = "", ""
 		contentChanged := !reflect.DeepEqual(oldCfg, newCfg)
+		agentChanged := agentConfigChanged(oldCfg, newCfg)
 		m.st.cfg = msg.cfg
 		if contentChanged {
 			m.notify("config reloaded", "/config")
+		}
+		if agentChanged {
+			// The constructed runners pin the old agent configs — rebuild
+			// them so agent edits take effect on the next turn without a
+			// restart (the same live-rebuild path /agent switch uses).
+			var cmd tea.Cmd
+			m, cmd = m.rebuildRunners()
+			m.appendTranscript(milkTag() + " agents rebuilt from config\n")
+			return m, cmd
 		}
 		m = m.refreshMCPToolSets()
 		return m, nil
@@ -3734,8 +3779,10 @@ func spinnerTick() tea.Cmd {
 
 // runTurn routes a prompt to the appropriate agent, writing output to out.
 func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agents *dispatchAgents, input string, out io.Writer, ir ...inputReader) error {
-	localAvail := agents.localAvail
-	escalationAvail := agents.escalationAvail
+	// An agent that read unavailable when the runners were built may just not
+	// have been up yet — re-check instead of freezing the fallback until a
+	// restart (see refreshTurnAvailability).
+	localAvail, escalationAvail := refreshTurnAvailability(ctx, rtr, agents)
 
 	rt, routeErr := routeTurn(ctx, st, rtr, input, localAvail, escalationAvail)
 	if routeErr != nil {
@@ -3853,6 +3900,15 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	sess, err := openSession(cwd, initialFlagNew, initialFlagSession)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
+	}
+	// A session resolved by id can live under another directory than the
+	// launch cwd — reload so the currently selected dir's project-local
+	// config merges (and the agents built below see it), not the launch
+	// dir's.
+	if sess.CWD != "" && sess.CWD != cwd {
+		if fresh, ferr := config.LoadMergedIn(sess.CWD); ferr == nil {
+			cfg = fresh
+		}
 	}
 
 	sessionStart := time.Now()
@@ -4354,11 +4410,14 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 
 	// Start a config watcher so the TUI updates automatically when config.json
 	// changes on disk (e.g. the user edits it in another terminal). The dual
-	// watcher monitors both the global config and any local .milk/config.json,
-	// deep-merging them on every change.
+	// watcher monitors both the global config and the startup session's local
+	// .milk/config.json (the selected dir — sess.CWD), deep-merging them on
+	// every change. A later /resume into another directory re-merges inline
+	// (see handleSlash's session-switch block); the watcher keeps watching the
+	// startup binding's file.
 	if cfgDir, cfgDirErr := config.Dir(); cfgDirErr == nil {
 		cfgPath := cfgDir + "/config.json"
-		localPath, _ := config.LocalConfigPath()
+		localPath, _ := config.LocalConfigPathIn(sess.CWD)
 		watcher, watchErr := config.NewDualWatcher(cfgPath, localPath, func(newCfg config.Config, err error) {
 			p.Send(configReloadMsg{cfg: newCfg, err: err})
 		})

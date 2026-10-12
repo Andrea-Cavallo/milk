@@ -233,11 +233,15 @@ The spawning agent has a model-facing equivalent to `/bg stop`: a `cancel_backgr
 
 milk watches `~/.milk/config.json` while the TUI is running; a save from another terminal is parsed and applied to in-memory state within ~200ms. `/reload` forces an immediate re-parse (useful after a symlink swap or atomic editor replace).
 
+**What gets merged**: the global base is the state root's `config.json` — `~/.milk` by default, redirected by `--config-root` / `$MILK_CONFIG_ROOT` — deep-merged with a project-local overlay at `<dir>/.milk/config.json`, where `<dir>` is the *currently selected* directory: the bound session's cwd (the ACP client's workspace dir, or a `/resume`d session's dir), falling back to the process cwd. Resuming a session stored under another project re-merges against that project's overlay (and rebuilds the agents when the agent-relevant fields changed) — the overlay follows the session, not the launch directory.
+
 On success: `[milk] config reloaded`. On error: `[milk] config reload error: <reason>` — the existing in-memory config is kept, nothing crashes.
 
-**Hot-reloaded**: scalar fields (`direct_bash`, `show_reasoning`, `sticky_escalation`, routing rules, OTel settings, …), agent configs (effective next turn), and MCP server connections (stale connections closed and the toolset rebuilt for affected roles, gated on an actual change — a turn already in flight keeps its original snapshot).
+**Hot-reloaded**: scalar fields (`direct_bash`, `show_reasoning`, `sticky_escalation`, routing rules, OTel settings, …), agent configurations — when the `agents` list, `agent`/`escalation_agent`, or the agent-as-tool list changes, the primary/escalation runners are rebuilt in place (`[milk] agents rebuilt from config`; claude-cli, subprocess/aider-cli and local providers all included) and take effect on the next turn — and MCP server connections (stale connections closed and the toolset rebuilt for affected roles, gated on an actual change — a turn already in flight keeps its original snapshot). The same rebuild runs when `/config init` or `/agent add`/`/agent switch` commit a change, so a configured agent is usable immediately — no restart.
 
-**Not hot-reloaded**: a running turn's config snapshot, new `TurnRunner` instances for the `agents` list (built next turn), and MCP OAuth authorization (still requires the interactive `/mcp auth <server>` flow).
+**Not hot-reloaded**: a running turn's config snapshot, and MCP OAuth authorization (still requires the interactive `/mcp auth <server>` flow).
+
+**Availability is never frozen**: a rebuilt runner with a `run_cmd` has its server started right away (as at startup), and if an agent still reads unavailable when the runners were built — server booting, or config reloaded while it was down — every turn re-checks it (bounded, so a dead host can't stall a turn) and routes to it again as soon as it answers. No restart needed to recover.
 
 ### Recovering from a corrupted `config.json`
 

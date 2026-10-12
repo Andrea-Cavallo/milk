@@ -12,6 +12,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -60,9 +61,11 @@ type initWizardResult struct {
 // initWizardStart starts the wizard: fresh state plus the banner, ready for
 // the first question — initWizardPrompt(st). Hosts append that however they
 // ask it: the TUI and ACP's chat fallback echo it as the next transcript
-// line, ACP's form flow passes it as the first dialog's message.
-func initWizardStart() (*initWizardState, string) {
-	st := &initWizardState{step: initStepName, escCLI: true}
+// line, ACP's form flow passes it as the first dialog's message. cwd is the
+// directory the wizard resolves project-local config against — the host's
+// currently selected directory (activeConfigDir); "" = the process cwd.
+func initWizardStart(cwd string) (*initWizardState, string) {
+	st := &initWizardState{step: initStepName, escCLI: true, cwd: cwd}
 	return st, milkTag() + " setup wizard — configure primary and escalation agents\n\n"
 }
 
@@ -290,13 +293,23 @@ func commitInitWizardConfig(st *initWizardState) (config.Config, string, error) 
 			Description: "Specialist agent. Describe its capabilities here.",
 		})
 	}
-	if err := saveLocalOrGlobal(cfg); err != nil {
+	if err := saveLocalOrGlobal(cfg, st.cwd); err != nil {
 		return cfg, "", err
 	}
 
-	scopeLabel := "~/.milk/config.json"
-	if config.HasLocalConfig() {
-		scopeLabel = ".milk/config.json"
+	// The real path — honors the wizard's dir (st.cwd), --config-root and
+	// $MILK_CONFIG_ROOT, so neither a sandboxed root nor a foreign session
+	// dir is mislabeled as ~/.milk (or as ".milk" relative to nowhere).
+	scopeLabel := filepath.Join(config.LocalConfigDir, "config.json")
+	if st.cwd != "" {
+		scopeLabel = filepath.Join(st.cwd, config.LocalConfigDir, "config.json")
+	}
+	if !config.HasLocalConfigIn(st.cwd) {
+		if dir, err := config.Dir(); err == nil {
+			scopeLabel = filepath.Join(dir, "config.json")
+		} else {
+			scopeLabel = "config.json"
+		}
 	}
 	provider := st.primary.Provider
 	if provider == "" {

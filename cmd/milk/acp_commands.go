@@ -145,19 +145,19 @@ func acpHelp(*acpSession, string) (string, string) {
 func acpConfig(as *acpSession, rest string) (string, string) {
 	switch sub := strings.ToLower(strings.TrimSpace(rest)); sub {
 	case "":
-		out, err := renderConfigJSON()
+		out, err := renderConfigJSON(activeConfigDir(as.st))
 		if err != nil {
 			return milkTag() + " error: " + err.Error(), ""
 		}
 		return out, ""
 	case "show":
-		out, err := renderConfigShow()
+		out, err := renderConfigShow(activeConfigDir(as.st))
 		if err != nil {
 			return milkTag() + " error: " + err.Error(), ""
 		}
 		return out, ""
 	case "open":
-		return acpConfigOpen(), ""
+		return acpConfigOpen(activeConfigDir(as.st)), ""
 	case "init":
 		return acpStartInitWizard(as), ""
 	}
@@ -181,7 +181,7 @@ func acpStartInitWizard(as *acpSession) string {
 	// telegram wizard for this slash command; keep the invariant even if a
 	// future call path skips that block.
 	as.pendingTelegram = nil
-	st, banner := initWizardStart()
+	st, banner := initWizardStart(activeConfigDir(as.st))
 	text, done := as.runInitDialogs(as.currentCtx(), st)
 	if !done {
 		as.pendingInit = st
@@ -216,18 +216,19 @@ func acpOpenFile(cwd, path string) error {
 // openPathDetached hands it to the platform file opener on the machine milk
 // runs on (usually the machine the client's editor runs on too). The reply
 // reports exactly what happened and always carries the path(s) as well — it
-// never claims an editor opened when nothing did.
-func acpConfigOpen() string {
+// never claims an editor opened when nothing did. dir is the currently
+// selected directory the local overlay resolved against ("" = process cwd).
+func acpConfigOpen(dir string) string {
 	var b strings.Builder
-	if target, _, err := configOpenTarget(); err != nil {
+	if target, _, err := configOpenTarget(dir); err != nil {
 		fmt.Fprintf(&b, "%s could not resolve the config path: %v\n", milkTag(), err)
 	} else if opener, oerr := openPathDetached(target); oerr != nil {
 		fmt.Fprintf(&b, "%s could not open it here (%v) — open the config in your editor\n", milkTag(), oerr)
 	} else {
 		fmt.Fprintf(&b, "%s opening %s with %s — if no window appears, use the path below\n", milkTag(), target, opener)
 	}
-	if config.HasLocalConfig() {
-		if p, err := config.LocalConfigPath(); err == nil {
+	if config.HasLocalConfigIn(dir) {
+		if p, err := config.LocalConfigPathIn(dir); err == nil {
 			fmt.Fprintf(&b, "%s local config:  %s  (unset fields inherit from global)\n", milkTag(), p)
 		}
 	}

@@ -59,6 +59,14 @@ func New(cfg config.Config, localAgent *local.Agent) *Router {
 	return &Router{cfg: cfg, localAgent: localAgent}
 }
 
+// SetLocalAgent swaps the classifier agent. The router is built when the
+// runners are; when the primary reads unavailable at that moment the
+// classifier is nil ("attempt primary directly"), and this restores the
+// classification step if the agent recovers mid-session.
+func (r *Router) SetLocalAgent(a *local.Agent) {
+	r.localAgent = a
+}
+
 // Route returns the target agent for the given prompt and session state.
 // explicitEscalate and explicitLocal reflect the --escalate / --local flags.
 func (r *Router) Route(ctx context.Context, sess *session.Session, prompt string, explicitEscalate, explicitLocal bool) (Decision, error) {

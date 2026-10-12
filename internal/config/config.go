@@ -13,26 +13,43 @@ import (
 	"github.com/scoutme/milk/internal/modelsdev"
 )
 
-// LocalConfigDir is the name of the per-project config directory relative to cwd.
-// When present, its config.json is deep-merged over the global config.
+// LocalConfigDir is the name of the per-project config directory relative to
+// the active directory. When present, its config.json is deep-merged over the
+// global config.
 const LocalConfigDir = ".milk"
 
-// LocalConfigPath returns the absolute path to the local config file
-// (.milk/config.json relative to the current working directory), or an
-// error if cwd cannot be determined. The path is returned regardless of
-// whether the file exists — callers should os.Stat it.
-func LocalConfigPath() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("resolving cwd for local config: %w", err)
+// LocalConfigPath returns the absolute path to the local config file for the
+// process working directory — the wrapper hosts use when no session directory
+// is in scope (CLI one-shots). See LocalConfigPathIn.
+func LocalConfigPath() (string, error) { return LocalConfigPathIn("") }
+
+// LocalConfigPathIn resolves the project-local config (.milk/config.json)
+// against dir — the *currently selected* directory (the bound session's cwd),
+// NOT a fixed default: project-local config follows the session, so resuming a
+// session stored under another directory — or an ACP session whose client
+// chose its own workspace dir — merges that directory's local config. An empty
+// dir falls back to the process working directory.
+func LocalConfigPathIn(dir string) (string, error) {
+	base := dir
+	if base == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolving cwd for local config: %w", err)
+		}
+		base = cwd
 	}
-	return filepath.Join(cwd, LocalConfigDir, "config.json"), nil
+	return filepath.Join(base, LocalConfigDir, "config.json"), nil
 }
 
-// HasLocalConfig reports whether a local config file exists in the current
-// working directory. Used to decide whether to show the scope prompt.
-func HasLocalConfig() bool {
-	p, err := LocalConfigPath()
+// HasLocalConfig reports whether a local config file exists in the process
+// working directory. Used to decide whether to show the scope prompt. See
+// HasLocalConfigIn for the session-aware form.
+func HasLocalConfig() bool { return HasLocalConfigIn("") }
+
+// HasLocalConfigIn reports whether dir has a project-local config file (see
+// LocalConfigPathIn for the empty-dir rule).
+func HasLocalConfigIn(dir string) bool {
+	p, err := LocalConfigPathIn(dir)
 	if err != nil {
 		return false
 	}
@@ -41,16 +58,20 @@ func HasLocalConfig() bool {
 }
 
 // SaveLocal writes the given Config as the local (.milk/config.json) config
-// file, creating the directory if needed. Unlike Save(), this does NOT write
-// the backup — local configs are project-scoped and don't need the global
-// recovery mechanism.
-func SaveLocal(cfg Config) error {
-	p, err := LocalConfigPath()
+// file for the process working directory. See SaveLocalIn.
+func SaveLocal(cfg Config) error { return SaveLocalIn(cfg, "") }
+
+// SaveLocalIn writes the local config under dir (see LocalConfigPathIn for
+// the empty-dir rule), creating the directory if needed. Unlike Save(), this
+// does NOT write the backup — local configs are project-scoped and don't need
+// the global recovery mechanism.
+func SaveLocalIn(cfg Config, dir string) error {
+	p, err := LocalConfigPathIn(dir)
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(p)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	d := filepath.Dir(p)
+	if err := os.MkdirAll(d, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -2115,12 +2136,48 @@ func SetDebugLogFilenamePrefixForTest(prefix string) func() {
 	return func() { debugLogFilenamePrefix = previous }
 }
 
+// rootOverride, when non-empty (SetRoot — the --config-root flag), replaces
+// ~/.milk as milk's state root: config.json, sessions, memory, jobs, history,
+// otel, mcp_oauth, servers … The project-local .milk/config.json is untouched
+// (it merges from the working directory either way).
+var rootOverride string
+
+// SetRoot redirects milk's state root to root; empty restores the default
+// (~/.milk, or $MILK_CONFIG_ROOT). Call before any config/store access.
+// Returns the previous override so callers (tests) can restore it.
+func SetRoot(root string) (previous string) {
+	previous = rootOverride
+	rootOverride = root
+	return previous
+}
+
+// Dir returns milk's state root: the SetRoot override, else $MILK_CONFIG_ROOT,
+// else ~/.milk. Everything milk persists lives under this directory.
 func Dir() (string, error) {
+	if rootOverride != "" {
+		return filepath.Abs(rootOverride)
+	}
+	if env := strings.TrimSpace(os.Getenv("MILK_CONFIG_ROOT")); env != "" {
+		return filepath.Abs(env)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(home, ".milk"), nil
+}
+
+// ConfigPathLabel returns the real path of the global (state-root) config.json
+// for display — honors the SetRoot override, $MILK_CONFIG_ROOT and
+// --config-root via Dir(), so a sandboxed root is never mislabeled as
+// ~/.milk/config.json. Falls back to a bare "config.json" when the root
+// cannot be resolved.
+func ConfigPathLabel() string {
+	d, err := Dir()
+	if err != nil {
+		return "config.json"
+	}
+	return filepath.Join(d, "config.json")
 }
 
 // MCPOAuthDir returns the directory for MCP OAuth token storage (~/.milk/mcp_oauth).
@@ -2179,6 +2236,14 @@ func HistoryPath(cwd string) (string, error) {
 // config exists, merged == global. All three are returned so callers can
 // display source annotations (config show --sources).
 func LoadWithLocal() (global, local, merged Config, hasLocal bool, err error) {
+	return LoadWithLocalIn("")
+}
+
+// LoadWithLocalIn is LoadWithLocal with the local config resolved against dir
+// — the currently selected directory (see LocalConfigPathIn for the
+// empty-dir rule). Global always comes from the state root; only the local
+// overlay follows dir.
+func LoadWithLocalIn(dir string) (global, local, merged Config, hasLocal bool, err error) {
 	// Load global config (handles MILK_CONFIG env override, defaults, backup).
 	merged, err = Load()
 	if err != nil {
@@ -2187,7 +2252,7 @@ func LoadWithLocal() (global, local, merged Config, hasLocal bool, err error) {
 	global = merged
 
 	// Check for local config.
-	localPath, pathErr := LocalConfigPath()
+	localPath, pathErr := LocalConfigPathIn(dir)
 	if pathErr != nil {
 		return global, Config{}, global, false, nil
 	}
@@ -2212,6 +2277,15 @@ func LoadWithLocal() (global, local, merged Config, hasLocal bool, err error) {
 // Equivalent to the old Load() behavior but with local overlay support.
 func LoadMerged() (Config, error) {
 	_, _, merged, _, err := LoadWithLocal()
+	return merged, err
+}
+
+// LoadMergedIn is LoadMerged with the local overlay resolved against dir —
+// the currently selected directory (bound session's cwd); empty = process
+// cwd. This is the load every host entry point uses when a session dir is in
+// scope.
+func LoadMergedIn(dir string) (Config, error) {
+	_, _, merged, _, err := LoadWithLocalIn(dir)
 	return merged, err
 }
 
@@ -2575,13 +2649,19 @@ func (c Config) LoopDetectionCfg() loop.Config {
 	return cfg
 }
 
-// SaveScope writes the config to the specified scope.
-// scope = "global" writes to ~/.milk/config.json (default).
-// scope = "local"  writes to .milk/config.json in cwd.
+// SaveScope writes the config to the specified scope (process-cwd local
+// default). See SaveScopeIn.
+func SaveScope(cfg Config, scope string) error { return SaveScopeIn(cfg, scope, "") }
+
+// SaveScopeIn writes the config to the specified scope, resolving the local
+// scope against dir (the currently selected directory — see
+// LocalConfigPathIn).
+// scope = "global" writes to the state root's config.json (default).
+// scope = "local"  writes to .milk/config.json under dir.
 // Any other value falls back to global.
-func SaveScope(cfg Config, scope string) error {
+func SaveScopeIn(cfg Config, scope, dir string) error {
 	if scope == "local" {
-		return SaveLocal(cfg)
+		return SaveLocalIn(cfg, dir)
 	}
 	return Save(cfg)
 }

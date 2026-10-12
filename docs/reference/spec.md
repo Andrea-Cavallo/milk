@@ -257,6 +257,7 @@ The CLI equivalent is `milk update check` and `milk update install` (non-interac
 
 | Flag | Description |
 |---|---|
+| `--config-root <dir>` | Global (applies to every command): use `<dir>` as milk's state root — `config.json`, sessions, memory, jobs, history, otel, `mcp_oauth` — instead of `~/.milk`, and export it to child processes. `$MILK_CONFIG_ROOT` is the env equivalent. Use for a clean sandboxed setup (tests, demos) without touching the real config |
 | `--escalate` | Force route to escalation agent for this turn |
 | `--primary` | Force route to primary agent for this turn; breaks ESCALATION_WAITING state |
 | `--new` | Start a new session (old sessions for cwd untouched) |

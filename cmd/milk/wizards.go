@@ -15,6 +15,7 @@ import (
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/modelsdev"
 	"github.com/scoutme/milk/internal/router"
+	"github.com/scoutme/milk/internal/tasks"
 )
 
 // --- Wizard types ---
@@ -284,46 +285,15 @@ func (m model) commitAddAgent(ac config.AgentConfig) model {
 	if isFirst {
 		m.st.cfg.Agent = ac.Name
 	}
-	if err := saveLocalOrGlobal(m.st.cfg); err != nil {
+	if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {
 		m.appendTranscript(fmt.Sprintf("%s error saving config: %v\n", milkTag(), err))
 		return m
 	}
 	m.hasInferenceAgent = true
 	if isFirst {
-		if ac.IsCLI() {
-			cliAgt := newCLIAgent(ac)
-			cliAgt = applyAWSCreds(m.st.cfg, cliAgt)
-			cliAgt = cliAgt.WithLogContext(m.st.cfg.Otel.LogContext)
-			if dbg, err := openCLIDebugLog(m.st.cfg); err != nil {
-				m.appendTranscript(fmt.Sprintf("%s warning: cannot open claude debug log: %v\n", milkTag(), err))
-			} else if dbg != nil {
-				cliAgt = cliAgt.WithDebugLog(dbg)
-			}
-			m.agents.local = nil
-			m.agents.localAvail = cliAgt.Ping() == nil
-			m.agents.primary = newCLIRunner(cliAgt, ac.Name,
-				permContext{cs: m.st.cs, cwd: m.st.cwd}, func() inputReader { return newStdinInputReader() })
-			m.rtr = router.New(m.st.cfg, nil)
-		} else {
-			freshAC := applyFreshAWSCreds(m.st.cfg, activeLocalAgentConfig(m.st.cfg))
-			newAgent := local.NewFromConfig(freshAC)
-			if od, err := config.OtelDir(); err == nil {
-				newAgent.WithOtelDir(od)
-			}
-			prog := m.st.program
-			newAgent.WithOnSigV4Refresh(func(err error) {
-				prog.Send(credRefreshReadyMsg{label: "AWS", err: err})
-			})
-			newAgent.WithLogContext(m.st.cfg.Otel.LogContext)
-			ist := m.st
-			newAgent.WithOnTokens(func(model, role string, prompt, completion, cacheRead, cacheCreation int64, timing local.StreamTiming) {
-				ist.sess.AddTokensFull(model, role, prompt, completion, cacheRead, cacheCreation)
-				ist.sess.AddTiming(model, role, timing.TTFT, timing.Decode)
-			})
-			m.agents.local = newAgent
-			m.agents.localAvail = newAgent.Ping(m.ctx) == nil
-			m.rtr = router.New(m.st.cfg, newAgent)
-		}
+		// First agent becomes the active primary — rebuild the live runners
+		// from the new config so it takes effect without a restart.
+		m, _ = m.rebuildRunners()
 	}
 	provider := ac.Provider
 	if provider == "" {
@@ -704,7 +674,7 @@ func (m model) commitAddMCP(sc config.MCPServerConfig) model {
 	if updated {
 		verb = "updated"
 	}
-	if err := saveLocalOrGlobal(m.st.cfg); err != nil {
+	if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {
 		m.appendTranscript(fmt.Sprintf("%s error saving config: %v\n", milkTag(), err))
 		return m
 	}
@@ -765,7 +735,7 @@ func copilotHostname(u string) string {
 // core in initwizard_core.go owns the state and the banner+first prompt; the
 // TUI's per-Enter answer handling is handleInitWizardKey below.
 func (m model) handleConfigInitCmd() (tea.Model, tea.Cmd) {
-	st, banner := initWizardStart()
+	st, banner := initWizardStart(activeConfigDir(m.st))
 	m.pendingInit = st
 	m.appendTranscript(banner + initWizardPrompt(st))
 	m.ta.Reset()
@@ -983,11 +953,16 @@ func (m model) handleInitWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			NumAgents:       len(m.st.cfg.Agents),
 			OfferOpenEditor: true,
 		})
+		var rebuildCmd tea.Cmd
 		if res.Committed != nil {
-			// Apply the new config to the live state so the session picks
-			// it up immediately.
+			// Apply the new config to the live state AND rebuild the runners
+			// from it, so the configured agent takes over on the next turn
+			// without restarting milk (the ACP host does the same in its
+			// commitInitWizard → buildRunners path).
 			m.st.cfg = *res.Committed
 			m.hasInferenceAgent = res.Committed.HasInferenceAgent()
+			m, rebuildCmd = m.rebuildRunners()
+			m.appendTranscript(milkTag() + " agents rebuilt from config — active now, no restart needed\n")
 		}
 		if res.Output != "" || res.Prompt != "" {
 			m.appendTranscript(res.Output + res.Prompt)
@@ -1001,7 +976,7 @@ func (m model) handleInitWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			newM, _ := m.handleConfigOpenCmd()
 			m = newM.(model)
 		}
-		return m, nil
+		return m, rebuildCmd
 	}
 	var cmd tea.Cmd
 	cmd = m.updateTA(msg)
@@ -1161,7 +1136,207 @@ func (m model) handleSwitchAgentKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// commitSwitchAgent applies the name+role switch: updates config and rebuilds the live agent.
+// rebuildRunners live-rebuilds the primary and escalation dispatch runners
+// from the current m.st.cfg so a config committed mid-session takes effect on
+// the next turn — no restart. It is the single construction path behind
+// /agent switch, /agent add (first agent), the /config init commit and config
+// hot-reload (configReloadMsg): every provider kind is covered for both roles
+// (claude-cli, subprocess/aider-cli, local HTTP), the router is rebuilt
+// against the new primary, lazily-built tool-agent runners are dropped, and
+// MCP servers are re-attached to the fresh runners. A turn already in flight
+// keeps the runner snapshot it started with (buildTUIAgents copies per turn) —
+// only the next turn on an affected role sees the rebuild.
+func (m model) rebuildRunners() (model, tea.Cmd) {
+	cfg := m.st.cfg
+
+	// wireLocal applies everything the TUI wants on a local-provider agent at
+	// construction time; buildTUIAgents layers the per-turn callbacks (asks,
+	// tool-use hints, thinking) on top of copies of these every turn.
+	wireLocal := func(a *local.Agent) *local.Agent {
+		if od, err := config.OtelDir(); err == nil {
+			a.WithOtelDir(od)
+		}
+		prog := m.st.program
+		a.WithOnSigV4Refresh(func(err error) {
+			if prog != nil {
+				prog.Send(credRefreshReadyMsg{label: "AWS", err: err})
+			}
+		})
+		a.WithLogContext(cfg.Otel.LogContext)
+		a.WithOnRequestSize(func(bytes int64) {
+			if prog != nil {
+				prog.Send(requestSizeMsg{bytes: bytes})
+			}
+		})
+		ist := m.st
+		a.WithOnTokens(func(model, role string, prompt, completion, cacheRead, cacheCreation int64, timing local.StreamTiming) {
+			ist.sess.AddTokensFull(model, role, prompt, completion, cacheRead, cacheCreation)
+			ist.sess.AddTiming(model, role, timing.TTFT, timing.Decode)
+		})
+		if m.taskStore != nil {
+			a.WithTaskStore(tasks.NewAdapter(m.taskStore))
+		}
+		return a
+	}
+
+	// --- primary ---
+	primaryAC := cfg.ActiveAgent()
+	primaryName := primaryAC.Name
+	if primaryName == "" {
+		primaryName = "primary"
+	}
+	switch {
+	case primaryAC.IsCLI():
+		cliAgt := newCLIAgent(primaryAC)
+		cliAgt = applyAWSCreds(cfg, cliAgt)
+		cliAgt = cliAgt.WithLogContext(cfg.Otel.LogContext)
+		if dbg, err := openCLIDebugLog(cfg); err != nil {
+			m.appendTranscript(fmt.Sprintf("%s warning: cannot open claude debug log: %v\n", milkTag(), err))
+		} else if dbg != nil {
+			cliAgt = cliAgt.WithDebugLog(dbg)
+		}
+		m.agents.local = nil
+		m.agents.subprocessPrimary = nil
+		m.agents.localAvail = cliAgt.Ping() == nil
+		m.agents.primary = newCLIRunner(cliAgt, primaryName,
+			permContext{cs: m.st.cs, cwd: m.st.cwd}, func() inputReader { return newStdinInputReader() })
+	case primaryAC.IsExternalProcess():
+		sp, err := buildSubprocessAgent(primaryAC, cfg)
+		if err != nil {
+			m.appendTranscript(fmt.Sprintf("%s error rebuilding primary agent %q: %v\n", milkTag(), primaryName, err))
+			break
+		}
+		m.agents.local = nil
+		m.agents.subprocessPrimary = sp
+		m.agents.localAvail = sp.Ping() == nil
+		m.agents.primary = newSubprocessRunner(sp, primaryName)
+	default:
+		// Local HTTP provider. The fresh agent starts without blocking on
+		// credential refresh (same as startup) — warm-up is kicked off below,
+		// once the runners are swapped.
+		freshAC := applyFreshAWSCreds(cfg, activeLocalAgentConfig(cfg))
+		// Launch run_cmd when the server isn't up yet — startup does this
+		// synchronously before its availability Ping (runTUI), and a rebuild
+		// must too or the fresh agent reads unavailable and every turn falls
+		// back to escalation until a restart.
+		if freshAC.RunCmd != "" && !isReachable(freshAC.URL) {
+			m.appendTranscript(milkTag() + " starting local inference server…\n")
+			if err := ensureServerRunning(m.ctx, freshAC.URL, freshAC.RunCmd, freshAC.Name); err != nil {
+				m.appendTranscript(fmt.Sprintf("%s warning: run_cmd failed: %v\n", milkTag(), err))
+			}
+		}
+		newAgent := wireLocal(local.NewFromConfig(freshAC))
+		m.agents.local = newAgent
+		m.agents.subprocessPrimary = nil
+		m.agents.localAvail = newAgent.Ping(m.ctx) == nil
+		m.agents.primary = newLocalRunner(newAgent, primaryName)
+	}
+	if m.agents.primary != nil && !m.agents.localAvail {
+		// Make the fallback visible instead of silently routing around the
+		// configured primary — turns re-check availability and pick the
+		// primary up as soon as it answers (see refreshTurnAvailability).
+		m.appendTranscript(fmt.Sprintf("%s warning: %s primary agent unreachable — turns fall back to escalation until it answers\n", milkTag(), primaryName))
+	}
+
+	// The escalation side shares one claude-cli agent with buildTUIAgents'
+	// per-turn cliRunner rebuild — refresh it so reloads pick up its config too.
+	m.agents.cliAgent = applyAWSCreds(cfg, newCLIAgent(cliAgentConfig(cfg)).WithLogContext(cfg.Otel.LogContext))
+	if dbg, err := openCLIDebugLog(cfg); err != nil {
+		m.appendTranscript(fmt.Sprintf("%s warning: cannot open claude debug log: %v\n", milkTag(), err))
+	} else if dbg != nil {
+		m.agents.cliAgent = m.agents.cliAgent.WithDebugLog(dbg)
+	}
+
+	// --- escalation ---
+	escAC := cfg.EscalationAgentConfig()
+	escName := escAC.Name
+	if escName == "" {
+		escName = "claude"
+	}
+	switch {
+	case escAC.IsCLI():
+		m.agents.escalationLocal = nil
+		m.agents.subprocessAgent = nil
+		m.agents.escalationAvail = true
+		m.agents.escalation = newCLIRunner(m.agents.cliAgent, escName,
+			permContext{cs: m.st.cs, cwd: m.st.cwd}, func() inputReader { return newStdinInputReader() })
+	case escAC.IsExternalProcess():
+		sp, err := buildSubprocessAgent(escAC, cfg)
+		if err != nil {
+			m.appendTranscript(fmt.Sprintf("%s error rebuilding escalation agent %q: %v\n", milkTag(), escName, err))
+			break
+		}
+		m.agents.escalationLocal = nil
+		m.agents.subprocessAgent = sp
+		m.agents.escalationAvail = sp.Ping() == nil
+		m.agents.escalation = newSubprocessRunner(sp, escName)
+	default:
+		freshEsc := applyFreshAWSCreds(cfg, escAC)
+		if freshEsc.URL == "" {
+			// The named escalation agent exists but has no usable URL — fall
+			// back to claude-cli, the same default startup takes.
+			m.appendTranscript(fmt.Sprintf("%s warning: escalation_agent %q has no url — falling back to claude-cli\n", milkTag(), cfg.EscalationAgent))
+			m.agents.escalationLocal = nil
+			m.agents.subprocessAgent = nil
+			m.agents.escalationAvail = true
+			m.agents.escalation = newCLIRunner(m.agents.cliAgent, escName,
+				permContext{cs: m.st.cs, cwd: m.st.cwd}, func() inputReader { return newStdinInputReader() })
+			break
+		}
+		newEsc := wireLocal(local.NewFromConfig(freshEsc).AsEscalationTarget(freshEsc.Name))
+		m.agents.escalationLocal = newEsc
+		m.agents.subprocessAgent = nil
+		m.agents.escalationAvail = newEsc.Ping(m.ctx) == nil
+		m.agents.escalation = newLocalRunner(newEsc, escName)
+	}
+
+	// The router's classifier tracks the primary's local agent.
+	var routeLocalAgent *local.Agent
+	if m.agents.localAvail && m.agents.local != nil {
+		routeLocalAgent = m.agents.local
+	}
+	m.rtr = router.New(cfg, routeLocalAgent)
+
+	// Tool-agent runners pin old agent instances — let them rebuild lazily.
+	m.agents.toolRunners = nil
+
+	// MCP bookkeeping (mcpServersSeen) describes the replaced runners, so
+	// re-attach unconditionally: the forced refresh wires toolsets/server
+	// lists onto the fresh runners and closes the stale ones.
+	m, _ = m.refreshMCPForRoleForce(RolePrimary, activeLocalAgentConfig(cfg).Name, true)
+	m, _ = m.refreshMCPForRoleForce(RoleEscalation, cfg.EscalationAgentConfig().Name, true)
+
+	// Reset credential status for the rebuilt primary and kick off the async
+	// warm-up (token_cmd / AWS refresh) exactly like /agent switch does.
+	m.credStatus = ""
+	m.credLabel = ""
+	m.credOK = false
+	m.credRefreshing = false
+	if m.agents.local != nil && m.agents.local.HasTokenCmd() {
+		m.credRefreshing = true
+		m.credLabel = "token"
+		agent := m.agents.local
+		return m, func() tea.Msg {
+			return credRefreshReadyMsg{label: "token", err: agent.WarmToken()}
+		}
+	}
+	if needsAWSRefresh(cfg) {
+		m.credRefreshing = true
+		m.credLabel = "AWS"
+		ctx := m.ctx
+		return m, func() tea.Msg {
+			refreshCmd := claudesettings.AWSAuthRefreshCommand()
+			refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			creds, err := claude.ResolveAWSCredsContext(refreshCtx, refreshCmd)
+			return credRefreshReadyMsg{label: "AWS", creds: creds, err: err}
+		}
+	}
+	return m, nil
+}
+
+// commitSwitchAgent applies the name+role switch: updates config, persists it,
+// and rebuilds the live runners from the new config.
 func (m model) commitSwitchAgent(st *switchAgentState) (model, tea.Cmd) {
 	m.pendingSwitch = nil
 	name := st.name
@@ -1173,113 +1348,15 @@ func (m model) commitSwitchAgent(st *switchAgentState) (model, tea.Cmd) {
 		if m.st.sess != nil {
 			m.st.sess.RepetitionBaselineLocalTurns = m.st.sess.UserTurnCount()
 		}
-		if err := saveLocalOrGlobal(m.st.cfg); err != nil {
-			m.appendTranscript(fmt.Sprintf("%s warning: could not persist switch: %v\n", milkTag(), err))
-		}
-
-		primaryAC := m.st.cfg.ActiveAgent()
-		if primaryAC.IsCLI() {
-			// No cheap classifier for a claude-cli primary — router.New already
-			// treats a nil *local.Agent as "skip step 4, attempt primary
-			// directly", same as it does for subprocess primaries.
-			cliAgt := newCLIAgent(primaryAC)
-			cliAgt = applyAWSCreds(m.st.cfg, cliAgt)
-			cliAgt = cliAgt.WithLogContext(m.st.cfg.Otel.LogContext)
-			if dbg, err := openCLIDebugLog(m.st.cfg); err != nil {
-				m.appendTranscript(fmt.Sprintf("%s warning: cannot open claude debug log: %v\n", milkTag(), err))
-			} else if dbg != nil {
-				cliAgt = cliAgt.WithDebugLog(dbg)
-			}
-			m.agents.local = nil
-			m.agents.localAvail = cliAgt.Ping() == nil
-			m.agents.primary = newCLIRunner(cliAgt, name,
-				permContext{cs: m.st.cs, cwd: m.st.cwd}, func() inputReader { return newStdinInputReader() })
-			m.rtr = router.New(m.st.cfg, nil)
-			m.credStatus = ""
-			m.credLabel = ""
-			m.credOK = false
-			m.credRefreshing = false
-			m.appendTranscript(fmt.Sprintf("%s primary agent → %s\n", milkTag(), bold(name)))
-			m.appendTranscript(execAgent(m.st) + "\n")
-			return m, nil
-		}
-
-		newAgent := local.NewFromConfig(activeLocalAgentConfig(m.st.cfg))
-		if od, err := config.OtelDir(); err == nil {
-			newAgent.WithOtelDir(od)
-		}
-		prog := m.st.program
-		newAgent.WithOnSigV4Refresh(func(err error) {
-			prog.Send(credRefreshReadyMsg{label: "AWS", err: err})
-		})
-		newAgent.WithLogContext(m.st.cfg.Otel.LogContext)
-		ist := m.st
-		newAgent.WithOnTokens(func(model, role string, prompt, completion, cacheRead, cacheCreation int64, timing local.StreamTiming) {
-			ist.sess.AddTokensFull(model, role, prompt, completion, cacheRead, cacheCreation)
-			ist.sess.AddTiming(model, role, timing.TTFT, timing.Decode)
-		})
-		m.agents.local = newAgent
-		m.agents.localAvail = newAgent.Ping(m.ctx) == nil
-		m.agents.primary = newLocalRunner(newAgent, name)
-		m.rtr = router.New(m.st.cfg, newAgent)
-		m.credStatus = ""
-		m.credLabel = ""
-		m.credOK = false
-		m.appendTranscript(fmt.Sprintf("%s primary agent → %s\n", milkTag(), bold(name)))
-		m.appendTranscript(execAgent(m.st) + "\n")
-		if newAgent.HasTokenCmd() {
-			m.credRefreshing = true
-			m.credLabel = "token"
-			return m, func() tea.Msg {
-				err := newAgent.WarmToken()
-				return credRefreshReadyMsg{label: "token", err: err}
-			}
-		}
-		if needsAWSRefresh(m.st.cfg) {
-			m.credRefreshing = true
-			m.credLabel = "AWS"
-			ctx := m.ctx
-			return m, func() tea.Msg {
-				cmd := claudesettings.AWSAuthRefreshCommand()
-				refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				defer cancel()
-				creds, err := claude.ResolveAWSCredsContext(refreshCtx, cmd)
-				return credRefreshReadyMsg{label: "AWS", creds: creds, err: err}
-			}
-		}
-		m.credRefreshing = false
-
 	case "escalation":
 		m.st.cfg.EscalationAgent = name
-		if err := saveLocalOrGlobal(m.st.cfg); err != nil {
-			m.appendTranscript(fmt.Sprintf("%s warning: could not persist switch: %v\n", milkTag(), err))
-		}
-		escAC := applyFreshAWSCreds(m.st.cfg, m.st.cfg.EscalationAgentConfig())
-		if escAC.IsCLI() {
-			// claude-cli: rebuild cliRunner from current cliAgent.
-			m.agents.escalationLocal = nil
-			m.agents.subprocessAgent = nil
-			m.agents.escalationAvail = true
-			m.agents.escalation = newCLIRunner(m.agents.cliAgent, name,
-				permContext{cs: m.st.cs, cwd: m.st.cwd}, func() inputReader { return newStdinInputReader() })
-		} else if escAC.URL != "" {
-			newEsc := local.NewFromConfig(escAC).AsEscalationTarget(escAC.Name)
-			if od, err := config.OtelDir(); err == nil {
-				newEsc.WithOtelDir(od)
-			}
-			newEsc.WithLogContext(m.st.cfg.Otel.LogContext)
-			ist := m.st
-			newEsc.WithOnTokens(func(model, role string, prompt, completion, cacheRead, cacheCreation int64, timing local.StreamTiming) {
-				ist.sess.AddTokensFull(model, role, prompt, completion, cacheRead, cacheCreation)
-				ist.sess.AddTiming(model, role, timing.TTFT, timing.Decode)
-			})
-			m.agents.escalationLocal = newEsc
-			m.agents.escalationAvail = newEsc.Ping(m.ctx) == nil
-			m.agents.escalation = newLocalRunner(newEsc, name)
-		}
-		m.appendTranscript(fmt.Sprintf("%s escalation agent → %s\n", milkTag(), bold(name)))
-		m.appendTranscript(execAgent(m.st) + "\n")
+	}
+	if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {
+		m.appendTranscript(fmt.Sprintf("%s warning: could not persist switch: %v\n", milkTag(), err))
 	}
 
-	return m, nil
+	m, cmd := m.rebuildRunners()
+	m.appendTranscript(fmt.Sprintf("%s %s agent → %s\n", milkTag(), role, bold(name)))
+	m.appendTranscript(execAgent(m.st) + "\n")
+	return m, cmd
 }

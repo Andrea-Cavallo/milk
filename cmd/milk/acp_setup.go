@@ -48,7 +48,7 @@ func acpSetup(as *acpSession, rest string) (string, string) {
 // read.
 func (as *acpSession) oversightConfig() config.Config {
 	if as.srv != nil {
-		return as.srv.currentConfig()
+		return as.srv.currentConfig(activeConfigDir(as.st))
 	}
 	return as.st.cfg
 }
@@ -58,7 +58,7 @@ func (as *acpSession) oversightConfig() config.Config {
 // enabling — newNotifier's startup message doubles as the test one).
 func (as *acpSession) telegramSetEnabled(on bool) string {
 	cfg := as.oversightConfig()
-	if err := setTelegramEnabledCfg(&cfg, on); err != nil {
+	if err := setTelegramEnabledCfg(&cfg, on, activeConfigDir(as.st)); err != nil {
 		return milkTag() + " " + err.Error()
 	}
 	as.applyOversight(cfg)
@@ -157,7 +157,7 @@ func (as *acpSession) resolveAndCommit(b *strings.Builder) (string, bool) {
 		return b.String(), false
 	}
 	cfg := as.oversightConfig()
-	if err := commitTelegramCfg(&cfg, st.token, chatID); err != nil {
+	if err := commitTelegramCfg(&cfg, st.token, chatID, activeConfigDir(as.st)); err != nil {
 		fmt.Fprintf(b, "%s %v\n", milkTag(), err)
 		return b.String(), true // a config-write failure won't fix itself — rerun /setup telegram
 	}
