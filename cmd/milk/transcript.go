@@ -425,11 +425,23 @@ func (m *model) clearSelection() {
 // copyToClipboard writes text to the system clipboard via atotto/clipboard (which
 // handles WSL via clip.exe, Wayland via wl-copy, X11 via xclip/xsel) and also
 // emits an OSC 52 sequence as a fallback for SSH or tmux environments.
-func copyToClipboard(text string) {
+var copyToClipboard = func(text string) {
 	// Primary: OS clipboard (works on WSL, X11, Wayland, macOS).
 	_ = clipboard.WriteAll(text)
 	// Secondary: OSC 52 — picked up by terminals that support it (kitty, iTerm2, tmux).
 	osc52.New(text).WriteTo(os.Stderr)
+}
+
+// copyOnSelectRelease copies text right after a mouse selection is released
+// when copy_on_select is enabled; the caller clears its own selection state
+// (so a later right-click still pastes) and returns the resulting command.
+func (m *model) copyOnSelectRelease(text string) tea.Cmd {
+	if text == "" || m.st == nil || !m.st.cfg.CopyOnSelectEnabled() {
+		return nil
+	}
+	copyToClipboard(text)
+	m.copyFeedback = fmt.Sprintf("copied %d chars", len([]rune(text)))
+	return copyFeedbackClearCmd()
 }
 
 // copyFeedbackClearCmd returns a command that clears the copy feedback after 2s.

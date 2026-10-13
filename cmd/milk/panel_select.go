@@ -180,6 +180,10 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev tea.MouseEv
 		m.panelSelEndLine = lineIdx
 		m.panelSelEndCol = col
 		m.panelSelText = panelSelectionText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
+		if cmd := m.copyOnSelectRelease(m.panelSelText); cmd != nil {
+			m.clearPanelSelection()
+			dragCmd = cmd
+		}
 	}
 	return m, dragCmd
 }

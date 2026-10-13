@@ -806,6 +806,11 @@ type model struct {
 	selText          string // plain text of the selected range (populated after release)
 	dragResetPending bool   // true while a drag-timeout cmd is outstanding
 	dragResetGen     uint64 // generation counter; stale dragResetMsgs are ignored
+	dragScrollDir    int    // -1/+1 while a drag's pointer is above/below the scrollable rows (autoscroll), else 0
+	dragScrollX      int    // pointer column the autoscroll keeps extending the selection to
+	dragScrollGen    uint64 // generation counter; stale dragScrollMsgs are ignored
+	dragScrollArmed  bool   // an autoscroll tick loop is live
+	dragScrollIdle   int    // consecutive ticks that could not scroll (at a limit)
 	dragSawOutside   bool   // true if the last drag motion/release left the drag's own area (dropped-release evidence, see dragResetMsg)
 
 	// click-to-select state for the memory/workflow side panels (panel-local
@@ -1634,6 +1639,9 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.dragSawOutside = region != m.panelSelRegion
 		}
 	}
+	if cmd, handled := m.handleDragEdgeMouse(ev, region, regionX); handled {
+		return m, cmd
+	}
 	var dragCmd tea.Cmd // set by press/motion; returned at the end
 	switch ev.Button {
 	case tea.MouseButtonWheelUp:
@@ -1723,6 +1731,11 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.selEndLine = contentLine
 				m.selEndCol = ev.X
 				m.selText = m.selectionText()
+				if cmd := m.copyOnSelectRelease(m.selText); cmd != nil {
+					m.clearSelection()
+					m.setViewportContent()
+					return m, cmd
+				}
 				m.setViewportContent()
 			}
 		}
@@ -2526,27 +2539,17 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// is still held. Keep mode 1002 so motion keeps updating the highlight
 		// when the pointer resumes, and reschedule the timeout — finalizing
 		// here would freeze the selection until release (#168).
-		if (m.selAnchorLine >= 0 || m.panelSelAnchorLine >= 0 || m.attachSelAnchorLine >= 0) && !m.dragSawOutside {
+		if (m.selAnchorLine >= 0 || m.panelSelAnchorLine >= 0 || m.attachSelAnchorLine >= 0) && (!m.dragSawOutside || m.dragScrollArmed) {
 			m.dragResetGen++
 			return m, dragResetCmd(m.dragResetGen)
 		}
-		m.dragResetPending = false
-		m.dragSawOutside = false
 		// The release was dropped — finalize any in-progress selection so the
 		// model state stays consistent, then reset the terminal to basic
 		// mouse tracking (mode 1000) where wheel-scroll works reliably.
-		if m.selAnchorLine >= 0 && m.selDragging && m.selText == "" {
-			m.selText = m.selectionText()
-		}
-		if m.panelSelAnchorLine >= 0 && m.panelSelDragging && m.panelSelText == "" {
-			m.panelSelText = panelSelectionText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
-		}
-		if m.attachSelAnchorLine >= 0 && m.attachSelDragging && m.attachSelText == "" && m.attached != nil {
-			m.attachSelText = m.attachSelectionText()
-		}
-		setMouseDragMode(false)
-		m.setViewportContent()
-		return m, nil
+		return m, m.finalizeDroppedDrag()
+
+	case dragScrollMsg:
+		return m, m.handleDragScrollTick(msg.gen)
 
 	case credRefreshReadyMsg:
 		m.credRefreshing = false

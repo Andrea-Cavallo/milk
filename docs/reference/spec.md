@@ -284,6 +284,7 @@ The CLI equivalent is `milk update check` and `milk update install` (non-interac
   "colorization": "balanced",
   "show_reasoning": true,
   "sticky_escalation": true,
+  "copy_on_select": false,
   "acp_resume": true,
   "experimental_lazy_history_management": false,
   "aws_auth_refresh": false,
@@ -301,6 +302,12 @@ See [/colorize](#interactive-mode) above for the four modes and their behavior.
 ### `show_reasoning` field
 
 Default visibility of thinking/reasoning tokens; see [/think](#interactive-mode) above.
+
+### `copy_on_select` field
+
+Default `false`. When `true`, releasing the mouse after a drag selection (transcript, side panels, or the live-attach view) copies the selected text to the clipboard immediately and shows the `copied N chars` status-bar feedback, instead of waiting for a right-click or Ctrl+C. The highlight is cleared after the copy, so a following right-click pastes. A plain click without a drag never copies. Hot-reloaded.
+
+Independently of `copy_on_select`, dragging a selection past the top or bottom of the transcript, a side panel or the live-attach view scrolls that view (about 20 lines/s while the pointer rests outside) and extends the selection with it. Releasing outside the view ends the drag.
 
 ### `config_editors` field
 

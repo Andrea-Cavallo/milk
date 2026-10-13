@@ -502,6 +502,12 @@ func TestDragResetMsg_ClearsDragModeOnTimeout(t *testing.T) {
 	if !m.dragSawOutside {
 		t.Fatal("expected dragSawOutside after motion outside viewport bounds")
 	}
+	// The pointer parked outside arms edge autoscroll, which keeps the drag
+	// alive; with nothing left to scroll its ticks run out, and only then does
+	// the dropped-release timeout finalize the selection.
+	for i := 0; i <= dragScrollMaxIdle && m.dragScrollArmed; i++ {
+		m.handleDragScrollTick(m.dragScrollGen)
+	}
 	dm, _ := m.Update(dragResetMsg{gen: m.dragResetGen})
 	m2 := dm.(model)
 	if m2.dragResetPending {
