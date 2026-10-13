@@ -3784,9 +3784,10 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 	if tir, ok := firstInputReader(ir).(*tuiInputReader); ok {
 		fallbackHost = newTUIHost(tir)
 	}
-	if err := gateFallback(ctx, st, rt, fallbackHost, st.notifier); err != nil {
+	if err := gateClaude(ctx, st, rt, fallbackHost, st.notifier); err != nil {
 		return err
 	}
+	ctx = withClaudeConsent(ctx, selfEscalationConsent(st, fallbackHost, st.notifier))
 	target := rt.Target
 	st.activeFallbackTarget = rt.Fallback
 	defer func() { st.activeFallbackTarget = "" }()

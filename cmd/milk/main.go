@@ -288,10 +288,11 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	target := resolveTarget(decision.Target, localAvail, escalationAvail)
-	if err := singlePromptFallbackGate(cfg, decision.Target, target,
-		fmtVal == formatText && term.IsTerminal(int(os.Stdin.Fd())), os.Stdin, os.Stderr); err != nil {
+	consent := &singlePromptConsent{cfg: cfg, interactive: fmtVal == formatText && term.IsTerminal(int(os.Stdin.Fd())), in: os.Stdin, errOut: os.Stderr}
+	if err := consent.gate(decision.Target, target); err != nil {
 		return err
 	}
+	ctx = withClaudeConsent(ctx, consent.escalate)
 
 	targetLabel := string(target)
 	sourceLabel := turnSourceLabel(flagEscalate, flagPrimary)

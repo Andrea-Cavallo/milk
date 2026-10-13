@@ -32,10 +32,11 @@ type routedTurn struct {
 	// just consumed). noteTurnSucceeded uses it to keep the one-shot form
 	// from becoming auto-sticky — see there.
 	SingleTurnEscalate bool
-	// NeedsFallbackConsent is set when the primary is unavailable and the
-	// turn would fall back to the implicit Claude CLI default — a target the
-	// user never configured, so they must approve it (gateFallback).
-	NeedsFallbackConsent bool
+	// NeedsClaudeConsent is set when the turn is headed to the implicit
+	// Claude CLI default — a target the user never configured, whether via
+	// /escalate, the router, sticky escalation or a down primary — and they
+	// have not yet approved it this session (gateClaude).
+	NeedsClaudeConsent bool
 	// NoAgent is set when neither the primary nor the escalation agent can
 	// run the turn.
 	NoAgent bool
@@ -120,12 +121,6 @@ func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, in
 	}
 	st.forcePrimary = false
 
-	// An approval of the Claude fallback only covers the outage it was given
-	// for; once the primary answers again the next outage asks again.
-	if localAvail {
-		st.claudeFallbackApproved = false
-	}
-
 	rt := routedTurn{Decision: decision, Target: resolveTarget(decision.Target, localAvail, escalationAvail), SingleTurnEscalate: singleTurnEscalate}
 	switch {
 	case rt.Target == decision.Target:
@@ -135,8 +130,8 @@ func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, in
 		rt.Fallback = "primary"
 	}
 	rt.NoAgent = !localAvail && !escalationAvail
-	rt.NeedsFallbackConsent = rt.Fallback == "escalation" && escalationAvail &&
-		st.cfg.EscalationAgentIsImplicit() && !st.claudeFallbackApproved
+	rt.NeedsClaudeConsent = rt.Target == router.TargetEscalation && escalationAvail &&
+		st.cfg.EscalationAgentIsImplicit() && !st.claudeApproved
 	return rt, nil
 }
 
