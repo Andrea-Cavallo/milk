@@ -80,14 +80,44 @@ func TestRouteTurn_ImplicitClaudeNeedsConsent(t *testing.T) {
 	}
 }
 
-func TestRouteTurn_NoAgentWhenBothDown(t *testing.T) {
+// A failed health ping on every agent (a proxy hiccup hits every agent on the
+// same host) must not refuse the turn or redirect it: the router's own choice
+// runs, and the real request decides.
+func TestRouteTurn_BothReadingDownStillAttemptsTheRoutedTarget(t *testing.T) {
+	for _, cfg := range []config.Config{
+		{},
+		{Agents: []config.AgentConfig{{Name: "p", URL: "http://x", Model: "m"}, {Name: "big", URL: "http://x", Model: "m"}}, Agent: "p", EscalationAgent: "big"},
+	} {
+		st := routingState(t)
+		st.cfg = cfg
+		st.forcePrimary = true
+		rt, _ := routeTurn(context.Background(), st, router.New(st.cfg, nil), "x", false, false)
+		if rt.Target != router.TargetLocal || rt.Fallback != "" || rt.NoAgent || rt.NeedsClaudeConsent {
+			t.Errorf("both unavailable, primary-bound turn must still try the primary: %+v", rt)
+		}
+		if err := gateClaude(context.Background(), st, rt, nil, nil); err != nil {
+			t.Errorf("the turn must not be refused up front: %v", err)
+		}
+
+		st.forceEscalate = true
+		rt, _ = routeTurn(context.Background(), st, router.New(st.cfg, nil), "x", false, false)
+		if rt.Target != router.TargetEscalation || rt.NoAgent && !cfg.EscalationAgentIsImplicit() {
+			t.Errorf("an escalation-bound turn keeps its target: %+v", rt)
+		}
+	}
+}
+
+// The one up-front refusal left is deterministic: the target is the implicit
+// Claude default and Claude Code is not installed.
+func TestGateClaude_ImplicitClaudeNotInstalled(t *testing.T) {
 	st := routingState(t)
+	st.forceEscalate = true
 	rt, _ := routeTurn(context.Background(), st, router.New(st.cfg, nil), "x", false, false)
 	if !rt.NoAgent {
-		t.Fatalf("both down must be NoAgent: %+v", rt)
+		t.Fatalf("escalating to a missing implicit Claude must be NoAgent: %+v", rt)
 	}
 	err := gateClaude(context.Background(), st, rt, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "neither the primary agent") || !strings.Contains(err.Error(), "Claude Code was not found") {
+	if err == nil || !strings.Contains(err.Error(), "Claude Code was not found") {
 		t.Errorf("unhelpful error: %v", err)
 	}
 }

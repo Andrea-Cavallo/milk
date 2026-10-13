@@ -16,7 +16,7 @@ Every config has a built-in `claude` (Claude CLI) entry, and `escalation_agent` 
 - **One ask layer, every surface.** `gateClaude` (`cmd/milk/fallback_core.go`) races the TUI prompt, the ACP permission dialog and Telegram through `askPermission` (ADR-0052's foreground policy). Single-prompt mode asks on the terminal when stdin is one and otherwise refuses, naming `escalation_agent`. With no surface to ask, the answer is no.
 - **Declining is not a failure.** The turn is not run and not recorded (`errFallbackDeclined`, shown as a notice; ACP ends the turn normally). A declined `escalate()` is recorded as an assistant note so the request does not look unanswered.
 - **An approved outage fallback does not make escalation sticky** (`noteTurnSucceeded`): the approval is for Claude, not for pinning the session there after the primary recovers.
-- **Nowhere to run.** Primary down and no escalation agent available fails the turn up front with a message naming both, instead of an exec error later.
+- **One deterministic refusal.** A turn headed to the implicit Claude default while Claude Code is not installed fails up front with a clear message (a local `claude --version` check). A failed *health ping* is never grounds to refuse a turn: it is a short GET that a proxy hiccup fails for every agent on the same host, so when both agents read unavailable the router's own choice still runs and the real request (with its retries and its real error) decides.
 - Startup/reload warnings and the empty-state banner say that Claude will be asked about, rather than that turns are being routed to escalation.
 
 ## Consequences
