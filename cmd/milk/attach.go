@@ -300,6 +300,10 @@ func (m *model) handleAttachMouse(ev tea.MouseEvent) (tea.Model, tea.Cmd) {
 		m.attachSelEndLine = contentLine
 		m.attachSelEndCol = col
 		m.attachSelText = m.attachSelectionText()
+		if cmd := m.copyOnSelectRelease(m.attachSelText); cmd != nil {
+			m.clearAttachSelection()
+			dragCmd = cmd
+		}
 		m.syncAttachedContent()
 	}
 	return m, dragCmd

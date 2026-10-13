@@ -175,6 +175,9 @@ func DeepMerge(dst, src Config) Config {
 	if src.ShowReasoning != nil {
 		dst.ShowReasoning = src.ShowReasoning
 	}
+	if src.CopyOnSelect != nil {
+		dst.CopyOnSelect = src.CopyOnSelect
+	}
 	if src.StickyEscalation != nil {
 		dst.StickyEscalation = src.StickyEscalation
 	}
@@ -913,6 +916,11 @@ type Config struct {
 	// transcript by default. Can be toggled live with /think on|off.
 	// false (default) = show "[thinking…]" placeholder; true = show reasoning.
 	ShowReasoning *bool `json:"show_reasoning,omitempty"`
+
+	// CopyOnSelect copies a mouse selection to the clipboard as soon as the
+	// button is released, instead of waiting for a right-click or ctrl+c.
+	// false (default) = keep the selection until the user copies it.
+	CopyOnSelect *bool `json:"copy_on_select,omitempty"`
 
 	// StickyEscalation controls whether the escalation agent is automatically
 	// kept for subsequent turns after the router first escalates (without an
@@ -1909,6 +1917,12 @@ func (c Config) ShowReasoningDefault() bool {
 		return false
 	}
 	return *c.ShowReasoning
+}
+
+// CopyOnSelectEnabled reports whether a finished mouse selection is copied
+// to the clipboard immediately (false when unset).
+func (c Config) CopyOnSelectEnabled() bool {
+	return c.CopyOnSelect != nil && *c.CopyOnSelect
 }
 
 // StickyEscalationEnabled returns true when router-triggered escalations

@@ -1791,3 +1791,18 @@ func TestEscalationAgentIsImplicit(t *testing.T) {
 		}
 	}
 }
+
+func TestCopyOnSelect_DefaultAndMerge(t *testing.T) {
+	if (Config{}).CopyOnSelectEnabled() {
+		t.Error("copy_on_select must default to off")
+	}
+	global := Config{CopyOnSelect: boolPtr(true)}
+	merged := DeepMerge(global, Config{})
+	if !merged.CopyOnSelectEnabled() {
+		t.Error("expected global true preserved when local is unset")
+	}
+	merged = DeepMerge(global, Config{CopyOnSelect: boolPtr(false)})
+	if merged.CopyOnSelectEnabled() {
+		t.Error("expected local false to override global true")
+	}
+}
