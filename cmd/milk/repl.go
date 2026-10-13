@@ -2167,14 +2167,15 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case prefixChunkMsg:
-		m.markOutput()
-		m.currentTurnChars += int64(len(msg.text))
+		// The agent-name label is milk's, not the model's: it must neither
+		// count as output tokens nor start the tok/s clock (it is written
+		// before the request even goes out).
 		m.appendTranscriptStreamed(msg.text)
 		return m, nil
 
 	case chunkMsg:
 		m.markOutput()
-		m.currentTurnChars += int64(len(msg.text))
+		m.currentTurnChars += visibleChars(msg.text)
 		m.appendTranscriptStreamed(msg.text)
 		// Intra-turn loop detection: feed chunk and check for repetition.
 		if m.loopDetector != nil {
@@ -4520,6 +4521,15 @@ func subtractTiming(ttftSec, decodeSec float64, reqs int64, seen turnTiming) tur
 // markOutput stamps the first streamed output token of the current turn
 // (content or thinking) so statusTokens can show a live decode-rate estimate.
 // Subsequent calls within the same turn are no-ops.
+// visibleChars is the length of streamed text without ANSI styling codes,
+// which the output-token estimate would otherwise count as model output.
+func visibleChars(s string) int64 {
+	if !strings.Contains(s, "\x1b") {
+		return int64(len(s))
+	}
+	return int64(len(stripANSI(s)))
+}
+
 func (m *model) markOutput() {
 	if m.turnFirstOutputAt.IsZero() {
 		m.turnFirstOutputAt = time.Now()
