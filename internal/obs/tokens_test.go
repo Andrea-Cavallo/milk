@@ -168,3 +168,29 @@ func TestFormatTokenUsage_TokPerSec(t *testing.T) {
 		t.Errorf("expected '—' for the unmeasured claude row, got:\n%s", out)
 	}
 }
+
+func TestRecordRequestInput_LastWriteWinsPerExactRole(t *testing.T) {
+	ResetSessionTokens()
+	RecordRequestInput("escalation", 100_000)
+	RecordRequestInput("escalation", 120_000)
+	RecordRequestInput("escalation:subagent", 900_000)
+	RecordRequestInput("escalation:toolagent", 700_000)
+	if got := SessionLastRequestInput("escalation"); got != 120_000 {
+		t.Errorf("escalation: got %d, want the latest single request (120000), not a sum", got)
+	}
+	if got := SessionLastRequestInput("primary"); got != 0 {
+		t.Errorf("primary: got %d, want 0 (no prefix matching)", got)
+	}
+	RecordRequestInput("escalation", 0)
+	if got := SessionLastRequestInput("escalation"); got != 120_000 {
+		t.Errorf("a zero-size report must not erase the last known size, got %d", got)
+	}
+}
+
+func TestResetSessionTokens_ClearsRequestInput(t *testing.T) {
+	RecordRequestInput("primary", 5000)
+	ResetSessionTokens()
+	if got := SessionLastRequestInput("primary"); got != 0 {
+		t.Errorf("got %d after reset, want 0", got)
+	}
+}

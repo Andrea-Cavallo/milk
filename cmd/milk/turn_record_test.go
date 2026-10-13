@@ -23,6 +23,13 @@ func spawnTrail() []session.TrailStep {
 	}}}}
 }
 
+func editTrail() []session.TrailStep {
+	return []session.TrailStep{{Calls: []session.TrailCall{
+		{ID: "e1", Name: "edit_file", Args: `{"path":"a.go"}`, Result: "ok"},
+		{ID: "e2", Name: "bash", Args: `{"command":"go build ./..."}`, Result: "ok"},
+	}}}
+}
+
 func readTrail() []session.TrailStep {
 	return []session.TrailStep{{Calls: []session.TrailCall{
 		{ID: "r1", Name: "read_file", Args: `{"path":"a.go"}`, Result: "x"},
@@ -98,6 +105,19 @@ func TestRunPrimary_InterruptedTurn(t *testing.T) {
 		}
 		if c := sess.History[1].Content; !strings.Contains(c, "interrupted by the user") || !strings.Contains(c, "research") {
 			t.Errorf("unexpected note: %q", c)
+		}
+	})
+	t.Run("file edits are recorded with their trail", func(t *testing.T) {
+		sess := run(editTrail(), errors.New("boom"))
+		if len(sess.History) != 2 {
+			t.Fatalf("want [user, assistant], got %+v", sess.History)
+		}
+		a := sess.History[1]
+		if !strings.Contains(a.Content, "failed: boom") || !strings.Contains(a.Content, "edit_file") || !strings.Contains(a.Content, "continue from it") {
+			t.Errorf("unexpected note: %q", a.Content)
+		}
+		if len(a.Trail) != 1 || len(a.Trail[0].Calls) != 2 {
+			t.Errorf("trail must be stored with the turn, got %+v", a.Trail)
 		}
 	})
 	t.Run("no lasting action leaves history untouched so a retry is clean", func(t *testing.T) {

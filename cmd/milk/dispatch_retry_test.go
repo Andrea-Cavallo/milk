@@ -116,6 +116,40 @@ func TestExecuteWithRetry_DoesNotRetryNonTransientError(t *testing.T) {
 	}
 }
 
+// A turn that already ran tools must not be restarted from its prompt: its
+// results and reasoning exist only in the failed run while its edits are on
+// disk, so a restart redoes the work blind (seen live as "partial work from
+// someone else" after a 2.5h turn was re-run from scratch).
+func TestExecuteWithRetry_DoesNotRestartTurnThatRanTools(t *testing.T) {
+	runner := &trailFailRunner{trail: editTrail(), err: streamResetErr()}
+
+	res, err := executeWithRetry(context.Background(), runner, config.Config{}, &session.Session{},
+		nil, RolePrimary, escalation.ContextModeFirst, "", "", nil, false, "hi", TurnCallbacks{}, io.Discard)
+	if err == nil {
+		t.Fatal("want the transient error returned, got nil")
+	}
+	if runner.calls != 1 {
+		t.Errorf("want 1 Execute call (no restart after tools ran), got %d", runner.calls)
+	}
+	if len(res.Trail) == 0 {
+		t.Error("the failed turn's trail must be returned so it can be recorded")
+	}
+}
+
+// trailFailRunner always fails with err and reports the trail it built up.
+type trailFailRunner struct {
+	flakyExecRunner
+	trail []session.TrailStep
+	err   error
+	calls int
+}
+
+func (r *trailFailRunner) Execute(_ context.Context, _ config.Config, _ *session.Session, _ *memory.Store, _ AgentRole,
+	_ escalation.ContextMode, _, _ string, _ []string, _ bool, _ string, _ TurnCallbacks, _ io.Writer) (TurnResult, error) {
+	r.calls++
+	return TurnResult{Trail: r.trail}, r.err
+}
+
 // TestRunPrimaryWithSession_SurvivesTransientStreamError is an end-to-end
 // check that the retry is actually wired into runPrimaryWithSession, not just
 // reachable via executeWithRetry in isolation.

@@ -184,9 +184,9 @@ func (r *Runner) recordMetrics(ctx context.Context, mode string, elapsed time.Du
 			attribute.String("kind", "is_error"),
 		)
 	}
-	if res.InputTokens > 0 || res.OutputTokens > 0 {
-		obs.RecordTokens(ctx, bin, "escalation", res.InputTokens, res.OutputTokens)
-	}
+	// Token usage is recorded once per turn by cmd/milk's dispatch under the
+	// role the subprocess actually served; recording it here as well counted
+	// every subprocess turn twice in the escalation totals.
 	if res.EscalationReason != "" {
 		obs.Inc(ctx, subprocessScope, "milk.router.escalation_signals",
 			attribute.String("reason", "explicit_tool_call"),

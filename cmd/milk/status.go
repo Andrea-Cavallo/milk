@@ -12,6 +12,7 @@ import (
 	rw "github.com/mattn/go-runewidth"
 
 	"github.com/scoutme/milk/internal/config"
+	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
 	"github.com/scoutme/milk/internal/workflow"
 )
@@ -380,10 +381,16 @@ func (m *model) statusTokens() string {
 	}
 	// ctx:x/y should reflect the actual conversation size (what the model
 	// sees in a single request), not the cumulative session total which grows
-	// without bound across turns. When idle, use the last turn's input tokens
-	// (prompt + cache) as the best available estimate; when busy,
-	// statusContextPressure already switches to the live char-based estimate.
-	perTurnInput := lastPrompt + m.lastTurnCacheRead[role] + m.lastTurnCacheCreate[role]
+	// without bound across turns. When idle, use the input size of the most
+	// recent single request (a tool-loop turn re-sends the whole conversation
+	// on every request, so summing the turn's requests multiplies the size by
+	// the request count). Providers that don't report per request fall back to
+	// the turn's token delta. When busy, statusContextPressure already
+	// switches to the live char-based estimate.
+	perTurnInput := obs.SessionLastRequestInput(role)
+	if perTurnInput <= 0 {
+		perTurnInput = lastPrompt + m.lastTurnCacheRead[role] + m.lastTurnCacheCreate[role]
+	}
 	if ctxFragment := m.statusContextPressure(role, perTurnInput); ctxFragment != "" {
 		// Appended last and deliberately NOT run through the outer dim() below:
 		// dim/yellow/red all end with the same ANSI reset, so a colored fragment
