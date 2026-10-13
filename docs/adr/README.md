@@ -54,3 +54,4 @@
 * [53. Memory Weight Model v2: Reinforcement, Wired Edges, Recency](0053-memory-weight-model.md)
 * [54. Docs Information Architecture: Published/Internal Split](0054-docs-information-architecture.md)
 * [55. The Implicit Claude Default Is Never Reached Without Approval](0055-explicit-claude-fallback.md)
+* [56. Stale Global Percepts Are Archived by Session Time](0056-archive-stale-global-percepts.md)

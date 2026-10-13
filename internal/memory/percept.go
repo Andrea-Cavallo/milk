@@ -46,6 +46,15 @@ type Percept struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Core      bool      `json:"core,omitempty"` // exempt from decay when true
+	// LastUsedAt is when the Percept was last put to use: re-stated
+	// (reinforced), returned by get_memory, or injected into a prompt. Zero
+	// until first use after the field was introduced.
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+	// IdleSeconds is how long milk has been running since the Percept was
+	// last used — summed over sessions, so one 20-day session counts like ten
+	// 2-day ones. Only global Percepts accrue it; it drives archiving of stale
+	// global Percepts (see archive.go).
+	IdleSeconds float64 `json:"idle_seconds,omitempty"`
 }
 
 // Engram groups Percepts that share a subject. CompositeW is the mean weight

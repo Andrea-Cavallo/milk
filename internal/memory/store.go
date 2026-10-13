@@ -34,6 +34,12 @@ type Store struct {
 	session storeFile
 
 	params Params
+
+	archivePath string
+	// lastTick is when idle time was last accounted (store open, then every
+	// consolidation). clock is time.Now except in tests.
+	lastTick time.Time
+	clock    func() time.Time
 }
 
 // NewStore opens (or creates) the global store and optional session store
@@ -50,10 +56,13 @@ func NewStoreParams(baseDir, sessionID string, p Params) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{
-		globalPath: filepath.Join(baseDir, "global.json"),
-		sessionID:  sessionID,
-		params:     p.normalized(),
+		globalPath:  filepath.Join(baseDir, "global.json"),
+		archivePath: filepath.Join(baseDir, "global-archive.jsonl"),
+		sessionID:   sessionID,
+		params:      p.normalized(),
+		clock:       time.Now,
 	}
+	s.lastTick = s.now()
 	if sessionID != "" {
 		s.sessionPath = filepath.Join(baseDir, sessionID+".json")
 	}
@@ -165,6 +174,8 @@ func (s *Store) reinforceLocked(ctx context.Context, id string, similarity float
 			existing := s.global.Percepts[i].Content
 			s.global.Percepts[i].W = reinforceW(s.global.Percepts[i].W, s.params)
 			s.global.Percepts[i].UpdatedAt = now
+			s.global.Percepts[i].LastUsedAt = now
+			s.global.Percepts[i].IdleSeconds = 0
 			metricsReinforce(ctx)
 			return RecordOutcome{ID: id, Reinforced: true, Similarity: similarity, Existing: existing, W: s.global.Percepts[i].W},
 				s.saveFile(s.globalPath, s.global)
@@ -307,6 +318,7 @@ func (s *Store) Query(ctx context.Context, query string, minConfidence float64, 
 	for i, c := range candidates {
 		out[i] = c.p
 	}
+	s.markUsedLocked(perceptIDs(out), now)
 
 	end(len(out), nil)
 	logRecall(ctx, query, len(out), s.sessionID)
@@ -574,5 +586,11 @@ func (s *Store) replaceSessionPercepts(percepts []Percept) {
 
 // promoteToGlobal appends a list of Percepts to the global store (locked by caller).
 func (s *Store) promoteToGlobal(percepts []Percept) {
+	// Reaching the promotion weight took active use: the idle clock starts now.
+	now := s.now()
+	for i := range percepts {
+		percepts[i].LastUsedAt = now
+		percepts[i].IdleSeconds = 0
+	}
 	s.global.Percepts = append(s.global.Percepts, percepts...)
 }

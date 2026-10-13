@@ -654,6 +654,17 @@ func execMemory(sub string, st *interactiveState) string {
 	if rest, ok := strings.CutPrefix(sub, "show "); ok {
 		return execMemoryShow(strings.TrimSpace(rest), st)
 	}
+	switch {
+	case sub == "stale":
+		return execMemoryStale(st)
+	case sub == "archive":
+		return execMemoryArchive(st)
+	case sub == "restore":
+		return milkTag() + " usage: /memory restore <id|prefix> (ids are listed by /memory archive)"
+	}
+	if rest, ok := strings.CutPrefix(sub, "restore "); ok {
+		return execMemoryRestore(strings.TrimSpace(rest), st)
+	}
 
 	opts := memory.ListOpts{}
 	switch sub {
@@ -669,6 +680,63 @@ func execMemory(sub string, st *interactiveState) string {
 		return milkTag() + " (no percepts found)"
 	}
 	return milkTag() + "\n" + memory.FormatList(percepts)
+}
+
+// execMemoryStale lists the global percepts by how long they have gone unused,
+// i.e. which ones the next consolidations will archive and when.
+func execMemoryStale(st *interactiveState) string {
+	entries := st.mem.Stale()
+	if len(entries) == 0 {
+		return milkTag() + " no non-core global percepts to age (or archiving is disabled: global_archive_after_days < 0)"
+	}
+	var b strings.Builder
+	b.WriteString(milkTag() + " global percepts by idle session time (archived once decayed to the prune weight and idle for the limit):\n")
+	for i, e := range entries {
+		if i >= 25 {
+			fmt.Fprintf(&b, "  … %d more\n", len(entries)-i)
+			break
+		}
+		state := fmt.Sprintf("%.1f days left", e.DaysLeft)
+		switch {
+		case e.DaysLeft <= 0 && e.AtFloor:
+			state = "due for archiving"
+		case e.DaysLeft <= 0:
+			state = "idle limit reached, still above the prune weight"
+		case !e.AtFloor:
+			state += ", weight still above the prune weight"
+		}
+		fmt.Fprintf(&b, "  #%.8s  idle %5.1f d  %s  %s\n", e.Percept.ID, e.IdleDays, state, truncate(e.Percept.Content, 70))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// execMemoryArchive lists the archived global percepts.
+func execMemoryArchive(st *interactiveState) string {
+	list, err := st.mem.Archived()
+	if err != nil {
+		return fmt.Sprintf("%s error reading the archive: %v", milkTag(), err)
+	}
+	if len(list) == 0 {
+		return milkTag() + " the archive is empty"
+	}
+	var b strings.Builder
+	b.WriteString(milkTag() + " archived global percepts (restore with /memory restore <id>):\n")
+	for i, a := range list {
+		if i >= 25 {
+			fmt.Fprintf(&b, "  … %d more (see global-archive.jsonl)\n", len(list)-i)
+			break
+		}
+		fmt.Fprintf(&b, "  #%.8s  %s  idle %.1f d  %s\n", a.Percept.ID, a.ArchivedAt.Format("2006-01-02"), a.IdleDays, truncate(a.Percept.Content, 70))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func execMemoryRestore(prefix string, st *interactiveState) string {
+	p, err := st.mem.Restore(strings.TrimPrefix(prefix, "#"))
+	if err != nil {
+		return fmt.Sprintf("%s cannot restore: %v", milkTag(), err)
+	}
+	return fmt.Sprintf("%s restored #%.8s to the global store: %s", milkTag(), p.ID, truncate(p.Content, 80))
 }
 
 func execMemoryShow(pat string, st *interactiveState) string {

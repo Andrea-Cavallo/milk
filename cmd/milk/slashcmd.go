@@ -127,7 +127,10 @@ var commandRegistry = []cmdSpec{
   /memory global         list only global percepts
   /memory session        list only session percepts
   /memory <pat>          list percepts whose content matches <pat>
-  /memory show <pat|#id>  show full details of matching percepts`},
+  /memory show <pat|#id>  show full details of matching percepts
+  /memory stale          global percepts by idle session time, and which are due for archiving
+  /memory archive        list archived (stale) global percepts
+  /memory restore <id>   bring an archived percept back to the global store`},
 	{name: cmdExport, hosts: hostBoth, desc: "print the session transcript (or another session's), or write it to a file", hint: "[json|<path>|session <id>]", help: `  /export                print session transcript (text)
   /export json           print session transcript as JSON
   /export <path>         write session transcript to file
