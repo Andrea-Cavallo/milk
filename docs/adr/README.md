@@ -53,3 +53,4 @@
 * [52. Three-Source Permission Asks with a Timed Answer for Background Work](0052-background-permission-timed-answer.md)
 * [53. Memory Weight Model v2: Reinforcement, Wired Edges, Recency](0053-memory-weight-model.md)
 * [54. Docs Information Architecture: Published/Internal Split](0054-docs-information-architecture.md)
+* [55. The Implicit Claude Default Is Never a Silent Fallback for a Down Primary](0055-explicit-claude-fallback.md)

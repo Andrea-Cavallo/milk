@@ -38,7 +38,7 @@ func (h *tuiHost) RequestPermission(ctx context.Context, req events.PermissionRe
 	if err != nil {
 		return events.PermissionOutcome{}, err
 	}
-	allow := answer == "" || strings.EqualFold(answer, "y")
+	allow := strings.EqualFold(answer, "y") || (answer == "" && !req.DefaultNo)
 	return events.PermissionOutcome{Allow: allow}, nil
 }
 

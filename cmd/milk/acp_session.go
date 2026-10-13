@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -615,6 +616,15 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 	if err != nil {
 		as.notify(acp.IdleState(acp.StopReasonError))
 		return acp.PromptResponse{}, err
+	}
+	if gateErr := gateFallback(turnCtx, as.st, rt, as.host, as.notifier()); gateErr != nil {
+		if errors.Is(gateErr, errFallbackDeclined) {
+			say(stripANSI(gateErr.Error()) + "\n")
+			as.notify(acp.IdleState(acp.StopReasonEndTurn))
+			return acp.PromptResponse{MessageID: msgID}, nil
+		}
+		as.notify(acp.IdleState(acp.StopReasonError))
+		return acp.PromptResponse{}, gateErr
 	}
 	decision, target := rt.Decision, rt.Target
 	source, turnStart := turnSource(as.st), time.Now()

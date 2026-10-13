@@ -32,6 +32,13 @@ type routedTurn struct {
 	// just consumed). noteTurnSucceeded uses it to keep the one-shot form
 	// from becoming auto-sticky — see there.
 	SingleTurnEscalate bool
+	// NeedsFallbackConsent is set when the primary is unavailable and the
+	// turn would fall back to the implicit Claude CLI default — a target the
+	// user never configured, so they must approve it (gateFallback).
+	NeedsFallbackConsent bool
+	// NoAgent is set when neither the primary nor the escalation agent can
+	// run the turn.
+	NoAgent bool
 }
 
 // availPingTimeout bounds the per-turn availability re-check so an
@@ -113,6 +120,12 @@ func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, in
 	}
 	st.forcePrimary = false
 
+	// An approval of the Claude fallback only covers the outage it was given
+	// for; once the primary answers again the next outage asks again.
+	if localAvail {
+		st.claudeFallbackApproved = false
+	}
+
 	rt := routedTurn{Decision: decision, Target: resolveTarget(decision.Target, localAvail, escalationAvail), SingleTurnEscalate: singleTurnEscalate}
 	switch {
 	case rt.Target == decision.Target:
@@ -121,6 +134,9 @@ func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, in
 	default:
 		rt.Fallback = "primary"
 	}
+	rt.NoAgent = !localAvail && !escalationAvail
+	rt.NeedsFallbackConsent = rt.Fallback == "escalation" && escalationAvail &&
+		st.cfg.EscalationAgentIsImplicit() && !st.claudeFallbackApproved
 	return rt, nil
 }
 
@@ -146,7 +162,11 @@ func clearRoutingPins(st *interactiveState) {
 // pin (/escalate with no prompt) and the router's own choice; a forcePrimary
 // turn breaks an existing auto-sticky (see routeTurn).
 func noteTurnSucceeded(st *interactiveState, rt routedTurn) {
-	if rt.Target == router.TargetEscalation && !rt.SingleTurnEscalate && !st.stickyEscalate && st.cfg.StickyEscalationEnabled() {
+	// A turn that only ran on the implicit Claude default because the primary
+	// was down (and the user approved it) must not pin the session there: the
+	// approval covers the outage, not every later turn.
+	implicitFallback := rt.Fallback == "escalation" && st.cfg.EscalationAgentIsImplicit()
+	if rt.Target == router.TargetEscalation && !rt.SingleTurnEscalate && !st.stickyEscalate && !implicitFallback && st.cfg.StickyEscalationEnabled() {
 		st.autoStickyEscalate = true
 	}
 }

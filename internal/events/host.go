@@ -95,7 +95,11 @@ type PermissionRequest struct {
 	// overflow with it; other hosts can ignore both.
 	AutoDefault string
 	AutoAt      time.Time
-	Options     []PermissionOption
+	// DefaultNo makes a blank answer deny instead of allow, for questions
+	// where "yes" has a cost the user should opt into (the prompt text must
+	// then say [y/N]). Hosts with explicit option buttons ignore it.
+	DefaultNo bool
+	Options   []PermissionOption
 }
 
 // PermissionOutcome is the host's answer to a PermissionRequest.

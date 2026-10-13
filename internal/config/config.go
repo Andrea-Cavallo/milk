@@ -2085,6 +2085,28 @@ func (c Config) EscalationAgentConfig() AgentConfig {
 	return defaultCLIAgent()
 }
 
+// EscalationAgentIsImplicit reports whether the escalation target is the
+// built-in Claude CLI default that the user never asked for: no
+// escalation_agent is set and no "claude" entry is configured, or
+// escalation_agent names an agent that does not exist (EscalationAgentConfig
+// then substitutes the default). Anything that would silently send a turn to
+// it, rather than the user choosing so, must ask first.
+func (c Config) EscalationAgentIsImplicit() bool {
+	name := strings.TrimSpace(c.EscalationAgent)
+	if strings.EqualFold(name, "claude") {
+		return false // named by the user, even without a "claude" entry
+	}
+	if name == "" {
+		name = "claude" // the default: only a configured claude entry counts
+	}
+	for _, a := range c.Agents {
+		if strings.EqualFold(a.Name, name) {
+			return false
+		}
+	}
+	return true
+}
+
 // HasInferenceAgent reports whether the user has configured at least one
 // non-claude-cli agent backend. Used by the TUI to decide whether to show
 // setup hints.

@@ -1235,7 +1235,7 @@ func (m model) rebuildRunners() (model, tea.Cmd) {
 		// Make the fallback visible instead of silently routing around the
 		// configured primary — turns re-check availability and pick the
 		// primary up as soon as it answers (see refreshTurnAvailability).
-		m.appendTranscript(fmt.Sprintf("%s warning: %s primary agent unreachable — turns fall back to escalation until it answers\n", milkTag(), primaryName))
+		m.appendTranscript(fmt.Sprintf("%s %s\n", milkTag(), primaryDownWarning(cfg, m.agents.escalationAvail)))
 	}
 
 	// The escalation side shares one claude-cli agent with buildTUIAgents'

@@ -256,9 +256,10 @@ Two safety nets:
 | Primary agent | Escalation agent | Behavior |
 |---|---|---|
 | up | available (any provider) | normal routing |
-| down | available | warn once per session, route everything to escalation |
+| down | available, configured (`escalation_agent` set, or a `claude` entry) | warn once per session, route everything to escalation |
+| down | only the built-in Claude CLI default | **ask** before running a turn on it (default No; ADR-0055) — set `escalation_agent: "claude"` to make it automatic |
 | up | unavailable/not installed | warn once per session, stay primary-only |
-| down | unavailable | error and exit |
+| down | unavailable | error and exit (TUI: the turn fails with a message, the session stays open) |
 
 ---
 

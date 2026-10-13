@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel/attribute"
+	"golang.org/x/term"
 
 	"github.com/scoutme/milk/internal/updater"
 
@@ -287,6 +288,10 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	target := resolveTarget(decision.Target, localAvail, escalationAvail)
+	if err := singlePromptFallbackGate(cfg, decision.Target, target,
+		fmtVal == formatText && term.IsTerminal(int(os.Stdin.Fd())), os.Stdin, os.Stderr); err != nil {
+		return err
+	}
 
 	targetLabel := string(target)
 	sourceLabel := turnSourceLabel(flagEscalate, flagPrimary)
@@ -931,12 +936,12 @@ func loadSessionForRun(cwd string) (*session.Session, error) {
 	return openSession(cwd, flagNew, flagSession)
 }
 
-func checkAgentAvailability(ctx context.Context, localAgent *local.Agent, cliAgent *claude.Agent) (bool, bool, error) {
+func checkAgentAvailability(ctx context.Context, cfg config.Config, localAgent *local.Agent, cliAgent *claude.Agent) (bool, bool, error) {
 	localAvail := localAgent.Ping(ctx) == nil
 	escalationAvail := cliAgent.Ping() == nil
 
 	if !localAvail {
-		fmt.Fprintln(os.Stderr, milkTag()+" warning: primary agent unreachable — routing all to escalation agent")
+		fmt.Fprintln(os.Stderr, milkTag()+" "+primaryDownWarning(cfg, escalationAvail))
 	}
 	if !escalationAvail {
 		fmt.Fprintln(os.Stderr, milkTag()+" warning: escalation agent unavailable — primary only")
