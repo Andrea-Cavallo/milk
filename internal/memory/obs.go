@@ -136,3 +136,9 @@ func traceConsolidation(ctx context.Context) (context.Context, func(decayed, pru
 		obs.EndSpan(span, err)
 	}
 }
+
+// metricsGlobalArchive counts global Percepts moved to the archive by one
+// consolidation pass.
+func metricsGlobalArchive(ctx context.Context, n int) {
+	obs.Add(ctx, meterScope, "milk.memory.global_archived", int64(n))
+}

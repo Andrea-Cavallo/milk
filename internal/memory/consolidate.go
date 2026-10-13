@@ -39,6 +39,7 @@ const (
 	edgeNegativeDelta     = 0.10 // contradicts penalizes both endpoints
 	recencyBoost          = 0.10 // max additive recall-order bonus for a just-updated percept
 	recencyHalfLifeDays   = 30   // age at which the recency bonus halves
+	globalArchiveAfter    = 14   // days of milk running time a global percept may sit unused before it is archived
 	maxW                  = 1.0
 )
 
@@ -70,19 +71,25 @@ type Params struct {
 	// RecencyHalfLifeDays is the age at which the recency bonus has decayed
 	// to half of RecencyBoost. Default 30.
 	RecencyHalfLifeDays float64 `json:"recency_half_life_days,omitempty"`
+	// GlobalArchiveAfterDays is how many days of cumulative milk running time
+	// (summed over sessions) a non-core global Percept may go unused — never
+	// re-stated, recalled or injected — once decayed to PruneThreshold before
+	// it is moved to the archive. Default 14; negative disables archiving.
+	GlobalArchiveAfterDays float64 `json:"global_archive_after_days,omitempty"`
 }
 
 // DefaultParams returns the built-in weight-model parameters.
 func DefaultParams() Params {
 	return Params{
-		DecayPerSession:       decayPerSession,
-		GlobalDecayPerSession: globalDecayPerSession,
-		ReconfirmBoost:        reconfirmBoost,
-		ReconfirmCap:          reconfirmCap,
-		PromoteThreshold:      promoteThreshold,
-		PruneThreshold:        pruneThreshold,
-		RecencyBoost:          recencyBoost,
-		RecencyHalfLifeDays:   recencyHalfLifeDays,
+		DecayPerSession:        decayPerSession,
+		GlobalDecayPerSession:  globalDecayPerSession,
+		ReconfirmBoost:         reconfirmBoost,
+		ReconfirmCap:           reconfirmCap,
+		PromoteThreshold:       promoteThreshold,
+		PruneThreshold:         pruneThreshold,
+		RecencyBoost:           recencyBoost,
+		RecencyHalfLifeDays:    recencyHalfLifeDays,
+		GlobalArchiveAfterDays: globalArchiveAfter,
 	}
 }
 
@@ -113,6 +120,9 @@ func (p Params) normalized() Params {
 	}
 	if p.RecencyHalfLifeDays <= 0 {
 		p.RecencyHalfLifeDays = d.RecencyHalfLifeDays
+	}
+	if p.GlobalArchiveAfterDays == 0 {
+		p.GlobalArchiveAfterDays = d.GlobalArchiveAfterDays // negative = disabled, kept as is
 	}
 	return p
 }
@@ -164,6 +174,11 @@ func (s *Store) ConsolidateCtx(ctx context.Context) error {
 	globalDecayed := applyGlobalDecay(s.global.Percepts, p.GlobalDecayPerSession, p.PruneThreshold)
 	s.global.Percepts = applyEdges(s.global.Percepts, s.global.Edges)
 
+	// Staleness: running time since the last pass is added to every global
+	// percept that was not used meanwhile; the ones that stayed unused long
+	// enough are archived (moved, not deleted — see archive.go).
+	archived := s.accrueAndArchiveLocked()
+
 	if promoted > 0 {
 		s.promoteToGlobal(promoteLater)
 	}
@@ -186,6 +201,9 @@ func (s *Store) ConsolidateCtx(ctx context.Context) error {
 	metricsConsolidation(ctx, decayed, pruned, promoted, globalTotal)
 	if globalDecayed > 0 {
 		metricsGlobalDecay(ctx, globalDecayed)
+	}
+	if archived > 0 {
+		metricsGlobalArchive(ctx, archived)
 	}
 
 	return saveErr

@@ -893,14 +893,15 @@ func memParams(cfg config.Config) memory.Params {
 		return memory.Params{}
 	}
 	return memory.Params{
-		DecayPerSession:       m.DecayPerSession,
-		GlobalDecayPerSession: m.GlobalDecayPerSession,
-		ReconfirmBoost:        m.ReconfirmBoost,
-		ReconfirmCap:          m.ReconfirmCap,
-		PromoteThreshold:      m.PromoteThreshold,
-		PruneThreshold:        m.PruneThreshold,
-		RecencyBoost:          m.RecencyBoost,
-		RecencyHalfLifeDays:   m.RecencyHalfLifeDays,
+		DecayPerSession:        m.DecayPerSession,
+		GlobalDecayPerSession:  m.GlobalDecayPerSession,
+		ReconfirmBoost:         m.ReconfirmBoost,
+		ReconfirmCap:           m.ReconfirmCap,
+		PromoteThreshold:       m.PromoteThreshold,
+		PruneThreshold:         m.PruneThreshold,
+		RecencyBoost:           m.RecencyBoost,
+		RecencyHalfLifeDays:    m.RecencyHalfLifeDays,
+		GlobalArchiveAfterDays: m.GlobalArchiveAfterDays,
 	}
 }
 
@@ -1868,9 +1869,14 @@ func perceptsForAgent(cfg config.Config, mem *memory.Store, prompt string, forEs
 	candidates = memory.LimitInjection(candidates, cfg.AgentPerceptInjectMaxCount(ac), cfg.AgentPerceptInjectMaxByteCount(ac))
 
 	out := make([]string, len(candidates))
+	ids := make([]string, len(candidates))
 	for i, p := range candidates {
 		out[i] = p.Content
+		ids[i] = p.ID
 	}
+	// Injected percepts are in use: restart their idle clock so they are not
+	// archived as stale (session percepts are ignored by MarkUsed).
+	mem.MarkUsed(ids)
 	return out
 }
 

@@ -1215,14 +1215,15 @@ func defaults() Config {
 		// code defaults — the values here are exactly the ones the memory
 		// package falls back to (ADR-0053).
 		Memory: &MemoryConfig{
-			DecayPerSession:       0.10,
-			GlobalDecayPerSession: 0.02,
-			ReconfirmBoost:        0.05,
-			ReconfirmCap:          0.90,
-			PromoteThreshold:      0.80,
-			PruneThreshold:        0.20,
-			RecencyBoost:          0.10,
-			RecencyHalfLifeDays:   30,
+			DecayPerSession:        0.10,
+			GlobalDecayPerSession:  0.02,
+			ReconfirmBoost:         0.05,
+			ReconfirmCap:           0.90,
+			PromoteThreshold:       0.80,
+			PruneThreshold:         0.20,
+			RecencyBoost:           0.10,
+			RecencyHalfLifeDays:    30,
+			GlobalArchiveAfterDays: 14,
 		},
 		Otel: OtelConfig{
 			Enabled:             true,
@@ -1541,6 +1542,12 @@ type MemoryConfig struct {
 	// RecencyHalfLifeDays is the age at which the recency bonus halves.
 	// Default 30.
 	RecencyHalfLifeDays float64 `json:"recency_half_life_days,omitempty"`
+	// GlobalArchiveAfterDays is how many days of cumulative milk running time
+	// (summed over sessions) a non-core global percept may go unused — never
+	// re-stated, recalled or injected — once decayed to prune_threshold before
+	// it is moved to ~/.milk/memory/global-archive.jsonl (restorable with
+	// /memory restore). Default 14; negative disables archiving.
+	GlobalArchiveAfterDays float64 `json:"global_archive_after_days,omitempty"`
 }
 
 // LocalContextBudget returns the maximum total character count of the local

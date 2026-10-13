@@ -38,17 +38,23 @@ Agents backed by an inference server (HTTP or Bedrock) get four memory tools wit
 
 ### Memory weight model
 
-Every Percept carries a confidence weight `w` in `[0,1]`. Five forces move it (ADR-0053):
+Every Percept carries a confidence weight `w` in `[0,1]`. Five forces move it (ADR-0053). "Consolidation" below runs after every turn handled by the primary agent, when milk exits, and after a single-prompt run — so the per-consolidation decay amounts tick per turn, not once per session:
 
 1. **Birth** — `user` facts start at 0.9, inference (`primary`/`escalation`) at 0.7, system hints at 0.4, `core` (`/learn`) at 1.0.
 2. **Reinforcement (re-confirmation)** — re-stating a near-duplicate fact (Jaccard token overlap ≥ 0.60) strengthens the existing percept instead of inserting a copy: `w += 0.05`, capped at 0.90, `updated_at` touched (which also restores the recency bonus). The cap is `promote_threshold + decay_per_session` on purpose: a fully re-confirmed inference percept survives the pre-promotion decay and graduates at the next consolidation — repeated confirmation is a real promotion path. Weights never decrease through reinforcement.
 3. **NREM consolidation** (session end) — session percepts decay −0.10, typed edges fire (below), percepts at `w ≤ 0.20` are pruned, and `w ≥ 0.80` percepts are promoted to the global store (promotion happens *after* the global pass, so fresh promotions aren't decayed twice).
-4. **Global decay** — promoted (non-core) global percepts get a gentle −0.02 per consolidation, floored at 0.20: old facts sink in rank but are never deleted from global by decay (only size-based eviction or `/forget` removes them). `core` percepts never decay anywhere.
+4. **Global decay and archiving** — promoted (non-core) global percepts get a gentle −0.02 per consolidation, floored at 0.20: old facts sink in rank. Decay alone never removes them; **staleness** does (below). `core` percepts never decay and are never archived.
 5. **Recency (recall ordering only)** — `get_memory` orders by token-hit count, then `w + 0.10 × 0.5^(age/30d)`: a recently updated fact wins ties but a more relevant old fact always ranks first, and `min_confidence` gates raw `w` — age never hides a fact.
+
+**Stale global percepts are archived** (ADR-0056). A global percept is stale when it has decayed to `prune_threshold` *and* has gone unused for `global_archive_after_days` (default 14) of milk running time. The clock counts the time milk is running, summed over sessions — one 20-day session counts like ten 2-day ones — and is independent of how often consolidation runs. *Used* means re-stated, returned by `get_memory`, or injected into a prompt; any use restarts the clock. Stale percepts are **moved**, not deleted, to `~/.milk/memory/global-archive.jsonl` (one JSON line each, with when and why, plus the edges touching them). Percepts that existed before this feature start their clock at zero, so nothing is archived right after an upgrade. Set `global_archive_after_days` negative to disable.
+
+- `/memory stale` — global percepts by idle time and what is due for archiving.
+- `/memory archive` — list the archived ones.
+- `/memory restore <id>` — bring one back (its clock restarts).
 
 **Edges** (wired via `record_memory`'s `relation` + `related_to`): `extends`/`updates`/`derives` corroborate the target (+0.05 at consolidation), `contradicts` marks a conflict (both endpoints −0.10). The producer agent decides semantics — milk never fabricates relations. Edges are stored with the "from" percept's store file and apply to endpoints in that same file.
 
-All knobs are prepopulated in the generated config's `memory` block (`decay_per_session`, `global_decay_per_session`, `reconfirm_boost`, `reconfirm_cap`, `promote_threshold`, `prune_threshold`, `recency_boost`, `recency_half_life_days`); zero/missing fields fall back to the defaults above. OTel: `milk.memory.consolidation.*` counters (including `global_decayed`) and `milk.memory.percept_events{event=reinforce}`.
+All knobs are prepopulated in the generated config's `memory` block (`decay_per_session`, `global_decay_per_session`, `reconfirm_boost`, `reconfirm_cap`, `promote_threshold`, `prune_threshold`, `recency_boost`, `recency_half_life_days`, `global_archive_after_days`); zero/missing fields fall back to the defaults above. OTel: `milk.memory.consolidation.*` counters (including `global_decayed`) and `milk.memory.percept_events{event=reinforce}`, and `milk.memory.global_archived`.
 
 ### Tuning
 
