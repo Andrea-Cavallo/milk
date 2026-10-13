@@ -23,6 +23,7 @@ cmd/milk/repl.go              # bubbletea TUI (transcript + textarea + status ba
 cmd/milk/runner.go            # TurnRunner interface + localRunner / cliRunner / subprocessRunner implementations
 cmd/milk/dispatch.go          # runPrimary / runEscalation — role-specific session bookkeeping
 cmd/milk/interactive.go       # slash commands, tab completion, prompt label
+cmd/milk/fileindex.go         # @-file completion: cached candidate index (git ls-files / pruned walk), in-memory ranking (ADR-0057)
 cmd/milk/sessionmgmt_core.go  # host-neutral session-management core: /sessions /new /clear /resume /drop ops + shared list renderer, used by TUI, CLI and ACP
 cmd/milk/ansi.go              # ANSI color helpers and spinner
 cmd/milk/panel_memory.go      # right-side memory panel (open by default, toggle /panel memory)

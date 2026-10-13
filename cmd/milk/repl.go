@@ -1415,6 +1415,11 @@ func (m model) handlePermDismiss(msg permDismissMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
+	// The turn probably created, renamed or removed files: the @-file index
+	// refreshes on its next use.
+	if m.st != nil && m.st.cwd != "" {
+		indexFor(m.st.cwd).invalidate()
+	}
 	m.busy = false
 	m.activeToolUse = ""
 	m.cancelTurn = nil
@@ -1912,6 +1917,21 @@ func (m model) Init() tea.Cmd {
 	}
 	if m.mcpConnectInit != nil {
 		cmds = append(cmds, m.mcpConnectInit)
+	}
+	// Pre-warm the @-file candidate index so the first "@" is already served
+	// from memory, and redraw hints when a later refresh lands.
+	if m.st != nil && m.st.cwd != "" {
+		st := m.st
+		cmds = append(cmds, func() tea.Msg {
+			ix := indexFor(st.cwd)
+			ix.setOnReady(func() {
+				if st.program != nil {
+					st.program.Send(fileIndexReadyMsg{})
+				}
+			})
+			ix.get(0)
+			return nil
+		})
 	}
 	if m.st.cfg.ShouldCheckUpdate() {
 		cfg := m.st.cfg
@@ -2596,6 +2616,13 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case hintDebounceMsg:
 		if msg.gen == m.hintDebounceGen {
+			m.rebuildInlineHints()
+			m.syncLayout()
+		}
+		return m, nil
+
+	case fileIndexReadyMsg:
+		if m.onAtToken() && len(m.tabMatches) == 0 {
 			m.rebuildInlineHints()
 			m.syncLayout()
 		}

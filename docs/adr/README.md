@@ -55,3 +55,4 @@
 * [54. Docs Information Architecture: Published/Internal Split](0054-docs-information-architecture.md)
 * [55. The Implicit Claude Default Is Never Reached Without Approval](0055-explicit-claude-fallback.md)
 * [56. Stale Global Percepts Are Archived by Session Time](0056-archive-stale-global-percepts.md)
+* [57. @-File Completion Reads a Cached Candidate Index](0057-at-file-candidate-index.md)
