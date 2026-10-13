@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/session"
 	"github.com/scoutme/milk/internal/textbudget"
 	"github.com/scoutme/milk/internal/workflow"
@@ -97,20 +98,38 @@ func recordSilentTurn(sess *session.Session, agent session.Agent, agentName stri
 	return true
 }
 
-// recordInterruptedTurn keeps a failed or cancelled turn in history only when
-// it launched something that outlives the turn. Otherwise nothing is recorded,
-// so the user can simply retry (and the repeated-prompt check is not tripped
-// by the retry).
-func recordInterruptedTurn(sess *session.Session, agent session.Agent, agentName, userContent string, nNotices int, res TurnResult, err error) {
-	var notes []string
+// turnRanTools reports whether the turn executed any tool before it ended.
+func turnRanTools(res TurnResult) bool {
+	for _, s := range res.Trail {
+		if len(s.Calls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// turnChangedThings reports whether the turn did something that outlives it: a
+// lasting action (actionNotes) or a side-effecting tool call (file edit, shell
+// command, ...). Its effects persist even though the turn did not finish.
+func turnChangedThings(res TurnResult) bool {
 	for _, s := range res.Trail {
 		for _, c := range s.Calls {
-			if note, ok := actionNotes[c.Name]; ok {
-				notes = append(notes, note(c))
+			if _, ok := actionNotes[c.Name]; ok || local.SideEffectingTool(c.Name) {
+				return true
 			}
 		}
 	}
-	if len(notes) == 0 {
+	return false
+}
+
+// recordInterruptedTurn keeps a failed or cancelled turn in history when it
+// changed something that outlives the turn (launched a job, edited files, ran
+// commands), together with its tool trail, so the next turn knows what is
+// already done instead of rediscovering it as someone else's partial work.
+// A turn that only read things records nothing, so the user can simply retry
+// (and the repeated-prompt check is not tripped by the retry).
+func recordInterruptedTurn(sess *session.Session, agent session.Agent, agentName, userContent string, nNotices int, res TurnResult, err error) {
+	if !turnChangedThings(res) {
 		return
 	}
 	cause := "failed: " + err.Error()
@@ -119,7 +138,9 @@ func recordInterruptedTurn(sess *session.Session, agent session.Agent, agentName
 	}
 	recordUserTurn(sess, agent, agentName, userContent, nNotices)
 	sess.AddTurn(session.Turn{Role: session.RoleAssistant, Agent: agent, AgentName: agentName,
-		Content: "Turn " + cause + " before finishing. " + strings.Join(notes, " "), Trail: res.Trail})
+		Content: "Turn " + cause + " before finishing. Its effects are still in place (edited files, spawned jobs): check the current state and continue from it rather than starting over. " +
+			silentTurnContent(res, false),
+		Trail: res.Trail})
 }
 
 // pendingEventsBlock renders the session's queued notices as a prompt/history

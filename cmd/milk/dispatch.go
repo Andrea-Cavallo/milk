@@ -126,7 +126,11 @@ func executeWithRetry(
 ) (TurnResult, error) {
 	for attempt := 0; ; attempt++ {
 		res, err := runner.Execute(ctx, cfg, sess, mem, role, ctxMode, sessionID, nonce, percepts, injectInstructions, prompt, cbs, out)
-		if err == nil || attempt >= workflow.MaxTurnRetries || !workflow.IsRetryableTurnError(err) {
+		// A turn that already ran tools must not be re-run from its prompt: its
+		// results exist only in the failed run, and its edits are already on
+		// disk, so the retry would redo or contradict them without knowing.
+		// The failed turn's trail is recorded instead (recordInterruptedTurn).
+		if err == nil || attempt >= workflow.MaxTurnRetries || !workflow.IsRetryableTurnError(err) || turnRanTools(res) {
 			return res, err
 		}
 		fmt.Fprintf(out, "\n[transient error, retrying %d/%d: %v]\n", attempt+1, workflow.MaxTurnRetries, err)

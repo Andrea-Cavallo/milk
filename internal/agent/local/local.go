@@ -499,6 +499,10 @@ type Agent struct {
 	// toolTimeout is the per-individual-tool timeout. 0 means no per-tool limit.
 	// Each tool call in a batch gets its own context derived from this timeout.
 	toolTimeout time.Duration
+
+	// streamNoDataTimeout cancels a chat-completions request that produces no
+	// SSE data event for this long; 0 means defaultStreamNoDataTimeout.
+	streamNoDataTimeout time.Duration
 	// pendingImageParts holds multipart ContentParts to inject into the next user
 	// message. Set by SetPendingImageParts before Run; cleared after one use.
 	pendingImageParts []ContentPart
@@ -1713,7 +1717,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			a.lastPromptTokens = 0
 		}
 
-		resp, fallbackRaw, toolCalls, emptyFallback, reasoningText, err := a.streamCompletion(ctx, msgs, tools, out, userMsgIdx)
+		resp, fallbackRaw, toolCalls, emptyFallback, reasoningText, err := a.streamCompletionRetrying(ctx, msgs, tools, out, userMsgIdx)
 		if err != nil {
 			return msgs, err
 		}
@@ -2333,6 +2337,10 @@ func (a *Agent) cloneForBackground() *Agent {
 		memCallerSet: true,
 	}
 }
+
+// SideEffectingTool reports whether a tool call changes state outside the
+// conversation (files, shell, network writes), as opposed to only reading.
+func SideEffectingTool(name string) bool { return toolNeedsPermission(name) }
 
 // toolNeedsPermission reports whether a tool requires user approval before execution.
 // Read-only and internal tools are always permitted; side-effecting tools require a grant.
@@ -3425,7 +3433,13 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 		obs.LogPayload(a.inferenceURL(), body, a.jobAttrs()...)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	defer cancelReq()
+	noData := a.noDataTimeout()
+	stall := newStallWatchdog(noData, cancelReq)
+	defer stall.stop()
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
 		a.inferenceURL(), bytes.NewReader(body))
 	if err != nil {
 		return "", "", nil, false, "", 0, err
@@ -3435,6 +3449,7 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 	inferenceStart := time.Now()
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
+		err = stall.err(ctx, err, noData)
 		obs.Inc(ctx, inferenceScope, "milk.inference.errors",
 			attribute.String("model", a.model),
 			attribute.String("agent", a.logRole()),
@@ -3446,6 +3461,7 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 			"retryable", workflow.IsRetryableTurnError(err))
 		return "", "", nil, false, "", 0, fmt.Errorf("inference server unreachable: %w", err)
 	}
+	httpResp.Body = &dataSignalBody{ReadCloser: httpResp.Body, onData: stall.stop}
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
@@ -3472,7 +3488,7 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 
 	toolCalls, promptTokens, completionTokens, cacheRead, imageTokens, reasoningText, finishReason, err := a.scanSSE(scanner, det, partialTools, &textBuf, out, inferenceStart, &timing)
 	if err != nil {
-		return "", "", nil, false, "", 0, err
+		return "", "", nil, false, "", 0, stall.err(ctx, err, noData)
 	}
 	if promptTokens > 0 {
 		a.lastPromptTokens = promptTokens

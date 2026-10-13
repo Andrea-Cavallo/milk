@@ -376,3 +376,30 @@ func TestDoomLoopGate_Unattended_SafetyUnreachable_FailsClosedWithoutAsking(t *t
 		t.Errorf("expected exactly 3 requests before stopping, got %d", got)
 	}
 }
+
+// The doom-loop signature covers every call's tool name and full arguments, in
+// order: only a byte-identical batch is a repeat.
+func TestToolCallBatchSignature(t *testing.T) {
+	call := func(name, args string) toolCall {
+		var tc toolCall
+		tc.Function.Name, tc.Function.Arguments = name, args
+		return tc
+	}
+	sig := func(tcs ...toolCall) string { return toolCallBatchSignature(tcs) }
+
+	if sig(call("grep", `{"pattern":"a"}`)) == sig(call("grep", `{"pattern":"b"}`)) {
+		t.Error("same tool with different arguments must not be a repeat")
+	}
+	if sig(call("grep", `{"pattern":"a"}`)) == sig(call("glob", `{"pattern":"a"}`)) {
+		t.Error("different tools with the same arguments must not be a repeat")
+	}
+	if sig(call("grep", `{"pattern":"a"}`), call("read_file", `{}`)) == sig(call("read_file", `{}`), call("grep", `{"pattern":"a"}`)) {
+		t.Error("batch order matters")
+	}
+	if sig(call("grep", `{"pattern":"a"}`)) == sig(call("grep", `{"pattern":"a"}`), call("grep", `{"pattern":"a"}`)) {
+		t.Error("a larger batch is not the same batch")
+	}
+	if sig(call("grep", `{"pattern":"a"}`)) != sig(call("grep", `{"pattern":"a"}`)) {
+		t.Error("identical batches must match")
+	}
+}
