@@ -144,3 +144,19 @@ func TestMakeLocalPermAsk_PromptUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// A DefaultNo question (the Claude fallback) treats a blank answer as no; an
+// explicit y still allows.
+func TestTUIHost_RequestPermission_DefaultNo(t *testing.T) {
+	for _, tt := range []struct {
+		answer string
+		want   bool
+	}{{"", false}, {"y", true}, {"Y", true}, {"n", false}} {
+		var gotPrompt, gotLabel string
+		host := newTUIHost(&tuiInputReader{send: fakeSyncSend(t, tt.answer, &gotPrompt, &gotLabel)})
+		out, err := host.RequestPermission(context.Background(), events.PermissionRequest{Prompt: "go? [y/N] ", DefaultNo: true})
+		if err != nil || out.Allow != tt.want {
+			t.Errorf("answer %q: Allow=%v err=%v, want %v", tt.answer, out.Allow, err, tt.want)
+		}
+	}
+}

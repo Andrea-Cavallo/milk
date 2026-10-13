@@ -211,9 +211,12 @@ const errFmt = "error: %v\n"
 
 // interactiveState holds mutable state for the interactive loop.
 type interactiveState struct {
-	sess          *session.Session
-	forceEscalate bool
-	forcePrimary  bool
+	sess *session.Session
+	// claudeApproved records that the user allowed the implicit Claude CLI for
+	// this session (fallback_core.go).
+	claudeApproved bool
+	forceEscalate  bool
+	forcePrimary   bool
 	// stickyEscalate is set when the user explicitly calls /escalate with no
 	// prompt. It causes every subsequent turn to route to the escalation agent
 	// until the user calls /primary or closes the session. forceEscalate is reset after each

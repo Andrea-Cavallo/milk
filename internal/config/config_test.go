@@ -1771,3 +1771,23 @@ func TestLoadWithLocalIn_FollowsGivenDir(t *testing.T) {
 		t.Errorf("LoadWithLocalIn(\"\") = (agent=%q, hasLocal=%v, err=%v), want the process-cwd overlay agent-a", m2.Agent, hasLocal, err)
 	}
 }
+
+func TestEscalationAgentIsImplicit(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{"nothing configured", Config{}, true},
+		{"only a primary configured", Config{Agents: []AgentConfig{{Name: "p", URL: "http://x"}}}, true},
+		{"escalation_agent names a missing agent", Config{EscalationAgent: "ghost"}, true},
+		{"escalation_agent claude", Config{EscalationAgent: "claude"}, false},
+		{"claude entry configured", Config{Agents: []AgentConfig{{Name: "claude", Provider: "claude-cli"}}}, false},
+		{"named inference agent", Config{Agents: []AgentConfig{{Name: "big", URL: "http://x"}}, EscalationAgent: "big"}, false},
+	}
+	for _, c := range cases {
+		if got := c.cfg.EscalationAgentIsImplicit(); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}

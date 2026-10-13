@@ -1443,6 +1443,9 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	} else if msg.err != nil {
 		errText := msg.err.Error()
 		switch {
+		case errors.Is(msg.err, errFallbackDeclined):
+			// Not a failure: the user (or nobody) declined the Claude fallback.
+			m.appendTranscript(dim("[turn not run — "+strings.TrimPrefix(errText, errFallbackDeclined.Error()+": ")+"]") + "\n")
 		case isContextCanceled(msg.err):
 			// Turn was cancelled by the user — already handled by m.interrupted;
 			// this branch catches any late-arriving cancellation that slipped through.
@@ -1849,8 +1852,11 @@ func (m *model) welcomeScreen() string {
 		lines = append(lines,
 			dim("type a message and press Enter to start"),
 			dim(primaryName+" unreachable — use /agent to check or switch backends"),
-			dim("/help for available commands"),
 		)
+		if m.st.cfg.EscalationAgentIsImplicit() {
+			lines = append(lines, dim("no escalation agent configured — you'll be asked before falling back to Claude Code"))
+		}
+		lines = append(lines, dim("/help for available commands"))
 	case !escalationAvail:
 		lines = append(lines,
 			dim("type a message and press Enter to start"),
@@ -3752,6 +3758,14 @@ func spinnerTick() tea.Cmd {
 
 // --- Agent dispatch ---
 
+// firstInputReader returns the first of the optional input readers, or nil.
+func firstInputReader(ir []inputReader) inputReader {
+	if len(ir) == 0 {
+		return nil
+	}
+	return ir[0]
+}
+
 // runTurn routes a prompt to the appropriate agent, writing output to out.
 func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agents *dispatchAgents, input string, out io.Writer, ir ...inputReader) error {
 	// An agent that read unavailable when the runners were built may just not
@@ -3763,6 +3777,17 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 	if routeErr != nil {
 		return routeErr
 	}
+	// Before anything of the turn shows up: running on the implicit Claude
+	// fallback needs the user's approval, and a turn with nowhere to run fails
+	// here with a clear message instead of an exec error.
+	var fallbackHost events.Host
+	if tir, ok := firstInputReader(ir).(*tuiInputReader); ok {
+		fallbackHost = newTUIHost(tir)
+	}
+	if err := gateClaude(ctx, st, rt, fallbackHost, st.notifier); err != nil {
+		return err
+	}
+	ctx = withClaudeConsent(ctx, selfEscalationConsent(st, fallbackHost, st.notifier))
 	target := rt.Target
 	st.activeFallbackTarget = rt.Fallback
 	defer func() { st.activeFallbackTarget = "" }()
@@ -4083,7 +4108,7 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 			fmt.Fprintln(os.Stderr, milkTag()+" warning: "+tuiEscAC.Name+" escalation agent unreachable — primary only")
 		}
 	} else {
-		localAvail, escalationAvail, _ = checkAgentAvailability(ctx, localAgent, cliAgent)
+		localAvail, escalationAvail, _ = checkAgentAvailability(ctx, cfg, localAgent, cliAgent)
 	}
 
 	// Pass nil routeLocalAgent when primary is a subprocess (no classifier available).

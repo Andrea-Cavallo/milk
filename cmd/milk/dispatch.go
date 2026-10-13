@@ -335,6 +335,14 @@ func runPrimaryWithSession(
 		sess.ForceState(session.StateRouting)
 		session.Save(sess) //nolint:errcheck
 
+		if !confirmSelfEscalation(ctx, res.EscalationReason) {
+			// Declined: nothing ran on the escalation agent. Record it so the
+			// next turn sees the request as dealt with, not unanswered.
+			note := "Asked to escalate (" + res.EscalationReason + "); the user did not approve Claude Code, so the request was not escalated."
+			fmt.Fprintf(out, "%s %s\n", milkTag(), note)
+			sess.AddTurn(session.Turn{Role: session.RoleAssistant, Agent: session.AgentLocal, AgentName: agentName, Content: note})
+			return session.Save(sess)
+		}
 		if escalationRunner != nil {
 			return runEscalation(ctx, cfg, sess, escalationRunner, res.EscalationReason, mem, prompt, out, da, onResponse, onSegment, onWorkflowStart)
 		}
