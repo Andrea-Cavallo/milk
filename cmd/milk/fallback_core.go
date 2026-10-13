@@ -50,15 +50,11 @@ func claudeConsentQuestion(cfg config.Config, outage bool, reason string) string
 	}
 }
 
-// noAgentError is returned when a turn has nowhere to run.
+// noAgentError is returned when a turn is headed to the implicit Claude
+// default but Claude Code is not installed.
 func noAgentError(cfg config.Config) error {
-	primary := primaryDisplayName(cfg)
-	if cfg.EscalationAgentIsImplicit() {
-		return fmt.Errorf("neither the primary agent (%s) nor an escalation agent is available — "+
-			"no escalation agent is configured and Claude Code was not found on this host; use /agent to reconfigure", primary)
-	}
-	return fmt.Errorf("neither the primary agent (%s) nor the escalation agent (%s) is available — use /agent to reconfigure",
-		primary, cfg.EscalationAgentConfig().Name)
+	return fmt.Errorf("no escalation agent is configured and Claude Code was not found on this host — "+
+		"the turn cannot run on escalation; use /agent to configure an escalation agent (primary: %s)", primaryDisplayName(cfg))
 }
 
 // claudeDeclinedError wraps errFallbackDeclined with the user-facing reason.

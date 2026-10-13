@@ -37,8 +37,9 @@ type routedTurn struct {
 	// /escalate, the router, sticky escalation or a down primary — and they
 	// have not yet approved it this session (gateClaude).
 	NeedsClaudeConsent bool
-	// NoAgent is set when neither the primary nor the escalation agent can
-	// run the turn.
+	// NoAgent is set when the turn is headed to the implicit Claude default
+	// and Claude Code is not installed — a local, deterministic check, unlike
+	// a failed health ping, which a proxy or a slow link can fake.
 	NoAgent bool
 }
 
@@ -129,7 +130,15 @@ func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, in
 	default:
 		rt.Fallback = "primary"
 	}
-	rt.NoAgent = !localAvail && !escalationAvail
+	// Both agents reading unavailable is not proof that nothing can run: the
+	// health ping is a short GET that a proxy hiccup fails for every agent on
+	// the same host. Keep the router's own choice and let the real request
+	// (with its retries and its real error) decide, rather than redirecting
+	// to an escalation agent that read down too or refusing the turn.
+	if !localAvail && !escalationAvail {
+		rt.Target, rt.Fallback = decision.Target, ""
+	}
+	rt.NoAgent = rt.Target == router.TargetEscalation && !escalationAvail && st.cfg.EscalationAgentIsImplicit()
 	rt.NeedsClaudeConsent = rt.Target == router.TargetEscalation && escalationAvail &&
 		st.cfg.EscalationAgentIsImplicit() && !st.claudeApproved
 	return rt, nil
