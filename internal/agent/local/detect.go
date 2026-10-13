@@ -192,6 +192,15 @@ func (d *StreamDetector) formatAllowed(f ToolFormat) bool {
 func (d *StreamDetector) Extract() []toolCall {
 	raw := d.blockBuf.String()
 	if d.activeDelim != nil {
+		// The buffer holds everything after the opening delimiter, so it can
+		// carry several blocks (parallel <tool_call> tags, one fence per step
+		// of a plan, one bare object per line). Parse them all; cutting at the
+		// first closing delimiter kept only the first call.
+		if calls := extractToolCalls(d.activeDelim.open + raw); len(calls) > 0 {
+			return calls
+		}
+	}
+	if d.activeDelim != nil {
 		// Strip the closing delimiter.
 		if idx := strings.Index(raw, d.activeDelim.close); idx >= 0 {
 			raw = raw[:idx]
