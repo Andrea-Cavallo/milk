@@ -80,11 +80,81 @@ func extractJSONCandidates(content string) []toolCall {
 	candidates := collectCandidates(content)
 	var calls []toolCall
 	for _, raw := range candidates {
-		if tc, ok := parseToolCallJSON(raw); ok {
+		calls = append(calls, parseToolCallsJSON(raw)...)
+	}
+	return calls
+}
+
+// parseToolCallsJSON parses every tool call in one candidate body. Models do
+// not stop at one object per block: Qwen2.5-Coder puts several calls in a
+// fence, one JSON object per line; others emit a JSON array. The body is read
+// as a stream of JSON values, so a truncated last call (cut stream) is dropped
+// while the complete calls before it survive, and a value that is not a tool
+// call (a config example) is skipped.
+func parseToolCallsJSON(raw string) []toolCall {
+	dec := json.NewDecoder(strings.NewReader(escapeStringControls(strings.TrimSpace(raw))))
+	var calls []toolCall
+	for {
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return calls
+		}
+		if len(v) > 0 && v[0] == '[' {
+			var elems []json.RawMessage
+			if json.Unmarshal(v, &elems) == nil {
+				for _, e := range elems {
+					if tc, ok := parseToolCallJSON(string(e)); ok {
+						calls = append(calls, tc)
+					}
+				}
+			}
+			continue
+		}
+		if tc, ok := parseToolCallJSON(string(v)); ok {
 			calls = append(calls, tc)
 		}
 	}
-	return calls
+}
+
+// escapeStringControls escapes raw control characters inside JSON string
+// literals. Models writing code into a "content" string often use real
+// newlines and tabs instead of \n and \t, which strict JSON rejects. Valid
+// JSON has no such characters inside strings, so it passes through unchanged.
+func escapeStringControls(s string) string {
+	if !strings.ContainsAny(s, "\n\r\t") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 16)
+	inStr, esc := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case !inStr:
+			if c == '"' {
+				inStr = true
+			}
+			b.WriteByte(c)
+		case esc:
+			esc = false
+			b.WriteByte(c)
+		case c == '\\':
+			esc = true
+			b.WriteByte(c)
+		case c == '"':
+			inStr = false
+			b.WriteByte(c)
+		case c == '\n':
+			b.WriteString(`\n`)
+		case c == '\r':
+			b.WriteString(`\r`)
+		case c == '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 func collectCandidates(content string) []string {
