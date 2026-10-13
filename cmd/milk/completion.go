@@ -1,11 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +13,21 @@ import (
 // expensive) hint rebuild. The gen field must match model.hintDebounceGen —
 // stale firings from a superseded keystroke are silently dropped.
 type hintDebounceMsg struct{ gen int }
+
+// fileIndexReadyMsg is sent when a background build of the @-file candidate
+// index (fileindex.go) finishes, so hints shown from a flat listing or a stale
+// snapshot are redrawn from the fresh one.
+type fileIndexReadyMsg struct{}
+
+// onAtToken reports whether the word under the cursor is an @-path.
+func (m *model) onAtToken() bool {
+	beforeCursor := m.ta.Value()
+	if lines := strings.Split(beforeCursor, "\n"); m.ta.Line() < len(lines) {
+		beforeCursor = lines[m.ta.Line()]
+	}
+	words := strings.Fields(beforeCursor)
+	return len(words) > 0 && strings.HasPrefix(words[len(words)-1], "@")
+}
 
 // --- Tab completion ---
 
@@ -516,61 +527,15 @@ func (m *model) rebuildInlineHints() {
 	last := words[len(words)-1]
 
 	if strings.HasPrefix(last, "@") {
-		pathToken := last[1:]
-		// Determine the root to walk and the fragment to match against.
-		root := m.st.cwd
-		fragment := pathToken
-		absolute := filepath.IsAbs(pathToken)
-		if strings.ContainsRune(pathToken, '/') {
-			// User typed a partial path — walk the deepest complete directory.
-			parent := filepath.Dir(pathToken)
-			if absolute {
-				root = parent
-			} else {
-				root = filepath.Join(m.st.cwd, parent)
-			}
-			fragment = filepath.Base(pathToken)
-			if strings.HasSuffix(pathToken, "/") {
-				// Cursor is at a directory boundary — walk it, no fragment filter.
-				if absolute {
-					root = pathToken
-				} else {
-					root = filepath.Join(m.st.cwd, pathToken)
-				}
-				fragment = ""
-			}
-		}
+		// In-memory filter over the cached candidate index (fileindex.go): no
+		// directory walk, no git process on this path. While the very first
+		// build is still running a flat listing of the typed directory is
+		// shown, and fileIndexReadyMsg redraws the hints when it finishes.
 		limit := m.viewportHeight() / 2
 		if limit < 1 {
 			limit = 1
 		}
-		// Direct children first, then deeper results up to limit.
-		// Skip the recursive walk when:
-		//   - fragment is empty (bare "@" or "@dir/") — nothing to filter on
-		//   - fragment is a single character — too broad, walk scans the whole tree
-		// Both avoid freezing the TUI on every backspace keystroke.
-		direct := expandPath(pathToken, m.st.cwd, limit)
-		var matches []string
-		if fragment == "" || len([]rune(fragment)) < 2 {
-			matches = direct
-		} else {
-			seen := make(map[string]bool, len(direct))
-			for _, p := range direct {
-				seen[p] = true
-			}
-			deeper := walkMatches(root, fragment, m.st.cwd, absolute, limit)
-			var extra []string
-			for _, p := range deeper {
-				if !seen[p] {
-					extra = append(extra, p)
-				}
-			}
-			matches = append(direct, extra...)
-		}
-		matches = filterGitIgnored(matches, m.st.cwd)
-		if len(matches) > limit {
-			matches = matches[:limit]
-		}
+		matches := atPathMatches(last[1:], m.st.cwd, limit, 0)
 		if len(matches) == 0 {
 			m.setHints(nil)
 			return
@@ -923,47 +888,6 @@ func (m *model) capHints(hints []string) []string {
 	return hints
 }
 
-// filterGitIgnored removes paths that git considers ignored.
-// Paths must be relative to cwd. Returns the input slice unchanged on any error.
-func filterGitIgnored(paths []string, cwd string) []string {
-	if len(paths) == 0 {
-		return paths
-	}
-	// Strip trailing "/" before feeding to git; add it back afterwards.
-	stripped := make([]string, len(paths))
-	for i, p := range paths {
-		stripped[i] = strings.TrimSuffix(p, "/")
-	}
-	cmd := exec.Command("git", append([]string{"check-ignore", "--stdin"}, []string{}...)...)
-	cmd.Dir = cwd
-	cmd.Stdin = bytes.NewBufferString(strings.Join(stripped, "\n") + "\n")
-	out, err := cmd.Output()
-	if err != nil {
-		// exit 1 means "none ignored" — not a real error
-		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() > 1 {
-			return paths
-		}
-	}
-	ignored := make(map[string]bool)
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		if line != "" {
-			ignored[line] = true
-		}
-	}
-	var kept []string
-	for _, p := range paths {
-		// Exclude .git and anything nested inside it.
-		first := strings.SplitN(filepath.ToSlash(p), "/", 2)[0]
-		if first == ".git" {
-			continue
-		}
-		if !ignored[strings.TrimSuffix(p, "/")] {
-			kept = append(kept, p)
-		}
-	}
-	return kept
-}
-
 // tabBuild is the result of buildTabMatches: what to complete, and how.
 type tabBuild struct {
 	matches     []string // candidate completions (sigs, values, or commands)
@@ -1012,32 +936,10 @@ func buildTabMatches(input, cwd string, lookup paramLookup) tabBuild {
 	// Only complete the last word — the token the cursor is actively on.
 	last := words[len(words)-1]
 	if strings.HasPrefix(last, "@") {
-		pathPrefix := last[1:]
 		const tabCompletionLimit = 50
-		direct := expandPath(pathPrefix, cwd, tabCompletionLimit)
-		// For bare filenames (no path separator, 2+ chars), also walk subdirectories
-		// so "@repl.go" finds "cmd/milk/repl.go" even when not in that directory.
-		var matches []string
-		fragment := filepath.Base(pathPrefix)
-		if !strings.ContainsRune(pathPrefix, '/') && len([]rune(fragment)) >= 2 {
-			seen := make(map[string]bool, len(direct))
-			for _, p := range direct {
-				seen[p] = true
-			}
-			deeper := walkMatches(cwd, fragment, cwd, false, tabCompletionLimit)
-			deeper = filterGitIgnored(deeper, cwd)
-			matches = direct
-			for _, p := range deeper {
-				if !seen[p] {
-					matches = append(matches, p)
-				}
-			}
-		} else {
-			matches = direct
-		}
-		if len(matches) > tabCompletionLimit {
-			matches = matches[:tabCompletionLimit]
-		}
+		// A Tab press may wait briefly for the first index build, so Tab right
+		// after startup still completes from the full candidate list.
+		matches := atPathMatches(last[1:], cwd, tabCompletionLimit, fileIndexTabWait)
 		atMatches := make([]string, len(matches))
 		for j, p := range matches {
 			atMatches[j] = "@" + p
@@ -1082,144 +984,4 @@ func buildTabMatches(input, cwd string, lookup paramLookup) tabBuild {
 		}
 	}
 	return tabBuild{matches: matches}
-}
-
-// expandPath resolves @-path completions. limit<=0 means no limit.
-func expandPath(prefix, cwd string, limit int) []string {
-	// Empty prefix: list cwd contents directly with no name filter.
-	if prefix == "" {
-		entries, err := os.ReadDir(cwd)
-		if err != nil {
-			return nil
-		}
-		var out []string
-		for _, e := range entries {
-			if limit > 0 && len(out) >= limit {
-				break
-			}
-			rel := e.Name()
-			if e.IsDir() {
-				rel += "/"
-			}
-			out = append(out, rel)
-		}
-		return out
-	}
-	base := prefix
-	if !filepath.IsAbs(base) {
-		base = filepath.Join(cwd, base)
-	}
-	dir := filepath.Dir(base)
-	namePrefix := filepath.Base(base)
-	if strings.HasSuffix(prefix, "/") || strings.HasSuffix(prefix, string(filepath.Separator)) {
-		dir = base
-		namePrefix = ""
-	}
-	// Guard: skip read if dir doesn't exist or is filesystem root (would be very slow)
-	if dir == "/" || dir == "" {
-		return nil
-	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var matches []string
-	for _, e := range entries {
-		if limit > 0 && len(matches) >= limit {
-			break
-		}
-		if namePrefix == "" || strings.Contains(strings.ToLower(e.Name()), strings.ToLower(namePrefix)) {
-			rel := filepath.Join(dir, e.Name())
-			if !strings.HasPrefix(prefix, "/") {
-				rel, _ = filepath.Rel(cwd, rel)
-			}
-			if e.IsDir() {
-				rel += "/"
-			}
-			matches = append(matches, rel)
-		}
-	}
-	// Second pass: bare-filename recursive search.
-	// When the flat scan found nothing and the prefix contains no path separator
-	// (e.g. "@repl.go"), walk the repo from cwd and collect any entry whose
-	// base name starts with namePrefix (e.g. "cmd/milk/repl.go").
-	if len(matches) == 0 && namePrefix != "" && !strings.ContainsRune(prefix, '/') && !filepath.IsAbs(prefix) {
-		const maxVisited = 2000
-		visited := 0
-		_ = filepath.WalkDir(cwd, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if path == cwd {
-				return nil
-			}
-			if d.IsDir() && (d.Name() == ".git" || d.Name() == ".claude") {
-				return filepath.SkipDir
-			}
-			visited++
-			if visited > maxVisited || (limit > 0 && len(matches) >= limit) {
-				return filepath.SkipAll
-			}
-			if strings.HasPrefix(strings.ToLower(d.Name()), strings.ToLower(namePrefix)) {
-				rel, err := filepath.Rel(cwd, path)
-				if err != nil {
-					return nil
-				}
-				if d.IsDir() {
-					rel += "/"
-				}
-				matches = append(matches, rel)
-			}
-			return nil
-		})
-	}
-	return matches
-}
-
-// walkMatches recursively walks root, collecting paths (relative to cwd when
-// prefix is not absolute) whose base name contains fragment.
-// Stops early once limit entries are collected.
-func walkMatches(root, fragment, cwd string, absolute bool, limit int) []string {
-	// Never walk the filesystem root — it blocks the UI goroutine for seconds.
-	if root == "/" || root == "" {
-		return nil
-	}
-	var results []string
-	visited := 0
-	maxVisit := limit * 20 // cap total visits regardless of match count
-	if maxVisit < 200 {
-		maxVisit = 200
-	}
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if path == root {
-			return nil
-		}
-		if d.IsDir() && (d.Name() == ".git" || d.Name() == ".claude") {
-			return filepath.SkipDir
-		}
-		visited++
-		if len(results) >= limit || visited > maxVisit {
-			return filepath.SkipAll
-		}
-		rel := path
-		if !absolute {
-			if r, e := filepath.Rel(cwd, path); e == nil {
-				rel = r
-			}
-		}
-		if d.IsDir() {
-			rel += "/"
-		}
-		if fragment == "" || strings.Contains(strings.ToLower(d.Name()), strings.ToLower(fragment)) {
-			results = append(results, rel)
-		}
-		return nil
-	})
-	return results
 }

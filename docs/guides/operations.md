@@ -332,7 +332,7 @@ When an agent calls `edit_file`/`write_file` (primary) or `Edit`/`Write` (Claude
 |---|---|
 | **Enter** | Submit prompt / accept tab completion (accepting a completion or hint works while an agent turn is running too — only plain Enter-as-submission is trapped mid-turn) |
 | **Ctrl+Enter** | Spawn a background agent from the current input (while an agent turn is in progress). **Ctrl+J** works as a universal fallback in terminals without extended key protocols. |
-| **Tab** | Cycle slash-command and @-path completions (also available while a turn is in progress) |
+| **Tab** | Cycle slash-command and @-path completions (also available while a turn is in progress). `@` paths come from a cached index of the project's tracked and untracked-not-ignored files (git's own ignore rules; a bounded, ballast-pruning walk outside git), ranked file-name-prefix first — see ADR-0057 |
 | **Shift-Tab** | Reverse cycle completions |
 | **Ctrl-C** | Copy selection → clear input → cancel the running turn → quit (double press; also cancels a running workflow — to stop only the workflow use `/workflow cancel`) |
 | **Ctrl-D** | Quit (when input is empty) |
