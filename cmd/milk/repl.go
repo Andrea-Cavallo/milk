@@ -1463,14 +1463,14 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	newEscCacheRead, newEscCacheCreation := obs.SessionCacheByRolePrefix("escalation")
 	newPrimaryCacheRead, newPrimaryCacheCreation := obs.SessionCacheByRole("primary")
 	// Compute per-role per-turn deltas from the accumulators.
-	m.lastTurnPrompt["escalation"] = newEscPrompt - m.escalationPrompt
-	m.lastTurnCompletion["escalation"] = newEscComp - m.escalationComp
-	m.lastTurnPrompt["primary"] = newPrimaryPrompt - m.primaryPrompt
-	m.lastTurnCompletion["primary"] = newPrimaryCompletion - m.primaryCompletion
-	m.lastTurnCacheRead["escalation"] = newEscCacheRead - m.escalationCacheRead
-	m.lastTurnCacheCreate["escalation"] = newEscCacheCreation - m.escalationCacheCreation
-	m.lastTurnCacheRead["primary"] = newPrimaryCacheRead - m.primaryCacheRead
-	m.lastTurnCacheCreate["primary"] = newPrimaryCacheCreation - m.primaryCacheCreation
+	m.lastTurnPrompt["escalation"] = counterDelta(newEscPrompt, m.escalationPrompt)
+	m.lastTurnCompletion["escalation"] = counterDelta(newEscComp, m.escalationComp)
+	m.lastTurnPrompt["primary"] = counterDelta(newPrimaryPrompt, m.primaryPrompt)
+	m.lastTurnCompletion["primary"] = counterDelta(newPrimaryCompletion, m.primaryCompletion)
+	m.lastTurnCacheRead["escalation"] = counterDelta(newEscCacheRead, m.escalationCacheRead)
+	m.lastTurnCacheCreate["escalation"] = counterDelta(newEscCacheCreation, m.escalationCacheCreation)
+	m.lastTurnCacheRead["primary"] = counterDelta(newPrimaryCacheRead, m.primaryCacheRead)
+	m.lastTurnCacheCreate["primary"] = counterDelta(newPrimaryCacheCreation, m.primaryCacheCreation)
 	// Throughput timing deltas — exact mirror of the token deltas above.
 	escTTFT, escDecode, escReqs := obs.SessionTimingByRolePrefix("escalation")
 	priTTFT, priDecode, priReqs := obs.SessionTimingByRole("primary")
@@ -4467,6 +4467,17 @@ type turnTiming struct {
 	ttftSec   float64
 	decodeSec float64
 	reqs      int64
+}
+
+// counterDelta is the change of a session token counter since the last turn.
+// The counters restart from zero when the session is swapped or cleared
+// (obs.ResetSessionTokens), leaving the remembered base above the new value;
+// that is a reset, so the new value itself is this turn's delta.
+func counterDelta(now, base int64) int64 {
+	if now < base {
+		return now
+	}
+	return now - base
 }
 
 // subtractTiming diffs a newly observed cumulative timing total against the

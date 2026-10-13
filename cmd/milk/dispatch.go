@@ -298,6 +298,7 @@ func runPrimaryWithSession(
 		model = ac.Name
 	}
 	obs.RecordTokens(ctx, model, "primary", res.InputTokens, res.OutputTokens)
+	obs.AccumulateCacheTokens(model, "primary", res.CacheRead, res.CacheCreate)
 	// AddTokensFull's signature is (prompt, completion, cacheRead, cacheCreation);
 	// this call previously passed CacheCreate/CacheRead swapped, predating the
 	// prompt-caching feature — fixed here since this sprint already touches this

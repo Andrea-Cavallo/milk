@@ -39,6 +39,44 @@ var sessionAccumulator struct {
 
 func init() { sessionAccumulator.entries = map[string]*TokenEntry{} }
 
+// requestInputTracker holds, per exact agent-role string, the total input size
+// (prompt + cache read + cache creation) of the most recent single inference
+// request for that role's conversation. Unlike the additive token counters,
+// this is last-write-wins: a conversation's current size is the size of its
+// most recent request, never the sum over the turn's requests (a tool-loop
+// turn re-sends the whole conversation on every request, so summing them
+// multiplies the true context size by the request count).
+var requestInputTracker struct {
+	mu   sync.Mutex
+	last map[string]int64
+}
+
+func init() { requestInputTracker.last = map[string]int64{} }
+
+// RecordRequestInput records the total input size of a single inference
+// request (its prompt + cache read + cache creation tokens) under the given
+// agent role. Keyed by the exact role string: traffic tagged with a suffixed
+// role (":subagent", ":toolagent", ":workflow", ":compaction") lives in its own
+// bucket and never pollutes the plain "primary"/"escalation" conversation
+// sizes the ctx:x/y indicator reads.
+func RecordRequestInput(role string, input int64) {
+	if input <= 0 || role == "" {
+		return
+	}
+	requestInputTracker.mu.Lock()
+	requestInputTracker.last[role] = input
+	requestInputTracker.mu.Unlock()
+}
+
+// SessionLastRequestInput returns the input size of the most recent single
+// request recorded for exactly this role (no prefix matching), or 0 when no
+// request has been recorded since the last reset.
+func SessionLastRequestInput(role string) int64 {
+	requestInputTracker.mu.Lock()
+	defer requestInputTracker.mu.Unlock()
+	return requestInputTracker.last[role]
+}
+
 func accumulateSessionTokens(model, agent string, prompt, completion int64) {
 	key := model + "\x00" + agent
 	sessionAccumulator.mu.Lock()
@@ -123,6 +161,9 @@ func ResetSessionTokens() {
 	sessionAccumulator.entries = map[string]*TokenEntry{}
 	sessionAccumulator.mu.Unlock()
 	sessionAccumulator.turns.Store(0)
+	requestInputTracker.mu.Lock()
+	requestInputTracker.last = map[string]int64{}
+	requestInputTracker.mu.Unlock()
 }
 
 func SessionPromptTotal() int64 {

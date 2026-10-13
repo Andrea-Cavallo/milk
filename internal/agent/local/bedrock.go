@@ -478,14 +478,23 @@ func (a *Agent) bedrockStreamCompletion(ctx context.Context, msgs []Message, too
 		case "metadata":
 			var ev bedrockMetadataEvent
 			if json.Unmarshal(payload, &ev) == nil {
-				role := agentRoleForMetrics(a.escalationName)
+				role := a.logRole()
 				var timing StreamTiming
 				if !firstOut.IsZero() {
 					timing.TTFT = firstOut.Sub(inferenceStart)
 					timing.Decode = lastOut.Sub(firstOut)
 				}
-				obs.RecordTokens(ctx, a.model, role, ev.Usage.InputTokens, ev.Usage.OutputTokens)
-				obs.RecordTiming(ctx, a.model, role, timing.TTFT, timing.Decode)
+				// Background-job clones record their totals once at drain time
+				// (see the matching guard in streamCompletionOnce) — recording
+				// per-request here too would double-count and mis-tag them.
+				if a.jobID == "" {
+					obs.RecordTokens(ctx, a.model, role, ev.Usage.InputTokens, ev.Usage.OutputTokens)
+					obs.RecordTiming(ctx, a.model, role, timing.TTFT, timing.Decode)
+					// Bedrock usage is additive: input excludes cached tokens.
+					obs.AccumulateCacheTokens(a.model, role, ev.Usage.CacheReadInputTokens, ev.Usage.CacheWriteInputTokens)
+					obs.RecordRequestInput(role,
+						ev.Usage.InputTokens+ev.Usage.CacheReadInputTokens+ev.Usage.CacheWriteInputTokens)
+				}
 				if a.onTokens != nil {
 					// cacheRead/cacheCreation are 0 today since milk never sends
 					// an explicit cachePoint block yet (that's a separate,

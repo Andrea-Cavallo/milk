@@ -206,6 +206,10 @@ func (a *Agent) responsesStreamCompletion(ctx context.Context, msgs []Message, t
 	if a.jobID == "" {
 		obs.RecordTokens(ctx, a.model, role, freshPrompt, completionTokens)
 		obs.RecordTiming(ctx, a.model, role, timing.TTFT, timing.Decode)
+		obs.AccumulateCacheTokens(a.model, role, cacheRead, 0)
+		// Single-request input size for the ctx:x/y indicator (see the
+		// matching call in streamCompletionOnce).
+		obs.RecordRequestInput(role, freshPrompt+cacheRead)
 	}
 	if a.onTokens != nil {
 		// cacheCreation is always 0: the Responses API, like Chat Completions,

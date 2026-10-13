@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/scoutme/milk/internal/config"
+	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
 )
 
@@ -474,5 +475,49 @@ func TestStatusTokens_ThroughputBusyNoEstimateDuringPrefill(t *testing.T) {
 	bar := stripANSI(m.statusTokens())
 	if strings.Contains(bar, "tok/s") {
 		t.Errorf("want no tok/s during prefill, got %q", bar)
+	}
+}
+
+// A tool-loop turn re-sends the whole conversation on every request, so the
+// turn's summed input is a multiple of the context size. The indicator must
+// show the size of one request (here 90K of a 100K window), not the 1.5M sum
+// the turn delta reports.
+func TestStatusTokens_ContextPressure_UsesSingleRequestNotTurnSum(t *testing.T) {
+	obs.ResetSessionTokens()
+	t.Cleanup(obs.ResetSessionTokens)
+	obs.RecordRequestInput("primary", 90_000)
+
+	m := &model{
+		width: 120,
+		st: &interactiveState{
+			sess: &session.Session{ID: "test1234"},
+			cfg: config.Config{
+				Agents: []config.AgentConfig{{Name: "primary-agent", ContextWindowTokens: 100000}},
+				Agent:  "primary-agent",
+			},
+		},
+		primaryPrompt:      1_500_000,
+		lastTurnPrompt:     map[string]int64{"primary": 1_500_000},
+		lastTurnCompletion: map[string]int64{"primary": 200},
+		lastTokenRole:      "primary",
+	}
+	bar := stripANSI(m.statusTokens())
+	if !strings.Contains(bar, "ctx:90.0k/100.0k") {
+		t.Errorf("want ctx:90.0k/100.0k from the single request, got %q", bar)
+	}
+	if strings.Contains(bar, "ctx:1.5M") {
+		t.Errorf("turn sum leaked into the indicator: %q", bar)
+	}
+}
+
+func TestCounterDelta(t *testing.T) {
+	if got := counterDelta(1500, 1000); got != 500 {
+		t.Errorf("normal growth: got %d, want 500", got)
+	}
+	if got := counterDelta(300, 9000); got != 300 {
+		t.Errorf("after a session reset the new value is the delta, got %d", got)
+	}
+	if got := counterDelta(0, 0); got != 0 {
+		t.Errorf("got %d, want 0", got)
 	}
 }

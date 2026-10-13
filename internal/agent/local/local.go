@@ -302,10 +302,20 @@ func (a *Agent) canEscalate() bool {
 // primary/escalation role tag, suffixed ":subagent" on a background-job
 // clone — so a job's inference traffic is attributed to the job, not to the
 // parent role's turns (which used to make triage blame the parent for a
-// job's failures and token spikes).
+// job's failures and token spikes). Tool-agent clones (stateless agent-as-tool
+// calls) get a ":toolagent" suffix and workflow step executors a ":workflow"
+// suffix for the same reason: their requests are separate conversations, and
+// folding their token totals into the parent role's sums inflated both the
+// usage displays and the ctx:x/y context-size estimate.
 func (a *Agent) logRole() string {
 	if a.jobID != "" {
 		return agentRoleForMetrics(a.escalationName) + ":subagent"
+	}
+	if a.workflowRole {
+		return agentRoleForMetrics(a.escalationName) + ":workflow"
+	}
+	if a.isToolAgent {
+		return agentRoleForMetrics(a.escalationName) + ":toolagent"
 	}
 	return agentRoleForMetrics(a.escalationName)
 }
@@ -3593,6 +3603,15 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 	if a.jobID == "" {
 		obs.RecordTokens(ctx, a.model, role, freshPrompt, completionTokens)
 		obs.RecordTiming(ctx, a.model, role, timing.TTFT, timing.Decode)
+		// Cache tokens occupy context-window space and were never accumulated
+		// into obs for local providers (only cliRunner's turn-end dispatch did),
+		// leaving the cache side of every consumer (ctx:x/y, cache:NN%) at 0.
+		obs.AccumulateCacheTokens(a.model, role, cacheRead, 0)
+		// Single-request input size for the ctx:x/y indicator — this request's
+		// total input (fresh + cached), not the turn's summed consumption.
+		// Keyed by logRole(), so tool-agent/workflow/job clones land in their
+		// own buckets and never inflate the parent conversation's size.
+		obs.RecordRequestInput(role, freshPrompt+cacheRead)
 	}
 	if a.onTokens != nil {
 		// cacheCreation is always 0 here: OpenAI-compatible automatic caching
