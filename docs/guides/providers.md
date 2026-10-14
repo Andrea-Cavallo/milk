@@ -512,6 +512,45 @@ milk's default system prompt (`standard`) is tuned for capable models. Smaller l
   "context_window_tokens": 8192, "system_prompt_tier": "minimal" }
 ```
 
+The tier is also the first knob the [layered context-reduction ladder](#layered-context-reduction-context_reduction) turns dynamically: under context pressure it steps the tier down for you, so a fixed `"minimal"` is only needed when you want it even at low pressure.
+
+---
+
+### Layered context reduction (`context_reduction`)
+
+A static tier is a fixed guess, but context pressure is dynamic — a request that fits at turn 2 can overflow by turn 20. `context_reduction` configures an automatic ladder that shrinks the request's *static* layers as pressure rises, before any history is touched. Pressure is the prompt size over the usable window: the previous request's provider-reported prompt tokens (a chars/4 estimate until the provider reports one) divided by the same window-minus-output-reserve denominator `compaction_trigger_tokens` derives — `context_window_tokens` minus the models.dev output limit capped at 32K (20K if unlisted) and at a quarter of the window. The level is recomputed at every tool-loop iteration from the pristine prompt and tool list (session state is never mutated), so a layer eases back on its own as soon as pressure drops — e.g. right after a compaction.
+
+| Pressure | Layer | What shrinks |
+|---|---|---|
+| ≥ 55% | instructions | System-prompt tier steps down one level (`full`→`standard`, `standard`→`minimal`); the optional per-turn guidance blocks (background-agent, task-tool, memory-tool) are dropped |
+| ≥ 65% | tools_compact | Tier forced to `minimal`; the project-instructions (AGENTS.md/CLAUDE.md) block is head+tail-trimmed to `instructions_trim_chars`; tool descriptions are one-lined (first sentence, ≤ 120 chars) |
+| ≥ 75% | tools_prune | The tool set is pruned to the tools observed in use this session plus `protected_tools` |
+
+Layers are cumulative (each includes the ones before it) and ordered by value per token shed: description prose first, then unused tools. History is deliberately not part of the ladder — the existing layers ([Context compaction](#context-compaction-disable_compaction), the `compaction_trigger_tokens` trigger, the `max_payload_bytes` safety net, hard drop-oldest) stay deeper and unchanged, so every reduction here is reversible.
+
+```json
+{ "name": "qwen-local", "url": "http://localhost:8090", "model": "qwen2.5-coder", "provider": "local",
+  "context_window_tokens": 8192,
+  "context_reduction": {
+    "mode": "auto",
+    "instruction_threshold_pct": 55, "tool_compact_threshold_pct": 65, "tool_prune_threshold_pct": 75,
+    "instructions_trim_chars": 4000, "protected_tools": ["bash", "read_file"]
+  } }
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `mode` | string | `"auto"` | `"auto"` runs the ladder; `"off"` disables it entirely (behavior exactly as before). Any other value is a config-load error. |
+| `instruction_threshold_pct` | int | 55 | Pressure % where the instructions layer starts (tier step-down, guidance blocks dropped) |
+| `tool_compact_threshold_pct` | int | 65 | Pressure % where tool descriptions are one-lined and the tier is forced to `minimal` |
+| `tool_prune_threshold_pct` | int | 75 | Pressure % where the tool set is pruned to observed-in-use + `protected_tools` |
+| `instructions_trim_chars` | int | 4000 | Characters of the AGENTS.md/CLAUDE.md block kept (head + tail) at the tools_compact layer |
+| `protected_tools` | array of string | `["bash", "read_file"]` | Tools never pruned, regardless of use |
+
+All fields optional. Thresholds are clamped into 1–99 and kept in ascending order (a later threshold is raised to the earlier one, never the reverse). The ladder only kicks in when the model's context size is known — `context_window_tokens` set explicitly or matched by the [models.dev lookup](#context-window-declaration-context_window_tokens); with no known window, or `mode: "off"`, behavior is exactly as before. Each active layer is counted by the OTel counter `milk.inference.context_reduction` (attribute `layer`: `instructions`|`tools_compact`|`tools_prune`).
+
+Scope: local agents (OpenAI-compatible, Bedrock native, Responses API) only — `claude-cli` and subprocess runners manage their own context and are unaffected. Background jobs get the tool-side layers only (their prompt is already minimal). Custom `prompt`/`prompt_file` text and percepts/current-need messages are never dropped by the ladder.
+
 ---
 
 ### Project instructions (`disable_project_instructions`)
@@ -660,6 +699,7 @@ Common to all inference-server providers (everything except `claude-cli`):
 | `prompt_caching` | bool | Bedrock-only, experimental — see [Prompt caching](#prompt-caching-prompt_caching--️-experimental-not-live-tested) |
 | `context_window_tokens` | int | See [Context window declaration](#context-window-declaration-context_window_tokens) |
 | `system_prompt_tier` | string | See [System prompt verbosity](#system-prompt-verbosity-system_prompt_tier) |
+| `context_reduction` | object | See [Layered context reduction](#layered-context-reduction-context_reduction) |
 | `disable_project_instructions` | bool | See [Project instructions](#project-instructions-disable_project_instructions) |
 | `disable_compaction` | bool | See [Context compaction](#context-compaction-disable_compaction) |
 | `bash_allowed_patterns` | array of string | See [Bash command pre-approval](#bash-command-pre-approval-bash_allowed_patterns) |
@@ -755,7 +795,7 @@ All fields optional; omitted → global value applies.
 | `memory_reinjection_bytes` | `memory_reinjection_bytes`/`local_memory_reinjection_bytes` | 40000 | Re-inject after N bytes of output |
 | `percept_relevance_gate` | `percept_relevance_gate` | `true` | Keyword-intersection filter before injection |
 | `max_tool_iterations` | `local_max_tool_iterations` | 20 | Max tool-call cycles per turn (`-1` = unlimited) |
-| `compaction_trigger_tokens` | — | 85% of (window − output reserve) | Prompt size (tokens, as the provider reports it for the previous request) at which a running turn summarizes its own older history instead of letting a byte trim hard-drop it. The reserve is the models.dev output limit capped at 32K (20K if unlisted) and at a quarter of the window. Needs a known `context_window_tokens`; `-1` disables. |
+| `compaction_trigger_tokens` | — | 85% of (window − output reserve) | Prompt size (tokens, as the provider reports it for the previous request) at which a running turn summarizes its own older history instead of letting a byte trim hard-drop it. The reserve is the models.dev output limit capped at 32K (20K if unlisted) and at a quarter of the window. Needs a known `context_window_tokens`; `-1` disables. The [`context_reduction`](#layered-context-reduction-context_reduction) pressure thresholds use the same window − output-reserve denominator. |
 | `max_payload_bytes` | — | 900 KB, or ~4 bytes × window above that | Max HTTP request body; past it, history is trimmed per request (a safety net for reverse proxies — the token trigger above is the primary mechanism). |
 | `included_tools` | — | (all) | Whitelist of built-in tools for this agent |
 | `excluded_tools` | — | (none) | Built-in tools to remove for this agent (applied after `included_tools`) |
@@ -764,6 +804,8 @@ All fields optional; omitted → global value applies.
 > **Large context window agents**: set `context_window_tokens` and let milk auto-derive `message_budget_chars`/`max_tool_iterations`; `limits` overrides remain available for exact values. Both `milk config init` and the TUI's `/agent add` prompt for it, proposing a models.dev catalog match as the default when the model name is recognized.
 
 > **Small local models**: set `system_prompt_tier: "minimal"` and use `limits.included_tools` to restrict the tool set to the 7–8 tools the model will actually use — recovers ~700 tokens of prompt and ~1000–1500 tokens of tool-schema space per turn.
+
+That recipe is the static alternative: decide once at config time and pay for it at every pressure level. The dynamic alternative is the automatic [layered context reduction](#layered-context-reduction-context_reduction) ladder (`context_reduction`, on by default): as pressure climbs it steps the prompt tier down, trims the project instructions, one-lines tool descriptions, and finally prunes the tool set to what the session actually uses plus a protected core — then eases back on its own whenever pressure drops. Pick the static recipe when you want minimal prompts even at low pressure; let the ladder handle the rest.
 
 ---
 
