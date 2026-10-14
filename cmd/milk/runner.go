@@ -220,7 +220,8 @@ func (r *localRunner) Execute(
 		WithMaxPayloadBytes(cfg.AgentMaxPayloadBytes(ac)).
 		WithCompactionTrigger(cfg.AgentCompactionTriggerTokens(ac)).
 		WithPayloadCompactionThreshold(cfg.AgentPayloadTrimCompactionThreshold(ac)).
-		WithEscalateAfterRecoveries(cfg.AgentEscalateAfterRecoveries(ac))
+		WithEscalateAfterRecoveries(cfg.AgentEscalateAfterRecoveries(ac)).
+		WithContextReduction(cfg.AgentContextReduction(&ac), cfg.AgentContextPressureDenominator(&ac))
 
 	// Apply custom prompt (prompt / prompt_file in agent config) when set.
 	if ac.Prompt != "" || ac.PromptFile != "" {

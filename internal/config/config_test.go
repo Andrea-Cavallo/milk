@@ -1806,3 +1806,216 @@ func TestCopyOnSelect_DefaultAndMerge(t *testing.T) {
 		t.Error("expected local false to override global true")
 	}
 }
+
+// --- Layered context reduction (issue #236) ---
+
+func contextReductionEqual(got, want ContextReductionConfig) bool {
+	return got.Mode == want.Mode &&
+		got.InstructionThresholdPct == want.InstructionThresholdPct &&
+		got.ToolCompactThresholdPct == want.ToolCompactThresholdPct &&
+		got.ToolPruneThresholdPct == want.ToolPruneThresholdPct &&
+		got.InstructionsTrimChars == want.InstructionsTrimChars &&
+		strings.Join(got.ProtectedTools, ",") == strings.Join(want.ProtectedTools, ",")
+}
+
+func TestAgentContextReduction_Defaults(t *testing.T) {
+	cfg := Config{DisableModelsDevLookup: true}
+	want := ContextReductionConfig{
+		Mode:                    "auto",
+		InstructionThresholdPct: 55,
+		ToolCompactThresholdPct: 65,
+		ToolPruneThresholdPct:   75,
+		InstructionsTrimChars:   4000,
+		ProtectedTools:          []string{"bash", "read_file"},
+	}
+	cases := []struct {
+		name string
+		ac   *AgentConfig
+	}{
+		{"nil override", &AgentConfig{}},
+		{"nil agent", nil},
+		{"zero-value override", &AgentConfig{ContextReduction: &ContextReductionConfig{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cfg.AgentContextReduction(tc.ac)
+			if !contextReductionEqual(got, want) {
+				t.Errorf("AgentContextReduction() = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestAgentContextReduction_PerAgentOverrideRoundTrip(t *testing.T) {
+	const agentJSON = `{
+		"name": "reducer",
+		"context_reduction": {
+			"mode": "off",
+			"instruction_threshold_pct": 40,
+			"tool_compact_threshold_pct": 55,
+			"tool_prune_threshold_pct": 90,
+			"instructions_trim_chars": 1234,
+			"protected_tools": ["bash", "grep"]
+		}
+	}`
+	want := ContextReductionConfig{
+		Mode:                    "off",
+		InstructionThresholdPct: 40,
+		ToolCompactThresholdPct: 55,
+		ToolPruneThresholdPct:   90,
+		InstructionsTrimChars:   1234,
+		ProtectedTools:          []string{"bash", "grep"},
+	}
+
+	var ac AgentConfig
+	if err := json.Unmarshal([]byte(agentJSON), &ac); err != nil {
+		t.Fatalf("unmarshal agent entry: %v", err)
+	}
+
+	// Marshal + unmarshal again to prove the override survives a JSON round trip.
+	data, err := json.Marshal(ac)
+	if err != nil {
+		t.Fatalf("marshal agent entry: %v", err)
+	}
+	var back AgentConfig
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("re-unmarshal agent entry: %v", err)
+	}
+
+	cfg := Config{DisableModelsDevLookup: true}
+	for name, agent := range map[string]AgentConfig{"direct": ac, "round-tripped": back} {
+		got := cfg.AgentContextReduction(&agent)
+		if !contextReductionEqual(got, want) {
+			t.Errorf("%s: AgentContextReduction() = %+v, want %+v", name, got, want)
+		}
+	}
+}
+
+func TestAgentContextReduction_ClampsAndOrdersThresholds(t *testing.T) {
+	cfg := Config{DisableModelsDevLookup: true}
+	cases := []struct {
+		name string
+		in   ContextReductionConfig
+		want [3]int // instruction, tool_compact, tool_prune
+	}{
+		{"zeros take defaults", ContextReductionConfig{}, [3]int{55, 65, 75}},
+		{"explicit in-order values kept", ContextReductionConfig{
+			InstructionThresholdPct: 40, ToolCompactThresholdPct: 50, ToolPruneThresholdPct: 60,
+		}, [3]int{40, 50, 60}},
+		{"values above 99 clamped down", ContextReductionConfig{
+			InstructionThresholdPct: 150, ToolCompactThresholdPct: 200, ToolPruneThresholdPct: 100,
+		}, [3]int{99, 99, 99}},
+		{"values below 1 clamped up", ContextReductionConfig{
+			InstructionThresholdPct: -5, ToolCompactThresholdPct: -1, ToolPruneThresholdPct: 2,
+		}, [3]int{1, 1, 2}},
+		{"compact below instruction raised to instruction", ContextReductionConfig{
+			InstructionThresholdPct: 80, ToolCompactThresholdPct: 30, ToolPruneThresholdPct: 20,
+		}, [3]int{80, 80, 80}},
+		{"prune below compact raised to compact", ContextReductionConfig{
+			InstructionThresholdPct: 70, ToolCompactThresholdPct: 50, ToolPruneThresholdPct: 90,
+		}, [3]int{70, 70, 90}},
+		{"instruction at clamp ceiling drags the rest up", ContextReductionConfig{
+			InstructionThresholdPct: 200,
+		}, [3]int{99, 99, 99}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ac := AgentConfig{ContextReduction: &tc.in}
+			got := cfg.AgentContextReduction(&ac)
+			if got.InstructionThresholdPct != tc.want[0] ||
+				got.ToolCompactThresholdPct != tc.want[1] ||
+				got.ToolPruneThresholdPct != tc.want[2] {
+				t.Errorf("thresholds = [%d %d %d], want [%d %d %d]",
+					got.InstructionThresholdPct, got.ToolCompactThresholdPct, got.ToolPruneThresholdPct,
+					tc.want[0], tc.want[1], tc.want[2])
+			}
+			if got.InstructionsTrimChars != 4000 {
+				t.Errorf("InstructionsTrimChars = %d, want default 4000", got.InstructionsTrimChars)
+			}
+		})
+	}
+}
+
+func TestAgentContextPressureDenominator(t *testing.T) {
+	cfg := Config{DisableModelsDevLookup: true}
+	cases := []struct {
+		name   string
+		window int
+		want   int
+	}{
+		{"unknown window yields 0", 0, 0},
+		{"8192 window: reserve 2048 (quarter) → 6144", 8192, 6144},
+		{"32000 window: reserve 8000 (quarter) → 24000", 32000, 24000},
+		{"1M window: reserve 20000 (default) → 980000", 1000000, 980000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ac := AgentConfig{ContextWindowTokens: tc.window}
+			if got := cfg.AgentContextPressureDenominator(&ac); got != tc.want {
+				t.Errorf("AgentContextPressureDenominator() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+	// Catalog path: mimo-v2.5-pro has a 1048576 window and a 131072 output
+	// limit in the embedded models.dev catalog — the reserve is capped at 32K.
+	catalog := Config{}
+	got := catalog.AgentContextPressureDenominator(&AgentConfig{Model: "mimo-v2.5-pro"})
+	if want := 1048576 - 32000; got != want {
+		t.Errorf("catalog denominator = %d, want %d", got, want)
+	}
+}
+
+// TestAgentCompactionTriggerTokens_MatchesRefactoredReserve is the regression
+// net for the shared output-reserve helper: the trigger keeps computing
+// 0.85 × (window − reserve) — i.e. 0.85 × the pressure denominator — for
+// every window shape, exactly as before the refactor.
+func TestAgentCompactionTriggerTokens_MatchesRefactoredReserve(t *testing.T) {
+	cfg := Config{DisableModelsDevLookup: true}
+	hardcoded := map[int]int{
+		0:       0, // unknown window: trigger stays off
+		8192:    5222,
+		32000:   20400,
+		1000000: 833000,
+	}
+	for window, want := range hardcoded {
+		ac := AgentConfig{ContextWindowTokens: window}
+		if got := cfg.AgentCompactionTriggerTokens(ac); got != want {
+			t.Errorf("window %d: AgentCompactionTriggerTokens() = %d, want %d", window, got, want)
+		}
+		if window > 0 {
+			den := cfg.AgentContextPressureDenominator(&ac)
+			if want2 := int(float64(den) * 0.85); want2 != want {
+				t.Errorf("window %d: trigger %d disagrees with 0.85 × denominator %d (= %d)", window, want, den, want2)
+			}
+		}
+	}
+}
+
+func TestContextReductionModeValidation(t *testing.T) {
+	for _, mode := range []string{"", "auto", "off", "Auto", "OFF"} {
+		var ac AgentConfig
+		err := json.Unmarshal([]byte(`{"context_reduction": {"mode": "`+mode+`"}}`), &ac)
+		if err != nil {
+			t.Errorf("mode %q: unexpected error %v", mode, err)
+		}
+	}
+
+	var ac AgentConfig
+	err := json.Unmarshal([]byte(`{"context_reduction": {"mode": "sometimes"}}`), &ac)
+	if err == nil {
+		t.Fatal("expected an error for unknown context_reduction.mode")
+	}
+	if !strings.Contains(err.Error(), "mode") {
+		t.Errorf("error %q should name the offending key", err)
+	}
+
+	// End to end: the same typo in a config file is a config-load error.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"agents":[{"name":"a","context_reduction":{"mode":"bogus"}}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFrom(path); err == nil {
+		t.Fatal("expected LoadFrom to reject unknown context_reduction.mode")
+	}
+}

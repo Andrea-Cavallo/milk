@@ -56,3 +56,4 @@
 * [55. The Implicit Claude Default Is Never Reached Without Approval](0055-explicit-claude-fallback.md)
 * [56. Stale Global Percepts Are Archived by Session Time](0056-archive-stale-global-percepts.md)
 * [57. @-File Completion Reads a Cached Candidate Index](0057-at-file-candidate-index.md)
+* [58. Layered context reduction ladder](0058-layered-context-reduction-ladder.md)

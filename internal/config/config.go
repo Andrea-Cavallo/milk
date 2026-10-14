@@ -620,6 +620,12 @@ type AgentConfig struct {
 	// Set to 0 (the default) to use the global config defaults instead.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 
+	// ContextReduction configures the layered context-reduction pipeline for
+	// this agent (trimming instructions, compacting and pruning tool output as
+	// context pressure rises). Nil means the built-in defaults — see
+	// AgentContextReduction, which resolves zero values and clamps thresholds.
+	ContextReduction *ContextReductionConfig `json:"context_reduction,omitempty"`
+
 	// Limits holds optional per-agent overrides for context caps and injection limits.
 	// Nil fields fall back to the global Config defaults.
 	Limits *AgentLimits `json:"limits,omitempty"`
@@ -738,6 +744,64 @@ type AgentLimits struct {
 	// ExcludedTools is a list of tool names to remove from the base tool set.
 	// Applied after IncludedTools. Names must match exactly (e.g. "http_get").
 	ExcludedTools []string `json:"excluded_tools,omitempty"`
+}
+
+// ContextReductionConfig holds the per-agent settings for the layered
+// context-reduction ladder (issue #236): as context pressure (prompt usage ÷
+// usable window, see AgentContextPressureDenominator) rises past each
+// threshold, milk escalates from reducing the system-prompt/instructions
+// layer, to compacting tool descriptions, to pruning the tool set to the
+// tools observed in use — before the history-compaction layers are reached.
+// Zero values mean "use the built-in default" — resolution and
+// clamping live in AgentContextReduction, not in the loader.
+type ContextReductionConfig struct {
+	// Mode selects the ladder: "auto" (default when omitted) runs the
+	// layered reductions; "off" disables them entirely. Any other value is a
+	// config-load error (see UnmarshalJSON).
+	Mode string `json:"mode,omitempty"` // "auto" (default when omitted) | "off"
+	// InstructionThresholdPct is the context-pressure percentage at which
+	// the instruction layer starts shrinking (system-prompt tier step-down,
+	// optional guidance blocks dropped). Default 55.
+	InstructionThresholdPct int `json:"instruction_threshold_pct,omitempty"` // default 55
+	// ToolCompactThresholdPct is the percentage at which tool descriptions
+	// are one-lined (and the instruction layer bottoms out). Default 65.
+	ToolCompactThresholdPct int `json:"tool_compact_threshold_pct,omitempty"` // default 65
+	// ToolPruneThresholdPct is the percentage at which the tool set is
+	// pruned to the tools observed in use plus the protected ones. Default 75.
+	ToolPruneThresholdPct int `json:"tool_prune_threshold_pct,omitempty"` // default 75
+	// InstructionsTrimChars is how many characters of the project-instructions
+	// (AGENTS.md/CLAUDE.md) block are kept when it is head+tail-trimmed.
+	// Default 4000.
+	InstructionsTrimChars int `json:"instructions_trim_chars,omitempty"` // default 4000
+	// ProtectedTools names the tools that are never pruned regardless of use.
+	// Default ["bash", "read_file"].
+	ProtectedTools []string `json:"protected_tools,omitempty"` // default ["bash","read_file"]
+}
+
+// contextReductionMode values accepted in context_reduction.mode.
+const (
+	contextReductionModeAuto = "auto"
+	contextReductionModeOff  = "off"
+)
+
+// UnmarshalJSON rejects unknown context_reduction.mode values at config-load
+// time instead of silently falling back (the same spirit as the provider /
+// system_prompt_tier value checks in Validate). Percentages and other knobs
+// are deliberately not normalized here — AgentContextReduction owns defaults
+// and clamping.
+func (c *ContextReductionConfig) UnmarshalJSON(data []byte) error {
+	type rawContextReduction ContextReductionConfig // strip methods to avoid recursion
+	var raw rawContextReduction
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(raw.Mode)) {
+	case "", contextReductionModeAuto, contextReductionModeOff:
+	default:
+		return fmt.Errorf("context_reduction: unknown mode %q (valid: %s, %s)", raw.Mode, contextReductionModeAuto, contextReductionModeOff)
+	}
+	*c = ContextReductionConfig(raw)
+	return nil
 }
 
 // IsCLI reports whether this agent uses the Claude Code CLI backend.
@@ -1659,6 +1723,22 @@ const (
 	compactionTriggerRatio         = 0.85
 )
 
+// contextOutputReserve returns the token reserve held back from the given
+// context window for the model's own output: the models.dev output limit
+// capped at compactionReserveMaxTokens (or compactionReserveDefaultTokens when
+// the catalog has none), and never more than a quarter of the window. Shared
+// by AgentCompactionTriggerTokens and AgentContextPressureDenominator so the
+// two cannot drift apart.
+func (c Config) contextOutputReserve(a AgentConfig, window int) int {
+	reserve := compactionReserveDefaultTokens
+	if !c.DisableModelsDevLookup {
+		if l, ok := modelsdev.LookupLimit(a.Model); ok && l.Output > 0 {
+			reserve = min(l.Output, compactionReserveMaxTokens)
+		}
+	}
+	return min(reserve, window/4)
+}
+
 // AgentCompactionTriggerTokens returns the prompt size (tokens) at which a
 // running turn should compact its own history, or 0 when unknown/disabled
 // (no context window known — the payload-size trigger still applies).
@@ -1672,14 +1752,79 @@ func (c Config) AgentCompactionTriggerTokens(a AgentConfig) int {
 	if ctw <= 0 {
 		return 0
 	}
-	reserve := compactionReserveDefaultTokens
-	if !c.DisableModelsDevLookup {
-		if l, ok := modelsdev.LookupLimit(a.Model); ok && l.Output > 0 {
-			reserve = min(l.Output, compactionReserveMaxTokens)
-		}
+	return int(float64(ctw-c.contextOutputReserve(a, ctw)) * compactionTriggerRatio)
+}
+
+// AgentContextReduction returns the effective layered context-reduction
+// settings for the given agent: the per-agent context_reduction override when
+// set, with zero values resolved to the built-in defaults (Mode "" → "auto",
+// thresholds 55/65/75, InstructionsTrimChars 4000, ProtectedTools
+// ["bash","read_file"]). Threshold percentages are clamped into 1..99 and
+// ordered so InstructionThresholdPct <= ToolCompactThresholdPct <=
+// ToolPruneThresholdPct (later thresholds are clamped up as needed). A nil
+// agent behaves like a zero AgentConfig (all defaults).
+func (c Config) AgentContextReduction(a *AgentConfig) ContextReductionConfig {
+	var raw ContextReductionConfig
+	if a != nil && a.ContextReduction != nil {
+		raw = *a.ContextReduction
 	}
-	reserve = min(reserve, ctw/4)
-	return int(float64(ctw-reserve) * compactionTriggerRatio)
+	out := ContextReductionConfig{
+		Mode:                    strings.ToLower(strings.TrimSpace(raw.Mode)),
+		InstructionThresholdPct: raw.InstructionThresholdPct,
+		ToolCompactThresholdPct: raw.ToolCompactThresholdPct,
+		ToolPruneThresholdPct:   raw.ToolPruneThresholdPct,
+		InstructionsTrimChars:   raw.InstructionsTrimChars,
+	}
+	if out.Mode == "" {
+		out.Mode = contextReductionModeAuto
+	}
+	if out.InstructionThresholdPct == 0 {
+		out.InstructionThresholdPct = 55
+	}
+	if out.ToolCompactThresholdPct == 0 {
+		out.ToolCompactThresholdPct = 65
+	}
+	if out.ToolPruneThresholdPct == 0 {
+		out.ToolPruneThresholdPct = 75
+	}
+	if out.InstructionsTrimChars == 0 {
+		out.InstructionsTrimChars = 4000
+	}
+	clamp := func(v int) int { return min(max(v, 1), 99) }
+	out.InstructionThresholdPct = clamp(out.InstructionThresholdPct)
+	out.ToolCompactThresholdPct = clamp(out.ToolCompactThresholdPct)
+	out.ToolPruneThresholdPct = clamp(out.ToolPruneThresholdPct)
+	if out.ToolCompactThresholdPct < out.InstructionThresholdPct {
+		out.ToolCompactThresholdPct = out.InstructionThresholdPct
+	}
+	if out.ToolPruneThresholdPct < out.ToolCompactThresholdPct {
+		out.ToolPruneThresholdPct = out.ToolCompactThresholdPct
+	}
+	if len(raw.ProtectedTools) > 0 {
+		out.ProtectedTools = append([]string(nil), raw.ProtectedTools...)
+	} else {
+		out.ProtectedTools = []string{"bash", "read_file"}
+	}
+	return out
+}
+
+// AgentContextPressureDenominator returns the usable context size (tokens)
+// against which context pressure is measured: the context window minus the
+// output reserve. The window resolves exactly like AgentContextWindowTokens
+// (explicit context_window_tokens, else the models.dev lookup unless disabled)
+// and the reserve exactly like AgentCompactionTriggerTokens's (shared helper),
+// so pressure thresholds line up with the compaction trigger. Returns 0 when
+// the window is unknown. A nil agent behaves like a zero AgentConfig.
+func (c Config) AgentContextPressureDenominator(a *AgentConfig) int {
+	var ac AgentConfig
+	if a != nil {
+		ac = *a
+	}
+	ctw := c.AgentContextWindowTokens(ac)
+	if ctw <= 0 {
+		return 0
+	}
+	return ctw - c.contextOutputReserve(ac, ctw)
 }
 
 // AgentPayloadTrimCompactionThreshold returns how many consecutive

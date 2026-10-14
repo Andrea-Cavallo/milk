@@ -24,6 +24,7 @@ import (
 
 	"github.com/scoutme/milk/internal/ansi"
 	"github.com/scoutme/milk/internal/config"
+	"github.com/scoutme/milk/internal/contextreduce"
 	"github.com/scoutme/milk/internal/diff"
 	"github.com/scoutme/milk/internal/escalation"
 	"github.com/scoutme/milk/internal/instructions"
@@ -539,6 +540,18 @@ type Agent struct {
 	// lastPromptTokens is the previous request's total prompt size as the
 	// provider reported it (cached tokens included).
 	lastPromptTokens int64
+	// reductionPolicy and pressureDenominator drive the layered context
+	// reduction ladder (issue #236): which static layers — instructions,
+	// then tool schemas — shrink at what context pressure before the
+	// history-compaction layers are reached. pressureDenominator is the
+	// context window minus the output reserve; 0 (or policy disabled)
+	// turns the ladder off. See reduction.go.
+	reductionPolicy     contextreduce.Policy
+	pressureDenominator int
+	// usedTools tracks the tool names observed in use this session, shared
+	// across With*/cloneForBackground shallow copies (pointer field — see
+	// toolUseTracker in reduction.go).
+	usedTools *toolUseTracker
 	// turnTrail is the tool activity of the latest Run, captured when the
 	// tool loop exits (see TurnTrail).
 	turnTrail []session.TrailStep
@@ -907,6 +920,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 			maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 			payloadCompactionThreshold: config.DefaultPayloadTrimCompactionThreshold,
 			escalateAfterRecoveries:    config.DefaultEscalateAfterRecoveries,
+			usedTools:                  newToolUseTracker(),
 		}
 	}
 
@@ -933,6 +947,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 		maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 		payloadCompactionThreshold: config.DefaultPayloadTrimCompactionThreshold,
 		escalateAfterRecoveries:    config.DefaultEscalateAfterRecoveries,
+		usedTools:                  newToolUseTracker(),
 	}
 }
 
@@ -1330,6 +1345,15 @@ const memoryToolGuidance = `**MANDATORY — memory tool actions**: The following
 // disableProjectInstructions turns off appending the target repo's
 // AGENTS.md/CLAUDE.md content (see internal/instructions).
 func buildSystemPrompt(cwd, selfName, escalationName string, workflowRole bool, tier string, disableProjectInstructions bool) string {
+	return buildSystemPromptOpts(cwd, selfName, escalationName, workflowRole, tier, disableProjectInstructions, 0)
+}
+
+// buildSystemPromptOpts is buildSystemPrompt with one extra knob: when
+// projInstructionsTrim > 0, the project-instructions (AGENTS.md/CLAUDE.md)
+// block is head+tail-trimmed to that many characters instead of being
+// appended whole — the instruction-layer reduction of issue #236's ladder
+// (contextreduce.TrimBlock). 0 keeps the block unchanged.
+func buildSystemPromptOpts(cwd, selfName, escalationName string, workflowRole bool, tier string, disableProjectInstructions bool, projInstructionsTrim int) string {
 	// Normalise tier.
 	switch tier {
 	case "minimal", "full":
@@ -1399,6 +1423,9 @@ func buildSystemPrompt(cwd, selfName, escalationName string, workflowRole bool, 
 	base += "\n\nWorking directory: " + cwd
 	if !disableProjectInstructions {
 		if block := instructions.Block(cwd, true); block != "" {
+			if projInstructionsTrim > 0 {
+				block = contextreduce.TrimBlock(block, projInstructionsTrim)
+			}
 			base += "\n\n" + block
 		}
 	}
@@ -1576,22 +1603,32 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		tools = append(tools, spawnBackgroundAgentSchema(), cancelBackgroundAgentSchema())
 	}
 
-	systemPrompt := buildSystemPrompt(sess.CWD, a.selfName, a.escalationName, a.workflowRole, a.systemPromptTier, a.disableProjectInstructions)
+	// Assemble the system prompt from its components (sysPromptBuilder) so
+	// the layered context-reduction ladder (issue #236, reduction.go) can
+	// rebuild it at lower fidelity mid-turn without string surgery. At
+	// LevelNone render reproduces exactly the previous concatenation.
+	spb := &sysPromptBuilder{
+		cwd:                        sess.CWD,
+		selfName:                   a.selfName,
+		escalationName:             a.escalationName,
+		workflowRole:               a.workflowRole,
+		tier:                       a.systemPromptTier,
+		disableProjectInstructions: a.disableProjectInstructions,
+		custom:                     a.customPrompt,
+	}
 	if a.backgroundManager != nil {
-		systemPrompt += "\n\n" + backgroundAgentGuidance
+		spb.guidance = append(spb.guidance, backgroundAgentGuidance)
 	}
 	if a.taskStore != nil {
-		systemPrompt += "\n\n" + taskToolGuidance
+		spb.guidance = append(spb.guidance, taskToolGuidance)
 	}
 	// The memory-tool mandate is included only when the memory tools actually
 	// survived schema construction + limits filtering — never mandate a tool
 	// the agent doesn't have (issue #172).
 	if hasToolNamed(tools, "get_memory") {
-		systemPrompt += "\n\n" + memoryToolGuidance
+		spb.guidance = append(spb.guidance, memoryToolGuidance)
 	}
-	if a.customPrompt != "" {
-		systemPrompt = a.customPrompt + "\n\n" + systemPrompt
-	}
+	systemPrompt := spb.render(contextreduce.LevelNone, a.reductionPolicy)
 	msgs := []Message{{Role: "system", Content: systemPrompt}}
 	msgs = append(msgs, history...)
 	// Local HTTP agents have milk's tool dispatch loop available — record_memory and
@@ -1641,7 +1678,7 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		}
 	}
 
-	return a.runToolLoop(ctx, msgs, tools, out, sess, mem, userPrompt, userMsgIdx, pendingImages)
+	return a.runToolLoop(ctx, msgs, tools, out, sess, mem, userPrompt, userMsgIdx, pendingImages, spb)
 }
 
 // runToolLoop is the iterative tool-calling core shared by Run (a full,
@@ -1653,7 +1690,11 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 // pendingImages carries images the caller's own turn couldn't attach directly
 // (non-vision agent) for a possible agent_<name> tool-agent call to forward;
 // nil for RunBackgroundTask, which has no image-attachment path of its own.
-func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, sess *session.Session, mem *memory.Store, userPrompt string, userMsgIdx int, pendingImages []ContentPart) ([]Message, error) {
+// spb holds the system-prompt components so the layered context-reduction
+// ladder can rebuild msgs[0] at lower fidelity (issue #236); nil for callers
+// whose prompt is already minimal (RunBackgroundTask) — the tool-side layers
+// still apply there.
+func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, sess *session.Session, mem *memory.Store, userPrompt string, userMsgIdx int, pendingImages []ContentPart, spb *sysPromptBuilder) ([]Message, error) {
 	// msgs and userMsgIdx change during the loop (compaction, appends); the
 	// deferred capture reads their final values.
 	defer func() { a.turnTrail = TrailFromMessages(msgs, userMsgIdx) }()
@@ -1687,6 +1728,28 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			// model-authored explanation at all.
 			msgs = append(msgs, Message{Role: "user", Content: maxIterSummaryReminder})
 			tools = nil
+		}
+
+		// Layered context reduction (issue #236): when the request is
+		// pressing against the context window, shrink the static layers —
+		// instructions first, then tool schemas — before any history
+		// compaction below is reached. Recomputed every iteration from the
+		// pristine msgs/tools (never mutated), so a layer eases back by
+		// itself once compaction or tool output frees room.
+		reqMsgs, reqTools := msgs, tools
+		if level := a.reductionLevel(msgs, tools); level > contextreduce.LevelNone {
+			reqTools = a.reduceTools(tools, level)
+			if spb != nil {
+				reqMsgs = make([]Message, len(msgs))
+				copy(reqMsgs, msgs)
+				reqMsgs[0] = Message{Role: "system", Content: spb.render(level, a.reductionPolicy)}
+			}
+			obs.Inc(ctx, inferenceScope, "milk.inference.context_reduction",
+				attribute.String("layer", levelName(level)),
+				attribute.String("model", a.model),
+				attribute.String("agent", a.logRole()),
+			)
+			a.logDebug("context reduction active", "layer", levelName(level), "model", a.model, "prompt_tokens", a.lastPromptTokens)
 		}
 
 		// Proactive payload-size compaction: streamCompletionOnce's own
@@ -1727,7 +1790,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			a.lastPromptTokens = 0
 		}
 
-		resp, fallbackRaw, toolCalls, emptyFallback, reasoningText, err := a.streamCompletionRetrying(ctx, msgs, tools, out, userMsgIdx)
+		resp, fallbackRaw, toolCalls, emptyFallback, reasoningText, err := a.streamCompletionRetrying(ctx, reqMsgs, reqTools, out, userMsgIdx)
 		if err != nil {
 			return msgs, err
 		}
@@ -2244,7 +2307,7 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, context
 	msgs = append(msgs, Message{Role: "user", Content: task})
 	userMsgIdx := len(msgs) - 1
 
-	resultMsgs, err := bg.runToolLoop(ctx, msgs, tools, out, bgSess, mem, task, userMsgIdx, nil)
+	resultMsgs, err := bg.runToolLoop(ctx, msgs, tools, out, bgSess, mem, task, userMsgIdx, nil, nil)
 	if err != nil {
 		// Preserve partial work: resultMsgs holds the whole tool trajectory
 		// up to the failure. Returning its best answer (instead of "") keeps
@@ -2617,6 +2680,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 	outcomes := make([]toolCallOutcome, len(toolCalls))
 	var wg sync.WaitGroup
 	for i, tc := range toolCalls {
+		a.noteToolUsed(tc.Function.Name) // feeds the prune layer (issue #236)
 		wg.Add(1)
 		go func(i int, tc toolCall) {
 			defer wg.Done()
