@@ -88,6 +88,33 @@ func buildPanelLines(mem *memory.Store, inner int, bricks sessionBricks) []strin
 
 	now := time.Now()
 
+	// --- CONTEXT BRICKS --- first: a near-fixed height, so it stays put while the
+	// percept sections below it grow
+	primaryLabel := bricks.primaryName
+	if primaryLabel == "" {
+		primaryLabel = "primary"
+	}
+	escalationLabel := bricks.escalationName
+	if escalationLabel == "" {
+		escalationLabel = "escalation"
+	}
+	// Compute staleness ratio for gradient colouring of escalation bricks.
+	// ratio 0=fresh, 1=fully stale; shown as a colour gradient on the content text.
+	var escRatio float64
+	if bricks.contextStale {
+		escRatio = 1
+	} else if bricks.freshThreshold > 0 && bricks.localTurnsSince > 0 {
+		escRatio = float64(bricks.localTurnsSince) / float64(bricks.freshThreshold)
+	}
+	escStale := bricks.contextStale
+	addLine(stylePanelSection.Render("CONTEXT BRICKS"))
+	addBrickLines(&lines, "need", bricks.currentNeed, inner, false, 0)
+	addBrickLines(&lines, primaryLabel, bricks.lastLocalSummary, inner, false, 0)
+	addBrickLines(&lines, escalationLabel, bricks.lastEscalationSummary, inner, escStale, escRatio)
+	addBrickLines(&lines, "brief", bricks.escalationBrief, inner, escStale, escRatio)
+	addLine("")
+	addLine(stalenessLegend(inner))
+	addLine("")
 	// --- SESSION ---
 	sessionPercepts := mem.List(memory.ListOpts{Scope: "session"})
 	addLine(stylePanelSection.Render("SESSION"))
@@ -129,33 +156,6 @@ func buildPanelLines(mem *memory.Store, inner int, bricks sessionBricks) []strin
 			addPerceptLines(&lines, p, inner, now)
 		}
 	}
-
-	// --- CONTEXT BRICKS ---
-	primaryLabel := bricks.primaryName
-	if primaryLabel == "" {
-		primaryLabel = "primary"
-	}
-	escalationLabel := bricks.escalationName
-	if escalationLabel == "" {
-		escalationLabel = "escalation"
-	}
-	addLine("")
-	// Compute staleness ratio for gradient colouring of escalation bricks.
-	// ratio 0=fresh, 1=fully stale; shown as a colour gradient on the content text.
-	var escRatio float64
-	if bricks.contextStale {
-		escRatio = 1
-	} else if bricks.freshThreshold > 0 && bricks.localTurnsSince > 0 {
-		escRatio = float64(bricks.localTurnsSince) / float64(bricks.freshThreshold)
-	}
-	escStale := bricks.contextStale
-	addLine(stylePanelSection.Render("CONTEXT BRICKS"))
-	addBrickLines(&lines, "need", bricks.currentNeed, inner, false, 0)
-	addBrickLines(&lines, primaryLabel, bricks.lastLocalSummary, inner, false, 0)
-	addBrickLines(&lines, escalationLabel, bricks.lastEscalationSummary, inner, escStale, escRatio)
-	addBrickLines(&lines, "brief", bricks.escalationBrief, inner, escStale, escRatio)
-	addLine("")
-	addLine(stalenessLegend(inner))
 
 	return lines
 }
@@ -304,6 +304,28 @@ func buildPanelLineIDs(mem *memory.Store, bricks sessionBricks) []string {
 		}
 	}
 
+	// CONTEXT BRICKS section
+	primaryLabel := bricks.primaryName
+	if primaryLabel == "" {
+		primaryLabel = "primary"
+	}
+	escalationLabel := bricks.escalationName
+	if escalationLabel == "" {
+		escalationLabel = "escalation"
+	}
+	add("") // CONTEXT BRICKS header
+	// Staleness flags must match buildPanelLines' addBrickLines calls: only
+	// the escalation and brief bricks get the "(stale)" suffix, and it costs
+	// first-line width — so the same inputs have to feed the wrap here.
+	escStale := bricks.contextStale
+	addBrick("need", bricks.currentNeed, false)
+	addBrick(primaryLabel, bricks.lastLocalSummary, false)
+	addBrick(escalationLabel, bricks.lastEscalationSummary, escStale)
+	addBrick("brief", bricks.escalationBrief, escStale)
+	add("") // blank before legend
+	add("") // staleness legend line
+	add("") // blank after legend
+
 	sessionPercepts := mem.List(memory.ListOpts{Scope: "session"})
 	add("") // SESSION header
 	if len(sessionPercepts) == 0 {
@@ -343,28 +365,6 @@ func buildPanelLineIDs(mem *memory.Store, bricks sessionBricks) []string {
 			addPercept(p)
 		}
 	}
-
-	// CONTEXT BRICKS section
-	primaryLabel := bricks.primaryName
-	if primaryLabel == "" {
-		primaryLabel = "primary"
-	}
-	escalationLabel := bricks.escalationName
-	if escalationLabel == "" {
-		escalationLabel = "escalation"
-	}
-	add("") // blank
-	add("") // CONTEXT BRICKS header
-	// Staleness flags must match buildPanelLines' addBrickLines calls: only
-	// the escalation and brief bricks get the "(stale)" suffix, and it costs
-	// first-line width — so the same inputs have to feed the wrap here.
-	escStale := bricks.contextStale
-	addBrick("need", bricks.currentNeed, false)
-	addBrick(primaryLabel, bricks.lastLocalSummary, false)
-	addBrick(escalationLabel, bricks.lastEscalationSummary, escStale)
-	addBrick("brief", bricks.escalationBrief, escStale)
-	add("") // blank before legend
-	add("") // staleness legend line
 
 	return ids
 }
