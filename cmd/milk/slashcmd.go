@@ -296,7 +296,11 @@ var helpBlocks = []helpBlock{
   e.g. "… for alice,bob" targets both agents — with several servers
   every server×agent pair is applied. Validation is all-or-nothing:
   one bad name rejects the whole call, lists each invalid item, and
-  applies nothing. Tab completion starts a fresh segment at each comma.`},
+  applies nothing. Tab completion starts a fresh segment at each comma.
+  Values containing spaces or the word "for" (e.g. /agent tool add
+  coder description="agent for code review") must be quoted — the
+  scope separator is the last standalone "for" token. Missing required
+  arguments open a step-by-step wizard instead of a usage line.`},
 	{header: "── Keyboard ─────────────────────────────────────────────────────────────", note: `  Scrolling
     Mouse wheel / PgUp/PgDn / Ctrl+U / Ctrl+F   scroll transcript
 

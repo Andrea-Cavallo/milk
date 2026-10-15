@@ -355,17 +355,55 @@ func TestExecAgentToolAdd_MultiScopeNameAndDesc(t *testing.T) {
 	}
 }
 
-func TestParseAgentToolScope_StripsDescription(t *testing.T) {
-	cases := []struct{ in, scope, tool string }{
-		{"helper for claude,local", "claude,local", "helper"},
-		{"helper", "", "helper"},
-		{"helper description=does things", "", "helper"},
-		{"helper description=does things for global", "global", "helper"},
+func TestParseAgentToolArgs(t *testing.T) {
+	cases := []struct{ in, tool, desc, scope string }{
+		{"helper for claude,local", "helper", "", "claude,local"},
+		{"helper", "helper", "", ""},
+		{"helper description=does things", "helper", "does things", ""},
+		{"helper description=does things for global", "helper", "does things", "global"},
+		// Quoted description keeps its embedded "for" — the scope separator is
+		// the trailing standalone "for", not the one inside the quoted value.
+		{`mimo-pro-local description="coding agent for specific coding task" for gemma`,
+			"mimo-pro-local", "coding agent for specific coding task", "gemma"},
+		// Single quotes work the same way.
+		{"helper description='does things for you' for global",
+			"helper", "does things for you", "global"},
+		// Unquoted description with an embedded "for": the LAST "for" wins the
+		// scope, so the description keeps its words.
+		{"mimo-pro-local description=coding agent for specific coding task for gemma",
+			"mimo-pro-local", "coding agent for specific coding task", "gemma"},
+		// Quoted description with no scope.
+		{`helper description="does things"`, "helper", "does things", ""},
 	}
 	for _, c := range cases {
-		scope, tool := parseAgentToolScope(c.in)
-		if scope != c.scope || tool != c.tool {
-			t.Errorf("parseAgentToolScope(%q) = (%q, %q), want (%q, %q)", c.in, scope, tool, c.scope, c.tool)
+		tool, desc, scope := parseAgentToolArgs(c.in)
+		if scope != c.scope || tool != c.tool || desc != c.desc {
+			t.Errorf("parseAgentToolArgs(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				c.in, tool, desc, scope, c.tool, c.desc, c.scope)
 		}
+	}
+}
+
+// TestExecAgentToolAdd_QuotedDescriptionWithFor is the end-to-end regression
+// for the split-at-first-"for" parser bug: a quoted description containing the
+// word "for" must land verbatim on the entry, and the trailing "for <agent>"
+// must still resolve as the scope.
+func TestExecAgentToolAdd_QuotedDescriptionWithFor(t *testing.T) {
+	st := mvState(t)
+	out := execAgentTool(`add mimo-pro-local description="coding agent for specific coding task" for local`, st)
+	if strings.Contains(out, "nothing applied") || strings.Contains(out, "usage:") {
+		t.Fatalf("unexpected failure:\n%s", out)
+	}
+	ai := findAgentIdx(st.cfg, "local")
+	idx := findToolEntryIdx(st.cfg.Agents[ai].Tools, "mimo-pro-local")
+	if idx < 0 {
+		t.Fatalf("entry not added to agent local (output %q)", out)
+	}
+	e := st.cfg.Agents[ai].Tools[idx]
+	if e.Agent != "mimo-pro-local" {
+		t.Errorf("tool name = %q, want %q", e.Agent, "mimo-pro-local")
+	}
+	if e.Description != "coding agent for specific coding task" {
+		t.Errorf("description = %q, want %q", e.Description, "coding agent for specific coding task")
 	}
 }

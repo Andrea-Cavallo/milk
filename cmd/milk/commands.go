@@ -866,7 +866,7 @@ func (m model) handleAgentCmd(arg string) (model, tea.Cmd) {
 
 	case arg == "tool", strings.HasPrefix(arg, "tool "):
 		sub := strings.TrimSpace(strings.TrimPrefix(arg, "tool"))
-		m.appendTranscript(execAgentTool(sub, m.st) + "\n")
+		return m.startAgentTool(sub)
 
 	default:
 		m.appendTranscript(milkTag() + " usage: /agent [list|add|remove <name>|switch <name>]\n")

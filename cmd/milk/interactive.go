@@ -863,8 +863,8 @@ func execAgentTool(sub string, st *interactiveState) string {
 	verb := parts[0]
 	rest := strings.TrimSpace(strings.TrimPrefix(sub, verb))
 
-	// parse optional "for <agent>|global" suffix
-	scope, toolName := parseAgentToolScope(rest)
+	// parse optional "description=<desc>" and "for <agent>|global" segments
+	toolName, desc, scope := parseAgentToolArgs(rest)
 
 	switch verb {
 	case "list":
@@ -885,10 +885,10 @@ func execAgentTool(sub string, st *interactiveState) string {
 		}
 		return execAgentToolDisable(toolName, scope, st)
 	case "add":
-		if toolName == "" {
+		if toolName == "" || desc == "" {
 			return milkTag() + " usage: /agent tool add <tool-agent> description=<desc> [for <agent>|global]"
 		}
-		return execAgentToolAdd(toolName, scope, rest, st)
+		return execAgentToolAdd(toolName, desc, scope, st)
 	case "remove":
 		if toolName == "" {
 			return milkTag() + " usage: /agent tool remove <tool-agent> [for <agent>|global]"
@@ -899,21 +899,88 @@ func execAgentTool(sub string, st *interactiveState) string {
 	}
 }
 
-// parseAgentToolScope parses "<tool-name> [for <agent>|global]" and returns (scope, toolName).
-// scope is "" (default: active primary), "global", or an agent name.
-// For "add", the name segment also carries "description=<desc>" — cut it out
-// so the tool-agent name never absorbs the description text (#165 follow-up).
-func parseAgentToolScope(s string) (scope, toolName string) {
-	if idx := strings.Index(s, " for "); idx >= 0 {
-		toolName = strings.TrimSpace(s[:idx])
-		scope = strings.TrimSpace(s[idx+5:])
-	} else {
-		toolName = strings.TrimSpace(s)
+// execAgentToolApply runs one /agent tool mutation from wizard-collected
+// parameters — already parsed, so nothing is re-parsed from raw text.
+func execAgentToolApply(verb, toolName, desc, scope string, st *interactiveState) string {
+	switch verb {
+	case "add":
+		return execAgentToolAdd(toolName, desc, scope, st)
+	case "enable":
+		return execAgentToolEnable(toolName, scope, st)
+	case "disable":
+		return execAgentToolDisable(toolName, scope, st)
+	default:
+		return execAgentToolRemove(toolName, scope, st)
 	}
-	if di := strings.Index(toolName, "description="); di >= 0 {
-		toolName = strings.TrimSpace(toolName[:di])
+}
+
+// splitQuotedTokens splits s into whitespace-separated tokens, keeping
+// double- or single-quoted segments together (quote characters stripped) so a
+// value may contain spaces and reserved words such as "for". A quote that is
+// never closed consumes the rest of the string.
+func splitQuotedTokens(s string) []string {
+	var tokens []string
+	var cur strings.Builder
+	inQuote := rune(0)
+	flush := func() {
+		if cur.Len() > 0 {
+			tokens = append(tokens, cur.String())
+			cur.Reset()
+		}
 	}
-	return scope, toolName
+	for _, r := range s {
+		switch {
+		case inQuote != 0:
+			if r == inQuote {
+				inQuote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '"' || r == '\'':
+			inQuote = r
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return tokens
+}
+
+// parseAgentToolArgs parses "<tool-agent> [description=<desc>] [for <agent>|global]"
+// and returns (toolName, desc, scope). desc and scope are "" when absent; scope
+// is "global", an agent name, a comma-separated list, or "" (default: active
+// primary agent).
+//
+// Parsing is quote-aware (#… follow-up): a value wrapped in double or single
+// quotes stays one token, so description="coding agent for specific tasks"
+// does not split at the "for" inside the quotes. The scope separator is the
+// LAST standalone "for" token (trailing per the documented syntax), so an
+// unquoted description may itself contain the word "for" as long as a scope
+// follows it.
+func parseAgentToolArgs(s string) (toolName, desc, scope string) {
+	tokens := splitQuotedTokens(s)
+	// Scope: everything after the last standalone "for" token.
+	for i := len(tokens) - 2; i >= 0; i-- {
+		if tokens[i] == "for" {
+			scope = strings.TrimSpace(strings.Join(tokens[i+1:], " "))
+			tokens = tokens[:i]
+			break
+		}
+	}
+	// Name is everything before the description= key; desc is that key's value
+	// plus any following tokens (unquoted multi-word descriptions), so the name
+	// never absorbs the description text (#165 follow-up).
+	for i, tok := range tokens {
+		if v, ok := strings.CutPrefix(tok, "description="); ok {
+			desc = strings.TrimSpace(strings.Join(append([]string{v}, tokens[i+1:]...), " "))
+			tokens = tokens[:i]
+			break
+		}
+	}
+	toolName = strings.TrimSpace(strings.Join(tokens, " "))
+	return toolName, desc, scope
 }
 
 // execAgentToolList shows effective tool-agents for the given scope.
@@ -1174,19 +1241,9 @@ func execAgentToolDisable(toolName, scope string, st *interactiveState) string {
 }
 
 // execAgentToolAdd adds a new tool-agent entry to every target scope.
-// The rest argument still contains the full "toolName [description=...] [for ...]" text
-// so we can extract the description= field.
-func execAgentToolAdd(toolName, scope, rest string, st *interactiveState) string {
-	// Extract description= from rest.
-	desc := ""
-	if idx := strings.Index(rest, "description="); idx >= 0 {
-		after := rest[idx+len("description="):]
-		// strip any trailing " for ..." scope fragment.
-		if forIdx := strings.Index(after, " for "); forIdx >= 0 {
-			after = after[:forIdx]
-		}
-		desc = strings.TrimSpace(after)
-	}
+// desc is the parsed description= value (may contain spaces and the word
+// "for" — parsing already happened in parseAgentToolArgs).
+func execAgentToolAdd(toolName, desc, scope string, st *interactiveState) string {
 	if desc == "" {
 		return milkTag() + " usage: /agent tool add <tool-agent> description=<desc> [for <agent>|global]"
 	}
