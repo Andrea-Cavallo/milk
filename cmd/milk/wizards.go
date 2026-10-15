@@ -1360,3 +1360,144 @@ func (m model) commitSwitchAgent(st *switchAgentState) (model, tea.Cmd) {
 	m.appendTranscript(execAgent(m.st) + "\n")
 	return m, cmd
 }
+
+// --- /agent tool wizard ---
+
+// agentToolWizardState tracks the multi-step /agent tool add|enable|disable|remove
+// wizard shown when required parameters are missing inline (same pattern as
+// /agent add and /agent switch). Everything supplied inline is kept; the
+// wizard only asks for what is missing, plus the optional scope step.
+type agentToolWizardState struct {
+	verb       string // "add", "enable", "disable", "remove"
+	toolName   string
+	desc       string // add only
+	scope      string // "" → active primary agent at apply time
+	scopeAsked bool   // true once the optional scope step has been shown
+	step       agentToolWizardStep
+}
+
+type agentToolWizardStep int
+
+const (
+	toolStepName agentToolWizardStep = iota
+	toolStepDesc // only for "add"
+	toolStepScope
+	toolStepDone
+)
+
+// nextToolStep returns the first wizard step that still needs input.
+func (st *agentToolWizardState) nextToolStep() agentToolWizardStep {
+	if st.toolName == "" {
+		return toolStepName
+	}
+	if st.verb == "add" && st.desc == "" {
+		return toolStepDesc
+	}
+	if !st.scopeAsked {
+		return toolStepScope
+	}
+	return toolStepDone
+}
+
+// agentToolPrompt returns the prompt string for a wizard step.
+func agentToolPrompt(st *agentToolWizardState) string {
+	switch st.step {
+	case toolStepName:
+		return milkTag() + " tool-agent name:"
+	case toolStepDesc:
+		return milkTag() + " description:"
+	case toolStepScope:
+		return milkTag() + " for which agent? (agent name(s) or global — enter for the primary agent):"
+	default:
+		return ""
+	}
+}
+
+// startAgentTool handles `/agent tool <verb> [args]`. Fully specified calls
+// execute immediately; missing required parameters (the tool-agent name, and
+// description= for add) fall into the multi-step wizard instead of a bare
+// usage line.
+func (m model) startAgentTool(sub string) (model, tea.Cmd) {
+	parts := strings.Fields(sub)
+	if len(parts) == 0 {
+		m.appendTranscript(execAgentToolList("", m.st) + "\n")
+		return m, nil
+	}
+	verb := parts[0]
+	rest := strings.TrimSpace(strings.TrimPrefix(sub, verb))
+	toolName, desc, scope := parseAgentToolArgs(rest)
+
+	switch verb {
+	case "list":
+		listScope := toolName
+		if scope != "" {
+			listScope = scope
+		}
+		m.appendTranscript(execAgentToolList(listScope, m.st) + "\n")
+		return m, nil
+	case "enable", "disable", "add", "remove":
+	default:
+		m.appendTranscript(milkTag() + " unknown subcommand: /agent tool " + verb + "\n  try: list, enable, disable, add, remove\n")
+		return m, nil
+	}
+
+	if toolName != "" && (verb != "add" || desc != "") {
+		m.appendTranscript(execAgentTool(sub, m.st) + "\n")
+		return m, nil
+	}
+
+	st := &agentToolWizardState{verb: verb, toolName: toolName, desc: desc, scope: scope, scopeAsked: scope != ""}
+	st.step = st.nextToolStep()
+	m.pendingTool = st
+	m.appendTranscript(agentToolPrompt(st) + " ")
+	m.ta.Reset()
+	m.syncLayout()
+	return m, nil
+}
+
+// handleAgentToolWizardKey handles keypresses during the /agent tool wizard.
+func (m model) handleAgentToolWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
+		m.pendingTool = nil
+		m.appendTranscript("\n" + milkTag() + " cancelled\n")
+		return m, nil
+	case "enter":
+		answer := strings.TrimSpace(m.ta.Value())
+		m.ta.Reset()
+		m.syncLayout()
+		m.appendTranscript(answer + "\n")
+
+		st := m.pendingTool
+		switch st.step {
+		case toolStepName:
+			if answer == "" {
+				m.appendTranscript(milkTag() + " tool-agent name is required\n" + agentToolPrompt(st) + " ")
+				return m, nil
+			}
+			st.toolName = answer
+		case toolStepDesc:
+			if answer == "" {
+				m.appendTranscript(milkTag() + " description is required\n" + agentToolPrompt(st) + " ")
+				return m, nil
+			}
+			st.desc = answer
+		case toolStepScope:
+			st.scope = answer // empty = primary agent (the documented default)
+			st.scopeAsked = true
+		}
+
+		st.step = st.nextToolStep()
+		if st.step == toolStepDone {
+			m.pendingTool = nil
+			m.appendTranscript(execAgentToolApply(st.verb, st.toolName, st.desc, st.scope, m.st) + "\n")
+			return m, nil
+		}
+		m.appendTranscript(agentToolPrompt(st) + " ")
+		return m, nil
+	}
+	var cmd tea.Cmd
+	cmd = m.updateTA(msg)
+	m.syncLayout()
+	return m, cmd
+}

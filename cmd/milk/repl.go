@@ -787,6 +787,9 @@ type model struct {
 	// pending /agent switch wizard
 	pendingSwitch *switchAgentState
 
+	// pending /agent tool add|enable|disable|remove wizard (missing args)
+	pendingTool *agentToolWizardState
+
 	// pending /setup telegram wizard
 	pendingTelegramSetup *telegramSetupState
 
@@ -2054,6 +2057,9 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.pendingSwitch != nil {
 			return m.handleSwitchAgentKey(msg)
+		}
+		if m.pendingTool != nil {
+			return m.handleAgentToolWizardKey(msg)
 		}
 		if m.pendingTelegramSetup != nil {
 			return m.handleTelegramSetupKey(msg)

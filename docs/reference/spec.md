@@ -194,9 +194,11 @@ Multi-value positions — `/mcp assign|unassign` on both sides of `for`, and the
 | `/agent add` | Add a backend via interactive wizard |
 | `/agent add name=… url=… model=… [provider=…] [api_key=…] [aws_region=…]` | Add inline |
 | `/agent tool list [<agent>\|global]` | List tool-agents (effective merged for primary by default) |
-| `/agent tool enable\|disable <tool> [for <agent>\|global]` | Enable/disable a tool-agent entry |
-| `/agent tool add <tool> description=<desc> [for <agent>\|global]` | Add a new tool-agent entry |
-| `/agent tool remove <tool> [for <agent>\|global]` | Remove a tool-agent entry |
+| `/agent tool enable\|disable <tool> [for <agent>\|global]` | Enable/disable a tool-agent entry (prompts for missing args) |
+| `/agent tool add <tool> description=<desc> [for <agent>\|global]` | Add a new tool-agent entry (prompts for missing args) |
+| `/agent tool remove <tool> [for <agent>\|global]` | Remove a tool-agent entry (prompts for missing args) |
+
+`/agent tool` arguments are parsed quote-aware: a value wrapped in `"` or `'` keeps embedded spaces and the reserved word `for` — `/agent tool add mimo-pro-local description="coding agent for specific coding task" for gemma` stores the description verbatim and scopes the entry to `gemma`. The scope separator is the last standalone `for` token, so an unquoted description may itself contain `for` as long as the scope follows it. Missing required arguments (the tool-agent name, and `description=` for `add`) open a step-by-step wizard — name → description → scope, with Enter at the scope step meaning the default (the active primary agent) — instead of a bare usage line, mirroring `/agent add` and `/agent switch`.
 
 New backends are appended to `agents` in `~/.milk/config.json` immediately; `/agent switch` assigns a role in the current session.
 

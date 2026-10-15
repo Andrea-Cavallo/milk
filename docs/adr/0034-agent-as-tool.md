@@ -180,6 +180,8 @@ The `/agent` command gains a `tool` subcommand group. All subcommands accept an 
 
 All subcommands save the updated config to disk immediately and evict affected runner cache entries.
 
+**Update (2026-10-15):** the `add` wizard and quote-aware parsing are now implemented (`cmd/milk/wizards.go` `startAgentTool`/`handleAgentToolWizardKey`, `cmd/milk/interactive.go` `parseAgentToolArgs`). Argument parsing splits on whitespace but keeps quoted (`"`/`'`) segments together, and the `for <scope>` separator is the *last* standalone `for` token — so `description="coding agent for specific coding task" for gemma` no longer splits at the `for` inside the description (the original parser cut at the first `" for "` substring). When required arguments are missing, all four mutating subcommands (`add`, `enable`, `disable`, `remove`) now open a multi-step wizard (name → description for `add` → optional scope) instead of printing a usage line; a fully specified call still executes inline.
+
 ### 7. Setup wizard step
 
 The `/config init` wizard gains a step (`initStepAgentTools`) inserted after `initStepEscalation`:
