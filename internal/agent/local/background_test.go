@@ -583,3 +583,96 @@ func TestDispatchOneTool_SpawnBackgroundAgent_DefaultNoFullContext_NoSummary(t *
 		t.Errorf("expected no summary leaked without full_context, got %s", bodies[0])
 	}
 }
+
+// bgPeerServer returns a server that answers every request with "done" and
+// counts the requests it received.
+func bgPeerServer(t *testing.T) (*httptest.Server, *int32) {
+	t.Helper()
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body) //nolint:errcheck
+		atomic.AddInt32(&n, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
+// TestSpawnBackgroundAgent_PeerArgument covers the optional "agent" argument:
+// the job runs on the named peer (its server and model), omitting it forks the
+// caller, and a name outside the agent-tool entries is refused without a job.
+func TestSpawnBackgroundAgent_PeerArgument(t *testing.T) {
+	selfSrv, selfN := bgPeerServer(t)
+	peerSrv, peerN := bgPeerServer(t)
+
+	self := New(selfSrv.URL, "self-model")
+	self.selfName = "gemma"
+	self = self.WithToolAgentEntries([]config.AgentToolEntry{{Agent: "mimo", Description: "hard tasks"}})
+	self.SetBackgroundAgentResolver(func(_ context.Context, name string) (*Agent, error) {
+		if name != "mimo" {
+			t.Errorf("resolver asked for %q", name)
+		}
+		return New(peerSrv.URL, "peer-model"), nil
+	})
+	mgr := NewManager(context.Background(), 3)
+	self.SetBackgroundManager(mgr)
+	var wg sync.WaitGroup
+	mgr.SetOnDone(func(*Job) { wg.Done() })
+	sess := &session.Session{CWD: "/tmp"}
+
+	spawn := func(args string) string {
+		tc := toolCall{ID: "tc", Function: toolCallFunction{Name: "spawn_background_agent", Arguments: args}}
+		return self.dispatchOneTool(context.Background(), tc, 0, "", "", io.Discard, sess, nil, nil).msg.Content
+	}
+
+	wg.Add(1)
+	if out := spawn(`{"task":"t","label":"on peer","agent":"MIMO"}`); !strings.Contains(out, "on mimo") {
+		t.Fatalf("peer spawn failed: %s", out)
+	}
+	wg.Wait()
+	if atomic.LoadInt32(peerN) != 1 || atomic.LoadInt32(selfN) != 0 {
+		t.Errorf("peer job requests: peer=%d self=%d, want 1/0", *peerN, *selfN)
+	}
+	if jobs := mgr.Jobs(); len(jobs) != 1 || jobs[0].Model != "peer-model" {
+		t.Errorf("jobs = %+v, want one job on peer-model", jobs)
+	}
+
+	wg.Add(1)
+	spawn(`{"task":"t","label":"self"}`)
+	wg.Wait()
+	if atomic.LoadInt32(selfN) != 1 {
+		t.Errorf("default spawn should fork self, self requests = %d", *selfN)
+	}
+
+	before := len(mgr.Jobs())
+	out := spawn(`{"task":"t","label":"bad","agent":"nobody"}`)
+	if !strings.Contains(out, "not available") || len(mgr.Jobs()) != before {
+		t.Errorf("unknown peer: out=%s jobs %d->%d, want an error and no new job", out, before, len(mgr.Jobs()))
+	}
+}
+
+// TestSpawnBackgroundAgentSchema_PeerEnum: the agent property exists only when
+// there are peers, and the peer list needs both a resolver and a manager.
+func TestSpawnBackgroundAgentSchema_PeerEnum(t *testing.T) {
+	props := func(peers []string) map[string]any {
+		return spawnBackgroundAgentSchema(peers)["function"].(map[string]any)["parameters"].(map[string]any)["properties"].(map[string]any)
+	}
+	if _, ok := props(nil)["agent"]; ok {
+		t.Error("no peers: schema must stay unchanged (no agent property)")
+	}
+	if enum := props([]string{"mimo"})["agent"].(map[string]any)["enum"].([]string); len(enum) != 1 || enum[0] != "mimo" {
+		t.Errorf("enum = %v", enum)
+	}
+
+	a := New("http://x", "m").WithToolAgentEntries([]config.AgentToolEntry{{Agent: "mimo"}, {Agent: "off", Enabled: new(bool)}})
+	if got := a.backgroundPeerNames(); got != nil {
+		t.Errorf("no resolver/manager: peers = %v", got)
+	}
+	a.SetBackgroundManager(NewManager(context.Background(), 1))
+	a.SetBackgroundAgentResolver(func(context.Context, string) (*Agent, error) { return nil, nil })
+	if got := a.backgroundPeerNames(); len(got) != 1 || got[0] != "mimo" {
+		t.Errorf("peers = %v, want only the enabled entry", got)
+	}
+}

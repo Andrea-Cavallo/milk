@@ -559,8 +559,8 @@ func AgentToolSchemas(entries []config.AgentToolEntry) []map[string]any {
 // tool (ADR-0043). Only appended at Run's call site when a.backgroundManager
 // is set — never when building a background job's own tool list (Phase 3),
 // which enforces the depth-1 fork cap structurally rather than by filtering.
-func spawnBackgroundAgentSchema() map[string]any {
-	return map[string]any{
+func spawnBackgroundAgentSchema(peers []string) map[string]any {
+	schema := map[string]any{
 		"type": "function",
 		"function": map[string]any{
 			"name":        "spawn_background_agent",
@@ -576,6 +576,15 @@ func spawnBackgroundAgentSchema() map[string]any {
 			},
 		},
 	}
+	if len(peers) > 0 {
+		props := schema["function"].(map[string]any)["parameters"].(map[string]any)["properties"].(map[string]any)
+		props["agent"] = map[string]any{
+			"type":        "string",
+			"enum":        peers,
+			"description": "Optional. Run the job on this peer agent instead of a copy of yourself — its model, tools and MCP servers. Omit to fork yourself (the default). Use for work that needs a stronger or differently-equipped peer; it runs without waiting for you, unlike calling the agent_* tool.",
+		}
+	}
+	return schema
 }
 
 // cancelBackgroundAgentSchema is the schema for the cancel_background_agent

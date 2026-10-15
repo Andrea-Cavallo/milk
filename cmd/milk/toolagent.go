@@ -175,3 +175,19 @@ func getOrBuildToolRunner(ctx context.Context, agentName string, cfg config.Conf
 	da.toolRunners[cacheKey] = tr
 	return tr, nil
 }
+
+// buildLocalPeerAgent returns the inference-server agent behind the named
+// configured agent, built (and cached) like an agent-as-tool runner. It is
+// how background jobs run on an agent other than the session's own
+// primary/escalation one.
+func buildLocalPeerAgent(ctx context.Context, name string, cfg config.Config, da *dispatchAgents, mem *memory.Store, caller memory.Consumer) (*local.Agent, error) {
+	tr, err := getOrBuildToolRunner(ctx, name, cfg, da, mem, caller)
+	if err != nil {
+		return nil, err
+	}
+	lr, ok := tr.(*localRunner)
+	if !ok {
+		return nil, fmt.Errorf("not inference-server-backed")
+	}
+	return lr.agent, nil
+}

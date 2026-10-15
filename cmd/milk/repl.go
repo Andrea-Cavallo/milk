@@ -308,6 +308,7 @@ type backgroundBatchDoneMsg struct{}
 type backgroundSpawnedMsg struct {
 	jobID string
 	label string
+	model string
 }
 
 // backgroundUserJobDoneMsg is sent when a user-initiated background job
@@ -790,6 +791,9 @@ type model struct {
 	// pending /agent tool add|enable|disable|remove wizard (missing args)
 	pendingTool *agentToolWizardState
 
+	// pending "which agent runs this background job?" question
+	pendingBgAgent *bgAgentWizardState
+
 	// pending /setup telegram wizard
 	pendingTelegramSetup *telegramSetupState
 
@@ -1252,7 +1256,7 @@ func (m model) handleBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if input == "" {
 			return m, nil
 		}
-		return m.spawnUserBackgroundAgent(input)
+		return m.startUserBackgroundAgent(input, "")
 	case "tab", "shift+tab":
 		// Completion only edits the input buffer, so Tab cycling and hint
 		// commit are not trapped while busy — the same handleTabKey
@@ -1995,7 +1999,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s, ok := msg.(fmt.Stringer); ok && m.inputLocked() && isCtrlEnterCSI(s.String()) {
 		input := strings.TrimSpace(stripCompletionPlaceholders(m.ta.Value()))
 		if input != "" {
-			return m.spawnUserBackgroundAgent(input)
+			return m.startUserBackgroundAgent(input, "")
 		}
 		return m, nil
 	}
@@ -2060,6 +2064,9 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.pendingTool != nil {
 			return m.handleAgentToolWizardKey(msg)
+		}
+		if m.pendingBgAgent != nil {
+			return m.handleBgAgentWizardKey(msg)
 		}
 		if m.pendingTelegramSetup != nil {
 			return m.handleTelegramSetupKey(msg)
@@ -2661,7 +2668,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case backgroundSpawnedMsg:
-		m.notify(fmt.Sprintf("spawned background agent %s (%q)", msg.jobID, msg.label), "/bg list")
+		m.notify(fmt.Sprintf("spawned background agent %s on %s (%q)", msg.jobID, msg.model, msg.label), "/bg list")
 		m.autoOpenPanel(regionBackground)
 		m.syncLayout()
 		return m, nil
@@ -3313,9 +3320,11 @@ const backgroundFollowupPrompt = local.BackgroundFollowupPrompt
 // requirement that the currently-busy role itself be local-backed (the
 // in-flight turn could be running on claude-cli, which has no Manager at
 // all) — the job just needs any inference-server-backed agent to fork from,
-// so this prefers the escalation agent's local backend (generally the more
-// capable one) and falls back to primary's.
-func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
+// so the default prefers the escalation agent's local backend (generally the
+// more capable one) and falls back to primary's. spec picks another agent
+// (name, "primary" or "escalation"); blank means config's background_agent,
+// then that default. startUserBackgroundAgent is the entry that asks for it.
+func (m model) spawnUserBackgroundAgent(task, spec string) (tea.Model, tea.Cmd) {
 	m.ta.Reset()
 	m.leadingPasted = false
 	m.busyHint = ""
@@ -3330,14 +3339,24 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	// deny every tool the job tries — no prompt, just an error status.
 	send := func(msg tea.Msg) { m.st.program.Send(msg) }
 	ir0 := &tuiInputReader{send: send}
+	if m.agents.toolRunners == nil {
+		m.agents.toolRunners = map[string]TurnRunner{}
+	}
 	tuiAgents, _ := m.buildTUIAgents(send, ir0)
-	// Agent preference (escalation-local, else primary), model-name
-	// fallback, label and spawn body are the shared /bg-start core
-	// (userJobPlan/userJobRunner, issue #188) — the same plan ACP's
-	// spawnUserJob makes.
-	agent, modelName, label, ok := userJobPlan(m.st.cfg, tuiAgents.escalationLocal, tuiAgents.local, task)
-	if mgr == nil || !ok {
-		m.appendTranscript("\n" + dimWrap("⚙ "+userJobUnavailableMsg) + "\n")
+	// Agent choice, model-name fallback, label and spawn body are the shared
+	// /bg-start core (userJobPlanFor/userJobRunner, issue #188) — the same
+	// plan ACP's spawnUserJob makes. An agent other than the session's own
+	// primary/escalation is built like an agent-as-tool runner.
+	build := func(name string) (*local.Agent, error) {
+		return buildLocalPeerAgent(m.ctx, name, m.st.cfg, &tuiAgents, m.mem, memory.ConsumerAll)
+	}
+	agent, modelName, label, err := userJobPlanFor(m.st.cfg, tuiAgents.escalationLocal, tuiAgents.local, build, spec, task)
+	if mgr == nil || err != nil {
+		msg := userJobUnavailableMsg
+		if err != nil {
+			msg = err.Error()
+		}
+		m.appendTranscript("\n" + dimWrap("⚙ "+msg) + "\n")
 		return m, nil
 	}
 	cwd := m.st.cwd
@@ -3348,7 +3367,7 @@ func (m model) spawnUserBackgroundAgent(task string) (tea.Model, tea.Cmd) {
 	// of that channel and it is blocked waiting for Update to return.
 	return m, func() tea.Msg {
 		job := mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, cwd, task, m.mem))
-		return backgroundSpawnedMsg{jobID: job.ID, label: label}
+		return backgroundSpawnedMsg{jobID: job.ID, label: label, model: modelName}
 	}
 }
 

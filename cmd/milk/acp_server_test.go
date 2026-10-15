@@ -550,7 +550,7 @@ func TestACPBackground_FinishedDuringTurnFollowsUpAfterIt(t *testing.T) {
 		return strings.Contains(strings.Join(bodies, ""), "hold-this-turn")
 	})
 
-	as.spawnUserJob("side task") // finishes while the held turn still owns the session
+	as.spawnUserJob("side task", "") // finishes while the held turn still owns the session
 	acpWaitFor(t, "job row completed", acpJobCompleted(conn, "job:job_1"))
 	mu.Lock()
 	early := strings.Contains(strings.Join(bodies, "\n"), local.BackgroundFollowupPrompt)

@@ -144,6 +144,9 @@ func DeepMerge(dst, src Config) Config {
 	if src.MaxBackgroundAgents != 0 {
 		dst.MaxBackgroundAgents = src.MaxBackgroundAgents
 	}
+	if src.BackgroundAgent != "" {
+		dst.BackgroundAgent = src.BackgroundAgent
+	}
 	if src.BackgroundAgentTimeoutMinutes != 0 {
 		dst.BackgroundAgentTimeoutMinutes = src.BackgroundAgentTimeoutMinutes
 	}
@@ -939,6 +942,13 @@ type Config struct {
 	// ADR-0043) may run concurrently per session, across however many turns
 	// spawn them. Defaults to 3 when unset or non-positive.
 	MaxBackgroundAgents int `json:"max_background_agents,omitempty"`
+
+	// BackgroundAgent names the default agent for user-started background
+	// jobs (/bg start, Ctrl+Enter while busy): an agent name, or the aliases
+	// "primary" / "escalation". Empty keeps the built-in default — the
+	// escalation agent's inference-server backend, else the primary's. The
+	// TUI still asks per job (blank = this default); ACP uses it directly.
+	BackgroundAgent string `json:"background_agent,omitempty"`
 
 	// BackgroundAgentTimeoutMinutes bounds how long a single
 	// spawn_background_agent job (ADR-0043) may run once it starts

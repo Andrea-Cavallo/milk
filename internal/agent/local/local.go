@@ -373,6 +373,10 @@ func (a *Agent) logInfo(msg string, kv ...any) {
 	obs.Info(msg, append(kv, a.jobAttrs()...)...)
 }
 
+// BackgroundAgentResolver returns the agent a spawn_background_agent job
+// should fork for the named peer (one of the caller's agent-tool entries).
+type BackgroundAgentResolver func(ctx context.Context, agentName string) (*Agent, error)
+
 // ToolAgentDispatcher is called when the agent issues an agent_* tool call.
 // agentName is the unsanitised agent name (e.g. "aider", not "agent_aider").
 // images, when non-empty, are images the calling agent itself couldn't attach
@@ -458,6 +462,9 @@ type Agent struct {
 	toolAgentEntries []config.AgentToolEntry
 	// toolAgentDispatcher is called when the agent issues an agent_* tool call.
 	toolAgentDispatcher ToolAgentDispatcher
+	// bgAgentResolver lets spawn_background_agent fork a configured peer
+	// (an agent-tool entry) instead of this agent. nil = fork self only.
+	bgAgentResolver BackgroundAgentResolver
 	// backgroundManager, when set, makes spawn_background_agent available
 	// (ADR-0043) and receives its calls. nil for background jobs themselves
 	// (RunBackgroundTask never sets it), enforcing the depth-1 fork cap.
@@ -710,6 +717,28 @@ func (a *Agent) SetTermWidth(w int) {
 // issues an agent_* tool call.
 func (a *Agent) SetToolAgentDispatcher(fn ToolAgentDispatcher) {
 	a.toolAgentDispatcher = fn
+}
+
+// SetBackgroundAgentResolver lets spawn_background_agent take an optional
+// "agent" argument naming one of this agent's agent-tool peers; fn builds the
+// peer the job forks. Passing nil keeps the tool fork-self-only.
+func (a *Agent) SetBackgroundAgentResolver(fn BackgroundAgentResolver) {
+	a.bgAgentResolver = fn
+}
+
+// backgroundPeerNames lists the peers spawn_background_agent may fork: the
+// enabled agent-tool entries, when a resolver is wired.
+func (a *Agent) backgroundPeerNames() []string {
+	if a.bgAgentResolver == nil || a.backgroundManager == nil {
+		return nil
+	}
+	var names []string
+	for _, e := range a.toolAgentEntries {
+		if e.IsEnabled() && !strings.EqualFold(e.Agent, a.selfName) {
+			names = append(names, e.Agent)
+		}
+	}
+	return names
 }
 
 // SetBackgroundManager makes spawn_background_agent available to this agent
@@ -1265,6 +1294,10 @@ const systemPromptSharedFull = `Additional guidance:
 - Use find_files to locate files by name or extension before attempting to read them by guessed path.
 - If a bash command returns a non-zero exit code, diagnose the error before retrying.`
 
+// backgroundPeerGuidance is appended after backgroundAgentGuidance when the
+// agent may also fork a configured peer (the "agent" argument).
+const backgroundPeerGuidance = `spawn_background_agent normally forks you; set its optional "agent" argument to run the job on one of your agent_* peers instead — that peer's model, tools and MCP servers, not yours. Use it when the research is hard enough that a stronger or differently-equipped peer is worth it (see that peer's tool description for when). The peer starts with no context, so the task must be fully self-contained, and unlike calling agent_<name> directly, you do not wait for it.`
+
 // backgroundAgentGuidance is appended to the system prompt whenever
 // spawn_background_agent is available (a.backgroundManager != nil, checked
 // at the call site rather than threaded through buildSystemPrompt — see
@@ -1600,7 +1633,7 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		tools = append(tools, a.mcpToolSet.Schemas(ctx)...)
 	}
 	if a.backgroundManager != nil {
-		tools = append(tools, spawnBackgroundAgentSchema(), cancelBackgroundAgentSchema())
+		tools = append(tools, spawnBackgroundAgentSchema(a.backgroundPeerNames()), cancelBackgroundAgentSchema())
 	}
 
 	// Assemble the system prompt from its components (sysPromptBuilder) so
@@ -1618,6 +1651,9 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 	}
 	if a.backgroundManager != nil {
 		spb.guidance = append(spb.guidance, backgroundAgentGuidance)
+		if len(a.backgroundPeerNames()) > 0 {
+			spb.guidance = append(spb.guidance, backgroundPeerGuidance)
+		}
 	}
 	if a.taskStore != nil {
 		spb.guidance = append(spb.guidance, taskToolGuidance)
@@ -2800,8 +2836,34 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 			Task        string `json:"task"`
 			Label       string `json:"label"`
 			FullContext bool   `json:"full_context"`
+			Agent       string `json:"agent"`
 		}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args) //nolint:errcheck
+		runner := a
+		runnerModel := a.model
+		onWhom := ""
+		if peer := strings.TrimSpace(args.Agent); peer != "" && !strings.EqualFold(peer, a.selfName) {
+			name := ""
+			for _, n := range a.backgroundPeerNames() {
+				if strings.EqualFold(n, peer) {
+					name = n
+					break
+				}
+			}
+			if name == "" {
+				msg := fmt.Sprintf("agent %q is not available for background jobs (available: %s)", peer, strings.Join(a.backgroundPeerNames(), ", "))
+				return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: msg}.String(), ToolCallID: tc.ID}}
+			}
+			pa, err := a.bgAgentResolver(ctx, name)
+			if err != nil || pa == nil {
+				if err == nil {
+					err = fmt.Errorf("not inference-server-backed")
+				}
+				msg := fmt.Sprintf("cannot start a background job on agent %q: %v", name, err)
+				return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: msg}.String(), ToolCallID: tc.ID}}
+			}
+			runner, runnerModel, onWhom = pa, pa.model, " on "+name
+		}
 		cwd := ""
 		var contextSummary string
 		if sess != nil {
@@ -2811,11 +2873,11 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 			}
 		}
 		role := agentRoleForMetrics(a.escalationName)
-		job := a.backgroundManager.Spawn(args.Label, args.Task, role, a.model,
+		job := a.backgroundManager.Spawn(args.Label, args.Task, role, runnerModel,
 			func(jobCtx context.Context, jobID string, jobOut io.Writer) (string, session.TokenUsage, error) {
-				return a.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, contextSummary, jobOut, mem)
+				return runner.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, contextSummary, jobOut, mem)
 			})
-		result := toolResult{Output: fmt.Sprintf("Spawned background agent %s (%q). You will be notified when it completes.", job.ID, args.Label)}.String()
+		result := toolResult{Output: fmt.Sprintf("Spawned background agent %s%s (%q). You will be notified when it completes.", job.ID, onWhom, args.Label)}.String()
 		return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}
 	}
 

@@ -9,7 +9,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"strings"
 
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
@@ -60,11 +63,125 @@ func userJobPlan(cfg config.Config, escLocal, primaryLocal *local.Agent, task st
 	if modelName == "" {
 		modelName = ac.Name
 	}
-	label = task
-	if len(label) > 60 {
-		label = label[:57] + "..."
+	return agent, modelName, userJobLabel(task), true
+}
+
+// userJobLabel is the task truncated to 60 chars — the panel/summary width
+// both hosts render.
+func userJobLabel(task string) string {
+	if len(task) > 60 {
+		return task[:57] + "..."
 	}
-	return agent, modelName, label, true
+	return task
+}
+
+// errUserJobUnavailable is userJobPlanFor's "nothing to fork from" error.
+var errUserJobUnavailable = errors.New(userJobUnavailableMsg)
+
+// bgAgentCandidates lists the configured agents a user-started job can run
+// on: the inference-server-backed ones (claude-cli and subprocess agents have
+// no Manager to fork from).
+func bgAgentCandidates(cfg config.Config) []string {
+	var names []string
+	for _, ac := range cfg.Agents {
+		if !ac.IsExternalProcess() {
+			names = append(names, ac.Name)
+		}
+	}
+	return names
+}
+
+// userJobDefaultName is the agent a blank answer / no --agent resolves to, for
+// the prompt: the configured background_agent, else what userJobPlan picks.
+func userJobDefaultName(cfg config.Config, escLocalAvailable bool) string {
+	if s := strings.TrimSpace(cfg.BackgroundAgent); s != "" {
+		return s
+	}
+	if escLocalAvailable {
+		return cfg.EscalationAgentConfig().Name
+	}
+	return cfg.ActiveAgent().Name
+}
+
+// userJobPlanFor is userJobPlan with an explicit agent choice, the way
+// workflow roles take one: spec is an agent name or the aliases "primary" /
+// "escalation"; blank falls back to cfg.BackgroundAgent, then to userJobPlan's
+// default. The session's own wired primary/escalation agents are reused as-is
+// (permission asks, token accounting); any other configured agent comes from
+// build, which may be nil when the host can't construct one.
+func userJobPlanFor(cfg config.Config, escLocal, primaryLocal *local.Agent, build func(name string) (*local.Agent, error), spec, task string) (agent *local.Agent, modelName, label string, err error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		spec = strings.TrimSpace(cfg.BackgroundAgent)
+	}
+	if spec == "" {
+		a, m, l, ok := userJobPlan(cfg, escLocal, primaryLocal, task)
+		if !ok {
+			return nil, "", "", errUserJobUnavailable
+		}
+		return a, m, l, nil
+	}
+
+	var ac config.AgentConfig
+	switch {
+	case strings.EqualFold(spec, "primary"):
+		ac, agent = cfg.ActiveAgent(), primaryLocal
+	case strings.EqualFold(spec, "escalation"):
+		ac, agent = cfg.EscalationAgentConfig(), escLocal
+	default:
+		found, ok := findAgentByName(cfg, spec)
+		if !ok {
+			return nil, "", "", fmt.Errorf("unknown agent %q (available: %s)", spec, strings.Join(bgAgentCandidates(cfg), ", "))
+		}
+		ac = found
+		switch {
+		case strings.EqualFold(ac.Name, cfg.ActiveAgent().Name):
+			agent = primaryLocal
+		case strings.EqualFold(ac.Name, cfg.EscalationAgentConfig().Name):
+			agent = escLocal
+		}
+	}
+	if ac.IsExternalProcess() {
+		return nil, "", "", fmt.Errorf("agent %q is not inference-server-backed — a background job needs one (available: %s)", ac.Name, strings.Join(bgAgentCandidates(cfg), ", "))
+	}
+	if agent == nil && build != nil {
+		built, berr := build(ac.Name)
+		if berr != nil {
+			return nil, "", "", fmt.Errorf("agent %q: %w", ac.Name, berr)
+		}
+		agent = built
+	}
+	if agent == nil {
+		return nil, "", "", errUserJobUnavailable
+	}
+	modelName = ac.Model
+	if modelName == "" {
+		modelName = ac.Name
+	}
+	return agent, modelName, userJobLabel(task), nil
+}
+
+// parseBgStartArgs splits "/bg start" arguments into an optional leading
+// "--agent <name>" (or "--agent=<name>") and the task text. Only a leading
+// flag is recognised, so a task that itself mentions "--agent" is left alone.
+func parseBgStartArgs(arg string) (agent, task string, err error) {
+	arg = strings.TrimSpace(arg)
+	switch {
+	case strings.HasPrefix(arg, "--agent="):
+		rest := strings.TrimPrefix(arg, "--agent=")
+		name, tail, _ := strings.Cut(rest, " ")
+		agent, arg = name, strings.TrimSpace(tail)
+	case arg == "--agent" || strings.HasPrefix(arg, "--agent "):
+		rest := strings.TrimSpace(strings.TrimPrefix(arg, "--agent"))
+		name, tail, _ := strings.Cut(rest, " ")
+		agent, arg = name, strings.TrimSpace(tail)
+	default:
+		return "", arg, nil
+	}
+	if agent == "" {
+		return "", "", errors.New("flag --agent requires a value")
+	}
+	return agent, arg, nil
 }
 
 // userJobRunner builds the spawn body both hosts pass to Manager.Spawn for a
