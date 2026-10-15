@@ -112,3 +112,14 @@ A new small manager (`internal/agent/local.Manager`) tracks in-flight jobs:
 
 **Neutral:**
 - Background jobs are not recorded in the session transcript as their own turns — only the distilled result appears, injected the same way percepts are, consistent with ADR-0034's decision not to record tool-agent internal reasoning in the session.
+
+## Update (2026-10-16): optional `agent` argument — fork a peer instead of self
+
+`spawn_background_agent` gained an optional `agent` argument, offered (as a schema `enum`, plus one extra guidance line) only when the caller has enabled agent-tool peers and a resolver is wired (`Agent.SetBackgroundAgentResolver`, set next to `SetToolAgentDispatcher` in `dispatch.go` for both roles). The job then runs `RunBackgroundTask` on the peer built the same way an agent-as-tool runner is (`buildLocalPeerAgent`), so it uses the peer's model, limits and MCP servers; omitting the argument keeps forking the caller, and with no peers the schema is byte-identical to before. Decisions:
+
+- **Allow-list = the caller's `agent_tools` entries.** That list is already the user's statement of which peers an agent may invoke, so no new permission surface is introduced; a name outside it, or a peer that is not inference-server-backed, is a tool error and no job starts.
+- **Isolation is unchanged.** The peer job still has no conversation, no `escalate`/`start_workflow`/`spawn_background_agent` (depth 1), the same permission background-ask path, and the same timeout and concurrency limits.
+- **Accounting.** Tokens are recorded under the spawner's role (`primary:subagent`) keyed by the peer's model, so a gemma → mimo job shows as mimo's model under `primary:subagent`.
+- **Why not async agent-as-tool instead.** The synchronous `agent_<name>` call stays as is; the background hand-off reuses the whole job pipeline (panel, result delivery, follow-up turn, cancel) rather than adding a second async mechanism.
+
+User-started jobs (`/bg start`, Ctrl+Enter) share the same peer builder and choose their agent through `--agent` / a one-question prompt / the `background_agent` config key.

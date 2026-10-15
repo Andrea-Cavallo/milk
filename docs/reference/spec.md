@@ -319,6 +319,10 @@ Ordered list of editor commands tried by `/config open` and `/open`; first found
 
 Maximum concurrent `spawn_background_agent` jobs (ADR-0043) per session; non-positive or unset falls back to `3`. See [docs/guides/operations.md — Background sub-agents](../guides/operations.md#background-sub-agents).
 
+### `background_agent` field
+
+Default agent for user-started background jobs (`/bg start`, Ctrl+Enter while busy): an agent name, or `primary` / `escalation`. Unset keeps the escalation agent's inference-server backend, else the primary's. The TUI still asks per job (blank answer = this default); `/bg start --agent <name>` skips the question. See [docs/guides/operations.md — Background sub-agents](../guides/operations.md#background-sub-agents).
+
 ### `background_agent_timeout_minutes` field
 
 Per-job hard timeout for a `spawn_background_agent` job (ADR-0043), in minutes, once it starts executing; non-positive or unset falls back to `20`. See [docs/guides/operations.md — Background sub-agents](../guides/operations.md#background-sub-agents).

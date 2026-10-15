@@ -62,6 +62,7 @@ func (m *model) hasPendingPrompt() bool {
 		m.pendingMCPAdd != nil ||
 		m.pendingSwitch != nil ||
 		m.pendingTool != nil ||
+		m.pendingBgAgent != nil ||
 		m.pendingTelegramSetup != nil ||
 		m.pendingInit != nil ||
 		m.pendingWorkflowWizard != nil ||

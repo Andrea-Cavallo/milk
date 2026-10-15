@@ -274,6 +274,9 @@ func runPrimaryWithSession(
 					return tr.RunToolCall(dctx, cfg, request, images, dout)
 				})
 			})
+			lr.agent.SetBackgroundAgentResolver(func(rctx context.Context, name string) (*local.Agent, error) {
+				return buildLocalPeerAgent(rctx, name, cfg, capturedDA, mem, memory.ConsumerLocal)
+			})
 		}
 	}
 
@@ -517,6 +520,9 @@ func runEscalationWithSession(
 				return retryToolCall(dctx, func() (string, error) {
 					return tr.RunToolCall(dctx, cfg, request, images, dout)
 				})
+			})
+			lr.agent.SetBackgroundAgentResolver(func(rctx context.Context, name string) (*local.Agent, error) {
+				return buildLocalPeerAgent(rctx, name, cfg, capturedDA, mem, memory.ConsumerEscalation)
 			})
 		}
 	}

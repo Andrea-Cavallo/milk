@@ -11,6 +11,7 @@ import (
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/livebuf"
+	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/tasks"
 	"github.com/scoutme/milk/internal/transport/acp"
 )
@@ -156,13 +157,19 @@ func (as *acpSession) setupBackground(hasLocalAgent bool) {
 // spawnUserJob starts a background job on the user's behalf (/bg start) — the
 // shared /bg-start core (userJobPlan/userJobRunner, issue #188), the same
 // plan the TUI's spawnUserBackgroundAgent makes.
-func (as *acpSession) spawnUserJob(task string) string {
-	agent, modelName, label, ok := userJobPlan(as.cfg, as.escLocalAgent, as.localAgent, task)
-	if as.mgr == nil || !ok {
+func (as *acpSession) spawnUserJob(task, spec string) string {
+	build := func(name string) (*local.Agent, error) {
+		return buildLocalPeerAgent(context.Background(), name, as.cfg, as.da, as.mem, memory.ConsumerAll)
+	}
+	agent, modelName, label, err := userJobPlanFor(as.cfg, as.escLocalAgent, as.localAgent, build, spec, task)
+	if as.mgr == nil || err != nil {
+		if err != nil {
+			return err.Error()
+		}
 		return userJobUnavailableMsg
 	}
 	job := as.mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, as.st.cwd, task, as.mem))
-	return fmt.Sprintf("background agent %s started: %s", job.ID, label)
+	return fmt.Sprintf("background agent %s started on %s: %s", job.ID, modelName, label)
 }
 
 func acpBg(as *acpSession, rest string) (string, string) {
@@ -175,11 +182,11 @@ func acpBg(as *acpSession, rest string) (string, string) {
 	case len(parts) == 0 || parts[0] == "list":
 		return renderBgList(as.mgr.Jobs()), ""
 	case parts[0] == "start":
-		task := strings.TrimSpace(strings.TrimPrefix(arg, "start"))
-		if task == "" {
-			return "usage: /bg start <task>", ""
+		spec, task, err := parseBgStartArgs(strings.TrimPrefix(arg, "start"))
+		if err != nil || task == "" {
+			return "usage: /bg start [--agent <name|primary|escalation>] <task>", ""
 		}
-		return as.spawnUserJob(task), ""
+		return as.spawnUserJob(task, spec), ""
 	case parts[0] == "show":
 		id := strings.TrimSpace(strings.TrimPrefix(arg, "show"))
 		if id == "" {
@@ -201,7 +208,7 @@ func acpBg(as *acpSession, rest string) (string, string) {
 		}
 		return fmt.Sprintf("background agent %s not found or already finished", id), ""
 	}
-	return "usage: /bg [list | show <id> | start <task> | stop <id>]", ""
+	return "usage: /bg [list | show <id> | start [--agent <name>] <task> | stop <id>]", ""
 }
 
 func acpTasks(as *acpSession, _ string) (string, string) { return execTasks(as.taskStore), "" }

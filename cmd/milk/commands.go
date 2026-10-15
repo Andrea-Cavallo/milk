@@ -297,12 +297,12 @@ func (m model) handleBgCmd(arg string) (tea.Model, tea.Cmd) {
 	case len(parts) == 0 || parts[0] == "list":
 		return m.handleBgList(mgr), nil
 	case parts[0] == "start":
-		task := strings.TrimSpace(strings.TrimPrefix(arg, "start"))
-		if task == "" {
-			m.appendTranscript(milkTag() + " usage: /bg start <task>\n")
+		spec, task, err := parseBgStartArgs(strings.TrimPrefix(arg, "start"))
+		if err != nil || task == "" {
+			m.appendTranscript(milkTag() + " usage: /bg start [--agent <name|primary|escalation>] <task>\n")
 			return m, nil
 		}
-		return m.spawnUserBackgroundAgent(task)
+		return m.startUserBackgroundAgent(task, spec)
 	case parts[0] == "stop":
 		id := strings.TrimSpace(strings.TrimPrefix(arg, "stop"))
 		if id == "" {
@@ -330,7 +330,7 @@ func (m model) handleBgCmd(arg string) (tea.Model, tea.Cmd) {
 		m.appendTranscript(fmt.Sprintf("%s background agent %s not found\n", milkTag(), id))
 		return m, nil
 	default:
-		m.appendTranscript(milkTag() + " usage: /bg [list | show <id> | start <task> | stop <id>]\n")
+		m.appendTranscript(milkTag() + " usage: /bg [list | show <id> | start [--agent <name>] <task> | stop <id>]\n")
 		return m, nil
 	}
 }

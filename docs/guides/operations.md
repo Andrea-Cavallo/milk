@@ -224,8 +224,10 @@ The `/bg` slash command manages background agents interactively:
 |---|---|
 | `/bg` or `/bg list` | List all background agents (ID, status, label, elapsed time) |
 | `/bg show <id>` | Print one job's full result (status metadata, error, or result text — uncapped) |
-| `/bg start <task>` | Spawn a background agent to research `<task>` (same as Ctrl+Enter while busy) |
+| `/bg start [--agent <name>] <task>` | Spawn a background agent to research `<task>` (same as Ctrl+Enter while busy, which has no flag and asks instead) |
 | `/bg stop <id>` | Terminate a running background agent by its ID |
+
+**Which agent runs a user-started job** works like a workflow role: `--agent <name>` takes any configured inference-server-backed agent or the aliases `primary` / `escalation`; without it the TUI asks (`background agent [...] (blank = <default>):`, Esc cancels) whenever more than one such agent is configured. The default — a blank answer, ACP (which has no prompt), or `/bg start` with a single candidate — is the `background_agent` config key if set, otherwise the escalation agent's inference-server backend, else the primary's. The job carries the chosen agent's model and MCP servers, so a job on `gemma` sees only `gemma`'s `mcp_servers`. (A job an *agent* spawns with `spawn_background_agent` always forks that agent itself.)
 
 `/bg` is safe to use while an agent turn is in progress (it never dispatches a new turn). Use `/bg list` to see job IDs, then `/bg stop job_N` to cancel one that's no longer needed.
 
