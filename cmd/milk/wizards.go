@@ -1380,7 +1380,7 @@ type agentToolWizardStep int
 
 const (
 	toolStepName agentToolWizardStep = iota
-	toolStepDesc // only for "add"
+	toolStepDesc                     // only for "add"
 	toolStepScope
 	toolStepDone
 )
