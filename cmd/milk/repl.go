@@ -673,6 +673,16 @@ type model struct {
 	thinkingActiveInTurn bool
 	// showThinking controls whether thinking content is visible in the viewport.
 	showThinking bool
+
+	// showTips toggles the idle tip line below the input (ADR-0061, /tips).
+	// Defaults on (config show_tips); the line's row is reserved while it is
+	// on — see hintRegion — so toggling never shifts the layout mid-session
+	// more than the one reflow /tips itself triggers.
+	showTips bool
+	// tipIdx is the idle tip rotation's position in buildTipList() (tips.go).
+	// Advanced by tipsTickMsg while the user is idle; frozen while a turn
+	// runs or a prompt is pending.
+	tipIdx int
 	// currentTurnThinking accumulates thinking text for the current in-progress
 	// turn so it can be stored in session.Turn.Thinking when the turn completes.
 	currentTurnThinking *strings.Builder
@@ -1104,6 +1114,7 @@ func newModel(ctx context.Context, st *interactiveState, rtr *router.Router, age
 		currentTurnThinking: &strings.Builder{},
 		searchQuery:         &strings.Builder{},
 		showThinking:        st.cfg.ShowReasoningDefault(),
+		showTips:            st.cfg.ShowTipsEnabled(),
 		mem:                 mem,
 		panelMemory:         true,
 		panelManualOverride: map[panelRegion]bool{},
@@ -1933,6 +1944,8 @@ func (m model) Init() tea.Cmd {
 	if m.panelMemory {
 		cmds = append(cmds, memoryPollTick())
 	}
+	// Idle tip rotation (ADR-0061) — armed unconditionally, cheap at 20s.
+	cmds = append(cmds, tipsTick())
 	if m.credRefreshInit != nil {
 		cmds = append(cmds, m.credRefreshInit)
 	}
@@ -2529,6 +2542,16 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerTick()
 		}
 		return m, nil
+
+	case tipsTickMsg:
+		// The rotation freezes while a turn runs or a prompt is pending —
+		// the tip line's row stays reserved (no layout jump) but the user's
+		// attention is elsewhere, so the tip only advances while they are
+		// actually idle (ADR-0061).
+		if !m.busy && !m.hasPendingPrompt() {
+			m.tipIdx++
+		}
+		return m, tipsTick()
 
 	case copyFeedbackClearMsg:
 		m.copyFeedback = ""

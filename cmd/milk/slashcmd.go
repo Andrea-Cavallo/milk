@@ -168,6 +168,9 @@ var commandRegistry = []cmdSpec{
 	{name: cmdThink, hosts: hostBoth, desc: "show or hide model reasoning in this session", hint: "[on|off]", help: `  /think                 show current reasoning visibility
   /think on              show thinking/reasoning tokens inline
   /think off             hide thinking tokens ([thinking…] placeholder)`},
+	{name: cmdTips, hosts: hostTUI, args: argsOptOnOff, desc: "show or hide the idle tip line under the input", hint: "[on|off]", help: `  /tips                  show current tip line visibility
+  /tips on               show the idle tip line under the input
+  /tips off              hide the idle tip line`},
 	{name: cmdSetup, hosts: hostBoth, desc: "configure Telegram remote oversight (status, enable, disable, or the setup wizard)", hint: "telegram [on|off|status]", help: `  /setup telegram        configure Telegram remote oversight interactively
   /setup telegram on     enable Telegram (credentials must already be configured)
   /setup telegram off    disable Telegram (credentials are preserved)`},
@@ -281,7 +284,7 @@ var helpBlocks = []helpBlock{
 	{header: "── Permissions ──────────────────────────────────────────────────────────", names: []string{cmdPermissions}},
 	{header: "── Memory ───────────────────────────────────────────────────────────────", names: []string{cmdLearn, cmdMemory, cmdForget, cmdPanel, cmdTasks, cmdTask}},
 	{header: "── Background agents ───────────────────────────────────────────────────", names: []string{cmdBg}},
-	{header: "── Display ──────────────────────────────────────────────────────────────", names: []string{cmdColorize, cmdThink, cmdHistory, cmdNotifications}},
+	{header: "── Display ──────────────────────────────────────────────────────────────", names: []string{cmdColorize, cmdThink, cmdTips, cmdHistory, cmdNotifications}},
 	{header: "── Observability ────────────────────────────────────────────────────────", names: []string{cmdUsage, cmdMetrics, cmdOtel}},
 	{header: "── MCP Servers ───────────────────────────────────────────────────────────", names: []string{cmdMCP}},
 	{header: "── Workflow ───────────────────────────────────────────────────────────────", names: []string{cmdWorkflow}},
