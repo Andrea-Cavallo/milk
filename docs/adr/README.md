@@ -57,3 +57,4 @@
 * [56. Stale Global Percepts Are Archived by Session Time](0056-archive-stale-global-percepts.md)
 * [57. @-File Completion Reads a Cached Candidate Index](0057-at-file-candidate-index.md)
 * [58. Layered context reduction ladder](0058-layered-context-reduction-ladder.md)
+* [59. Panel Manual Override Resets When Content Finalizes](0059-panel-override-reset-on-finalization.md)

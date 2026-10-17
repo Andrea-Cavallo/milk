@@ -749,7 +749,11 @@ type model struct {
 	// shown/hidden (via /panel or its F1-F4 shortcut) this session. Once a
 	// region is in here, automatic "this panel's content just became
 	// active" opens (see autoOpenPanel) skip it — the user's own choice
-	// sticks over automatic management.
+	// sticks over automatic management. The stickiness only lasts while
+	// the panel's content stays live: resetManualOverrideIfFinalized
+	// drops the entry again the moment the content finalizes (emptied,
+	// completed, or done — panelContentFinalized), re-arming auto-open
+	// for the next new content (ADR-0059).
 	panelManualOverride map[panelRegion]bool
 
 	// memory panel
@@ -2448,6 +2452,12 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			noteWorkflowFinished(m.st.sess, m.workflowState.WorkflowName, m.workflowState.Task, m.workflowState.WorkflowID, runErr)
 		}
+		// The run is over (Role "done" just set, workflowRunning false):
+		// re-arm auto-open so the *next* workflow launch opens the panel
+		// again. The autoOpenPanel call above still ran with the override
+		// in place — completion itself never force-opens a panel the user
+		// closed mid-run; only future content does (ADR-0059).
+		m.resetManualOverrideIfFinalized(regionWorkflow)
 		if cancelled || isContextCanceled(msg.Err) {
 			m.appendTranscript(dim("[workflow interrupted]") + "\n")
 		} else if msg.Err != nil {
@@ -2659,6 +2669,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskStoreChangedMsg:
 		m.autoOpenPanel(regionTasks)
+		// Auto-open first (a "last task completed" change must not force
+		// a user-closed panel back open), then the finalization reset so
+		// the *next* task change auto-opens again (ADR-0059).
+		m.resetManualOverrideIfFinalized(regionTasks)
 		m.syncLayout()
 		return m, nil
 
@@ -2685,6 +2699,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.notify(fmt.Sprintf("background agent %q completed", j.Label), "/bg list")
 		}
+		// The last running job finishing finalizes the background panel's
+		// content — re-arm auto-open so the next spawn opens it again
+		// (no-op while other jobs are still running; ADR-0059).
+		m.resetManualOverrideIfFinalized(regionBackground)
 		return m, nil
 
 	case backgroundBatchDoneMsg:

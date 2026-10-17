@@ -230,6 +230,7 @@ func (m model) handleWorkflowClear() (tea.Model, tea.Cmd) {
 	if kind == workflow.WorkflowKindNone {
 		m.workflowState = nil
 		m.workflowPanelOpen = false
+		m.resetManualOverrideIfFinalized(regionWorkflow) // emptied → re-arm auto-open (ADR-0059)
 		m.syncLayout()
 		m.appendTranscript(milkTag() + " no saved workflow state for this session\n")
 		return m, nil
@@ -273,6 +274,7 @@ func (m model) execWorkflowClear(workflowID int, kind workflow.WorkflowKind) (te
 	}
 	m.workflowState = nil
 	m.workflowPanelOpen = false
+	m.resetManualOverrideIfFinalized(regionWorkflow) // emptied → re-arm auto-open (ADR-0059)
 	m.syncLayout()
 	m.appendTranscript(milkTag() + " workflow state cleared\n")
 	return m, nil

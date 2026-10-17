@@ -1,6 +1,6 @@
 # 44. Side-Panel Auto-Open, Shortcut Hints, and Alternating Background
 
-- **Status:** accepted
+- **Status:** accepted — override lifetime amended by [ADR-0059](0059-panel-override-reset-on-finalization.md) (a manual override now expires when the panel's content finalizes, instead of lasting the whole session)
 - **Date:** 2026-09-12
 
 ## Context
