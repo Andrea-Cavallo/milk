@@ -1349,6 +1349,9 @@ func (m model) resolveForget(answer string) model {
 		return m
 	}
 	m.appendTranscript(fmt.Sprintf("%s deleted percept %s\n", milkTag(), dim("#"+target.ID[:6])))
+	// Deleting the last percept empties the store — the memory panel's
+	// finalization event: re-arm auto-open for its next content (ADR-0059).
+	m.resetManualOverrideIfFinalized(regionMemory)
 	return m
 }
 
@@ -1435,10 +1438,18 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 	if m.panelManualOverride == nil {
 		m.panelManualOverride = map[panelRegion]bool{}
 	}
+	// Every toggle records the manual override; a toggle that *closes* a
+	// panel whose content has already finalized drops it again right away
+	// (resetManualOverrideIfFinalized) — the sticky rule exists to keep
+	// live content from re-opening a dismissed panel, not to lock a
+	// settled one out of its next content forever (ADR-0059).
 	switch sub {
 	case "memory":
 		m.panelManualOverride[regionMemory] = true
 		m.panelMemory = !m.panelMemory
+		if !m.panelMemory {
+			m.resetManualOverrideIfFinalized(regionMemory)
+		}
 		m.refreshPrompt()
 		m.syncLayout()
 		var tick tea.Cmd
@@ -1452,6 +1463,9 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 	case "tasks":
 		m.panelManualOverride[regionTasks] = true
 		m.panelTasks = !m.panelTasks
+		if !m.panelTasks {
+			m.resetManualOverrideIfFinalized(regionTasks)
+		}
 		m.refreshPrompt()
 		m.syncLayout()
 		if m.panelTasks {
@@ -1463,6 +1477,9 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 	case "workflow":
 		m.panelManualOverride[regionWorkflow] = true
 		m.workflowPanelOpen = !m.workflowPanelOpen
+		if !m.workflowPanelOpen {
+			m.resetManualOverrideIfFinalized(regionWorkflow)
+		}
 		m.syncLayout()
 		if m.workflowPanelOpen {
 			m.notify("workflow panel: on", "/panel workflow")
@@ -1473,6 +1490,9 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 	case "background":
 		m.panelManualOverride[regionBackground] = true
 		m.panelBackground = !m.panelBackground
+		if !m.panelBackground {
+			m.resetManualOverrideIfFinalized(regionBackground)
+		}
 		m.syncLayout()
 		if m.panelBackground {
 			m.notify("background agents panel: on", "/panel background")

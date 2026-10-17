@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/scoutme/milk/internal/agent/local"
+	"github.com/scoutme/milk/internal/memory"
+	"github.com/scoutme/milk/internal/tasks"
 )
 
 // sidePanelLines returns the full (unwindowed) content lines and inner
@@ -74,7 +76,10 @@ func panelTitleLine(title string, region panelRegion, inner int) string {
 // active (a workflow started, a background job was spawned, a task was
 // saved, ...) — unless the user has explicitly shown or hidden that panel
 // via /panel or its F1-F4 shortcut this session (see panelManualOverride),
-// in which case their choice sticks and this is a no-op.
+// in which case their choice sticks and this is a no-op. A manual override
+// is not permanent: it is dropped again as soon as the panel's content
+// finalizes (see resetManualOverrideIfFinalized), so the *next* active
+// content auto-opens the panel once more.
 //
 // A silent auto-open is exactly the kind of surprise event that should
 // explain itself: when the panel *transitions* closed→open (issue #162 /
@@ -98,6 +103,95 @@ func (m *model) autoOpenPanel(region panelRegion) {
 	}
 	if !wasOpen && m.panelOpen(region) {
 		m.notify(panelDisplayName(region)+" panel opened", "/panel "+panelSubName(region))
+	}
+}
+
+// panelContentFinalized reports whether the given panel's content has
+// settled into a terminal state — emptied, completed, or done — with
+// nothing in flight. It drives the manual-override reset (see
+// resetManualOverrideIfFinalized): a user's explicit close only needs to
+// stick while there is live content it was dismissed over.
+//
+// Per panel, mirroring what each build*PanelLines shows as its "active"
+// content:
+//   - memory: no percepts left in either scope. The context bricks
+//     (need/summaries/brief) are session-summary state, not activity, so
+//     they don't keep the content "live".
+//   - tasks: every session + global task is done, or there are none
+//     (blocked/in-progress/pending count as active).
+//   - background: no job is still running — an empty list (all spawned
+//     jobs finished and drained) is finalized too.
+//   - workflow: no run in flight and the loaded state is nil, nameless
+//     (panel shows "no active workflow"), or already at Role "done".
+//     "interrupted"/"waiting for your answers" states stay active.
+func (m *model) panelContentFinalized(region panelRegion) bool {
+	switch region {
+	case regionMemory:
+		if m.mem == nil {
+			return true
+		}
+		if len(m.mem.List(memory.ListOpts{Scope: "session"})) > 0 {
+			return false
+		}
+		return len(m.mem.List(memory.ListOpts{Scope: "global"})) == 0
+	case regionTasks:
+		if m.taskStore == nil {
+			return true
+		}
+		all, err := m.taskStore.List(tasks.ListOpts{IncludeGlobal: true})
+		if err != nil {
+			return true
+		}
+		for _, t := range all {
+			if t.Status != tasks.StatusDone {
+				return false
+			}
+		}
+		return true
+	case regionBackground:
+		if m.agents.backgroundMgr == nil {
+			return true
+		}
+		for _, j := range m.agents.backgroundMgr.Jobs() {
+			if j.Status == local.JobRunning {
+				return false
+			}
+		}
+		return true
+	case regionWorkflow:
+		if m.workflowRunning {
+			return false
+		}
+		st := m.workflowState
+		return st == nil || st.WorkflowName == "" || st.Role == "done"
+	}
+	return true
+}
+
+// resetManualOverrideIfFinalized drops a panel's sticky manual override
+// (panelManualOverride) once its content has finalized — emptied,
+// completed, or done (see panelContentFinalized). From that point on, the
+// *next* active content auto-opens the panel again: the user's close stays
+// respected for the live content it was dismissed over, but no longer
+// blocks genuinely new activity later in the session.
+//
+// Called from two kinds of sites:
+//   - handlePanelCmd, when a toggle *closes* the panel — closing a panel
+//     whose content has already settled must not lock it out of its next
+//     content either;
+//   - the content-finalization events the TUI observes: task-store
+//     mutations (taskStoreChangedMsg), the last background job finishing
+//     (backgroundJobDoneMsg), a workflow ending or being cleared
+//     (workflow.WorkflowDoneMsg, /workflow clear), and /forget emptying
+//     the percept store (resolveForget).
+//
+// No-op when there is no override for the region or the content is still
+// active. Order matters at the event sites: call autoOpenPanel *first*
+// (so the finalizing event itself never force-opens a user-closed panel),
+// then this reset — only future content re-opens it.
+func (m *model) resetManualOverrideIfFinalized(region panelRegion) {
+	if m.panelManualOverride[region] && m.panelContentFinalized(region) {
+		delete(m.panelManualOverride, region)
 	}
 }
 
