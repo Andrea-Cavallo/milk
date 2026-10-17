@@ -1156,6 +1156,7 @@ func (m model) handleConfigOpenCmd() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		enableMouseTracking()
 		if err != nil {
 			return errMsg{err: fmt.Errorf("editor exited with error: %w", err)}
 		}
@@ -1232,6 +1233,7 @@ func (m model) handleOpenFileMsg(msg openFileMsg) (tea.Model, tea.Cmd) {
 	}
 	m.appendTranscript(fmt.Sprintf("%s opening %s…\n", milkTag(), msg.path))
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		enableMouseTracking()
 		if msg.respCh != nil {
 			msg.respCh <- err
 		}
