@@ -3,6 +3,7 @@ package escalation
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/session"
@@ -49,6 +50,8 @@ const (
 //
 // The identity block is always included — it tells the agent it is running inside
 // milk and must be present on every turn (first, resume, returning, continuation).
+// So is the current-date line (ADR-0060): date-granularity content that keeps the
+// cached prefix valid all day.
 //
 // On ContextModeFirst and ContextModeReturning the full static block is returned;
 // injectInstructions gates whether the tag-instruction and percept blocks are included
@@ -58,6 +61,11 @@ const (
 func BuildStaticContext(nonce string, percepts []string, mode ContextMode, injectInstructions bool, primaryName, escalationName string) string {
 	var b strings.Builder
 	b.WriteString(identityBlock)
+	// The current-date line follows the identity block in the same cached
+	// prefix. It is date-granularity (see DateLine), so this prefix only goes
+	// stale at midnight — not every turn. It precedes the early returns so
+	// every ContextMode (incl. Continuation, identity-only) carries it.
+	b.WriteString(DateLine(time.Now()) + "\n\n")
 	if mode == ContextModeContinuation {
 		return b.String()
 	}

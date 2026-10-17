@@ -1450,6 +1450,13 @@ func buildSystemPromptOpts(cwd, selfName, escalationName string, workflowRole bo
 		base += "\n\n" + systemPromptSharedFull
 	}
 
+	// Current date, injected into the prompt core for every tier (including
+	// "minimal") and every role, so the context-reduction ladder (ADR-0058)
+	// can step tiers down without dropping it. Rendered per turn from
+	// time.Now() — date-granularity by design, see escalation.DateLine for the
+	// prompt-cache rationale (docs/adr/0060-inject-current-date.md).
+	base += "\n\n" + escalation.DateLine(time.Now())
+
 	if cwd == "" {
 		return base
 	}
