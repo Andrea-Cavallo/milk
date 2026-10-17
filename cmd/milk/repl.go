@@ -1620,8 +1620,15 @@ func setMouseDragMode(dragging bool) {
 	if dragging {
 		os.Stdout.WriteString("\x1b[?1000l\x1b[?1002h") //nolint:errcheck
 	} else {
-		os.Stdout.WriteString("\x1b[?1002l\x1b[?1000h") //nolint:errcheck
+		os.Stdout.WriteString("\x1b[?1002l\x1b[?1000h\x1b[?1006h") //nolint:errcheck
 	}
+}
+
+// enableMouseTracking (re)asserts the at-rest mouse mode. Milk writes these
+// modes itself, so bubbletea cannot restore them: ReleaseTerminal (tea.ExecProcess)
+// resets 1002/1003/1006 and RestoreTerminal does not bring them back.
+func enableMouseTracking() {
+	os.Stdout.WriteString("\x1b[?1000h\x1b[?1006h") //nolint:errcheck
 }
 
 func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -4536,7 +4543,7 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	// mode (1002) is left enabled at rest instead. setMouseDragMode switches
 	// to 1002 only for the duration of an active drag, when motion events are
 	// actually needed for live selection-highlight updates.
-	os.Stdout.WriteString("\x1b[?1000h\x1b[?1006h") //nolint:errcheck
+	enableMouseTracking()
 	finalModel, err := p.Run()
 	os.Stdout.WriteString("\x1b[?1006l\x1b[?1002l\x1b[?1000l") //nolint:errcheck
 
