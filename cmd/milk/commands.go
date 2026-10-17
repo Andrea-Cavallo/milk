@@ -51,6 +51,9 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	if cmd == cmdThink {
 		return m.handleThinkCmd(strings.TrimSpace(rest)), nil
 	}
+	if cmd == cmdTips {
+		return m.handleTipsCmd(strings.TrimSpace(rest))
+	}
 	if cmd == cmdNotifications {
 		return m.handleNotificationsCmd(strings.TrimSpace(rest)), nil
 	}
@@ -435,6 +438,51 @@ func (m model) handleThinkCmd(arg string) model {
 		m.appendTranscript(fmt.Sprintf("%s reasoning visibility: %s  (use /think on|off)\n", milkTag(), bold(state)))
 	}
 	return m
+}
+
+// handleTipsCmd handles `/tips [on|off]` — the idle tip line below the
+// input (ADR-0061). With no arg: shows the current visibility. With on/off:
+// toggles it and persists the default to config (show_tips), the same
+// saveLocalOrGlobal pattern /colorize uses. Turning the line on/off reflows
+// the layout by one row via syncLayout, since hintRegion reserves the row
+// while enabled.
+//
+// State *changes* are turn-unrelated informational events → notification
+// toasts (issue #162); the bare query response stays in the transcript like
+// every other explicit query answer.
+func (m model) handleTipsCmd(arg string) (tea.Model, tea.Cmd) {
+	switch arg {
+	case "on", "off":
+		want := arg == "on"
+		if m.showTips == want {
+			other := "on"
+			if want {
+				other = "off"
+			}
+			m.notify("tip line: already "+arg, "/tips "+other)
+			return m, nil
+		}
+		m.showTips = want
+		m.st.cfg.ShowTips = &want
+		other := "on"
+		if want {
+			other = "off"
+		}
+		if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {
+			m.appendTranscript(fmt.Sprintf("%s tip line: %s (config save failed: %v)\n", milkTag(), bold(arg), err))
+		} else {
+			m.notify("tip line: "+arg, "/tips "+other)
+		}
+	default:
+		state := "off"
+		if m.showTips {
+			state = "on"
+		}
+		m.appendTranscript(fmt.Sprintf("%s tip line: %s  (use /tips on|off)\n", milkTag(), bold(state)))
+		return m, nil
+	}
+	m.syncLayout()
+	return m, nil
 }
 
 // toggleThinking flips reasoning visibility and posts a notification toast.

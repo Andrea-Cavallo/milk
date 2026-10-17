@@ -42,6 +42,7 @@ const cmdPermissions = "/permissions"
 const cmdAgent = "/agent"
 const cmdColorize = "/colorize"
 const cmdThink = "/think"
+const cmdTips = "/tips"
 const cmdSetup = "/setup"
 const cmdConfig = "/config"
 const cmdInit = "/init"
@@ -311,6 +312,7 @@ var promptFriendly = map[string]bool{
 var busySafeCommands = map[string]bool{
 	"/help":          true,
 	cmdThink:         true,
+	cmdTips:          true,
 	cmdColorize:      true,
 	cmdPanel:         true,
 	cmdHistory:       true,

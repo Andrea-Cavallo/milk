@@ -178,6 +178,9 @@ func DeepMerge(dst, src Config) Config {
 	if src.ShowReasoning != nil {
 		dst.ShowReasoning = src.ShowReasoning
 	}
+	if src.ShowTips != nil {
+		dst.ShowTips = src.ShowTips
+	}
 	if src.CopyOnSelect != nil {
 		dst.CopyOnSelect = src.CopyOnSelect
 	}
@@ -990,6 +993,11 @@ type Config struct {
 	// transcript by default. Can be toggled live with /think on|off.
 	// false (default) = show "[thinking…]" placeholder; true = show reasoning.
 	ShowReasoning *bool `json:"show_reasoning,omitempty"`
+
+	// ShowTips controls whether the TUI's idle tip line below the input is
+	// shown (ADR-0061). Can be toggled live with /tips on|off.
+	// unset (default) = shown; false = hidden.
+	ShowTips *bool `json:"show_tips,omitempty"`
 
 	// CopyOnSelect copies a mouse selection to the clipboard as soon as the
 	// button is released, instead of waiting for a right-click or ctrl+c.
@@ -2072,6 +2080,13 @@ func (c Config) ShowReasoningDefault() bool {
 		return false
 	}
 	return *c.ShowReasoning
+}
+
+// ShowTipsEnabled reports whether the TUI's idle tip line is shown
+// (true when unset — the tips are on by default; /tips off or
+// "show_tips": false turns them off).
+func (c Config) ShowTipsEnabled() bool {
+	return c.ShowTips == nil || *c.ShowTips
 }
 
 // CopyOnSelectEnabled reports whether a finished mouse selection is copied

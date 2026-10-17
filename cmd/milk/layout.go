@@ -69,6 +69,25 @@ func (m *model) hasPendingPrompt() bool {
 		m.pendingGenericWorkflowExtend != nil
 }
 
+// hintRegion returns the hint lines rendered between the main area and the
+// status bar — one list both View and viewportHeight derive the layout
+// from, so the line counts can never disagree. Completion hints win when
+// they are up (they are the user's active task); otherwise the idle tip
+// line (ADR-0061) fills the slot when enabled. Nothing while the PTY pane
+// owns the screen: its layout branch renders no hint rows at all.
+func (m *model) hintRegion() []string {
+	if m.ptyPane != nil {
+		return nil
+	}
+	if len(m.tabHints) > 0 {
+		return m.tabHints
+	}
+	if !m.showTips {
+		return nil
+	}
+	return []string{renderTip(m.currentTip(), m.vpWidth())}
+}
+
 // viewportHeight is the full terminal height minus the chrome lines.
 // View() layout: headerBar + "\n" + mainArea + "\n" + statusBar; the "\n" separators don't add lines.
 // Chrome heights are measured from the rendered output so growth in either bar automatically reduces
@@ -76,7 +95,7 @@ func (m *model) hasPendingPrompt() bool {
 func (m *model) viewportHeight() int {
 	header := strings.Count(m.headerBar(), "\n") + 1
 	status := strings.Count(m.statusBar(), "\n") + 1
-	h := m.height - header - status - len(m.tabHints)
+	h := m.height - header - status - len(m.hintRegion())
 	return max(h, 3)
 }
 
@@ -346,8 +365,8 @@ func (m model) View() string {
 	// Notification toasts (issue #162) float over the top-right of the whole
 	// main area — pure render-time overlay, no layout rows consumed.
 	mainArea = m.overlayToasts(mainArea)
-	if len(m.tabHints) > 0 {
-		return m.headerBar() + "\n" + mainArea + "\n" + strings.Join(m.tabHints, "\n") + "\n" + m.statusBar()
+	if hints := m.hintRegion(); len(hints) > 0 {
+		return m.headerBar() + "\n" + mainArea + "\n" + strings.Join(hints, "\n") + "\n" + m.statusBar()
 	}
 	return m.headerBar() + "\n" + mainArea + "\n" + m.statusBar()
 }

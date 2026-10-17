@@ -328,6 +328,18 @@ Forward agent activity and permission prompts to a mobile device.
 
 When an agent calls `edit_file`/`write_file` (primary) or `Edit`/`Write` (Claude CLI), milk renders a colored inline diff in the transcript right after the tool-hint line — deleted lines in red, added in green, 3 lines of context on each side.
 
+## Idle tips
+
+Below the input area, milk shows a one-line **idle tip** (`tip: …`) while you work — short one-liners for features and key bindings you might not know about (`@`-path references, `!` direct bash, `ctrl+r` history search, the F1-F4 panels, `ctrl+enter` background agents, …). The line rotates every 20 seconds while nothing is running, freezing while a turn executes or a prompt is pending. It sits in the same slot as the tab-completion hints and yields to them whenever they are up.
+
+Three content sources, in precedence order (see ADR-0061):
+
+1. **Contextual hints** — derived from live state at render time, so always fresh: no primary agent configured → `/config init`; an update waiting → `/update install` with the release tag.
+2. **Curated tips** — hand-written one-liners in priority order; a fresh session starts at the most valuable ones.
+3. **Registry-derived tips** — generated from the slash-command registry, so every command has a tip that cannot drift from the real command set.
+
+`/tips` shows the current state, `/tips off` hides the line (persisted as `show_tips` in config; it is on by default), `/tips on` brings it back.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
