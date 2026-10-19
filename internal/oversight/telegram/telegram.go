@@ -257,8 +257,9 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 		lines = append(lines, escMD(req.Description))
 	}
 	lines = append(lines, "\nReply *y* to allow or *n* to deny\\.")
-	n.send(strings.Join(lines, "\n"))
 
+	// Register the reply channel before the question goes out — same
+	// drop-the-fast-reply race as AskInput.
 	ch := make(chan string, 1)
 	n.mu.Lock()
 	n.permCh = ch
@@ -269,6 +270,8 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 		n.permCh = nil
 		n.mu.Unlock()
 	}()
+
+	n.send(strings.Join(lines, "\n"))
 
 	select {
 	case reply := <-ch:
@@ -311,8 +314,11 @@ func (n *Notifier) AskInput(ctx context.Context, req oversight.InputRequest) (st
 		lines = append(lines, "Options: "+strings.Join(opts, " · "))
 	}
 	lines = append(lines, "\nReply with your answer\\.")
-	n.send(strings.Join(lines, "\n"))
 
+	// Register the reply channel before the question goes out: a reply
+	// that arrives between send and registration would otherwise be
+	// dropped by the poll loop (race that loses fast answers — and a
+	// deterministic loss against a fast bot/relay).
 	ch := make(chan string, 1)
 	n.mu.Lock()
 	n.permCh = ch
@@ -323,6 +329,8 @@ func (n *Notifier) AskInput(ctx context.Context, req oversight.InputRequest) (st
 		n.permCh = nil
 		n.mu.Unlock()
 	}()
+
+	n.send(strings.Join(lines, "\n"))
 
 	select {
 	case reply := <-ch:
