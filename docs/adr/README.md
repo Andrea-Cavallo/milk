@@ -60,3 +60,4 @@
 * [59. Panel Manual Override Resets When Content Finalizes](0059-panel-override-reset-on-finalization.md)
 * [60. Milk Injects the Current Date into Every Agent Context](0060-inject-current-date.md)
 * [61. Idle Tip Line Below the TUI Input](0061-idle-tip-line.md)
+* [62. Tool batches execute under a barrier model](0062-tool-batch-barrier-dispatch.md)

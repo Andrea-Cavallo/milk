@@ -9,11 +9,11 @@ import (
 	"time"
 )
 
-// TestExecuteToolCalls_ConcurrentDispatch verifies that two tool calls in the
-// same batch run concurrently rather than sequentially.
-// Both tools sleep 100 ms; if they ran sequentially the total would be ≥ 200 ms.
-// We assert the total elapsed time is < 180 ms (well under 2×100 ms).
-func TestExecuteToolCalls_ConcurrentDispatch(t *testing.T) {
+// TestExecuteToolCalls_BarrierCallsRunSequentially verifies the barrier model
+// (ADR-0062): side-effecting calls in one batch no longer run concurrently —
+// two bash calls each sleeping 100 ms now take ≥ 200 ms end to end, in order.
+// (Before ADR-0062 they overlapped; that raced writes against builds.)
+func TestExecuteToolCalls_BarrierCallsRunSequentially(t *testing.T) {
 	a := &Agent{
 		skipPerms:   true,
 		toolTimeout: 5 * time.Second,
@@ -36,14 +36,15 @@ func TestExecuteToolCalls_ConcurrentDispatch(t *testing.T) {
 	if len(msgs) != 3 {
 		t.Errorf("expected 3 messages (assistant + 2 tool), got %d", len(msgs))
 	}
-	if elapsed >= 180*time.Millisecond {
-		t.Errorf("tools appear to have run sequentially: elapsed %v (want < 180ms)", elapsed)
+	if elapsed < 200*time.Millisecond {
+		t.Errorf("barrier calls must not overlap: elapsed %v (want ≥ 200ms)", elapsed)
 	}
 }
 
 // TestExecuteToolCalls_PerToolTimeout verifies that a tool whose execution exceeds
-// toolTimeout is cancelled, returns a timeout error result, and other tools in the
-// same batch are unaffected.
+// toolTimeout is cancelled and returns a timeout error result. Under the
+// barrier model (ADR-0062) the failed bash call also cancels the rest of the
+// batch, so the second call is skipped rather than run.
 func TestExecuteToolCalls_PerToolTimeout(t *testing.T) {
 	a := &Agent{
 		skipPerms:   true,
@@ -53,7 +54,7 @@ func TestExecuteToolCalls_PerToolTimeout(t *testing.T) {
 	tcs := []toolCall{
 		// This one will time out (sleep 5 s >> 50 ms timeout).
 		{ID: "slow", Function: toolCallFunction{Name: "bash", Arguments: `{"command":"sleep 5"}`}},
-		// This one completes immediately.
+		// Never runs: cancelled with the failing barrier above.
 		{ID: "fast", Function: toolCallFunction{Name: "bash", Arguments: `{"command":"echo fast"}`}},
 	}
 
@@ -80,8 +81,8 @@ func TestExecuteToolCalls_PerToolTimeout(t *testing.T) {
 	if !strings.Contains(slowResult, "timed out") {
 		t.Errorf("slow tool: expected timeout error, got %q", slowResult)
 	}
-	if !strings.Contains(fastResult, "fast") {
-		t.Errorf("fast tool: expected 'fast' in output, got %q", fastResult)
+	if !strings.Contains(fastResult, "skipped") || !strings.Contains(fastResult, "cancelled") {
+		t.Errorf("fast tool: expected a skipped/cancelled result, got %q", fastResult)
 	}
 }
 

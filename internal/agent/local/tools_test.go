@@ -111,17 +111,39 @@ func TestReadFile_OffsetAndLimit(t *testing.T) {
 	f := filepath.Join(dir, "sample.txt")
 	os.WriteFile(f, []byte("a\nb\nc\nd\ne\n"), 0o600)
 
-	// offset=1 skips line index 0 ("a"); limit=2 returns lines at index 1,2 ("b","c")
-	// line numbers are 1-based from offset: index 1 → number 2, index 2 → number 3
-	result, _ := dispatchTool(context.Background(), "read_file", `{"path":"`+f+`","offset":1,"limit":2}`, nil, nil, memory.ConsumerAll, "", nil)
+	// offset is a 1-based line number matching the output numbering:
+	// offset=2 starts at line "b"; limit=2 returns "b","c".
+	result, _ := dispatchTool(context.Background(), "read_file", `{"path":"`+f+`","offset":2,"limit":2}`, nil, nil, memory.ConsumerAll, "", nil)
 	if strings.Contains(result, `1\ta`) {
-		t.Error("offset=1 should skip first line")
+		t.Error("offset=2 should not include line 1")
 	}
 	if !strings.Contains(result, `2\tb`) {
-		t.Errorf("expected line b at position 2, got %q", result)
+		t.Errorf("expected line b numbered 2, got %q", result)
 	}
 	if strings.Contains(result, `4\td`) {
 		t.Error("limit=2 should stop before line d")
+	}
+}
+
+// TestReadFile_OffsetIsOneBased is the B4 regression guard: a model that sees
+// line N numbered N and requests offset=N must get line N (the old 0-based
+// offset skipped it), and offset=1/0 reads from the top.
+func TestReadFile_OffsetIsOneBased(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "sample.txt")
+	os.WriteFile(f, []byte("a\nb\nc\n"), 0o600)
+
+	for _, tc := range []struct{ offset, want string }{
+		{`,"offset":1`, `1\ta`},
+		{`,"offset":2`, `2\tb`},
+		{`,"offset":3`, `3\tc`},
+		{`,"offset":0`, `1\ta`},
+		{``, `1\ta`},
+	} {
+		result, _ := dispatchTool(context.Background(), "read_file", `{"path":"`+f+`"`+tc.offset+`}`, nil, nil, memory.ConsumerAll, "", nil)
+		if !strings.Contains(result, tc.want) {
+			t.Errorf("offset spec %q: expected %q in %q", tc.offset, tc.want, result)
+		}
 	}
 }
 

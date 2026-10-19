@@ -12,8 +12,8 @@ The primary agent (HTTP or Bedrock backends) has these tools available with no c
 |---|---|---|
 | `bash(command)` | `command string` | stdout, stderr, exit_code |
 | `find_files(path, pattern)` | root dir + glob (e.g. `*_test.go`) | matching file paths — locate by filename; use `grep` for contents |
-| `grep(pattern, path, recursive)` | pattern/path/bool | matches — searches file contents; use `find_files` for filenames |
-| `read_file(path, offset, limit)` | path + optional range | content |
+| `grep(pattern, path, recursive)` | pattern/path/bool | matches — searches file contents (extended regex, e.g. `foo\|bar`); use `find_files` for filenames |
+| `read_file(path, offset, limit)` | path + optional range (`offset` is a 1-based line number matching the output numbering) | content |
 | `write_file(path, content)` | — | ok — creates parent directories; expands `~` |
 | `edit_file(path, old_string, new_string, replace_all)` | — | ok — exact-string replacement; rejects ambiguous matches unless `replace_all=true` |
 | `delete_file(path)` | — | ok — permission-gated |
@@ -226,14 +226,19 @@ The MCP client emits to `~/.milk/otel/`:
 
 ---
 
-## Concurrent tool dispatch
+## Tool batch dispatch (barrier model)
 
-When an agent emits a batch of tool calls in a single turn, all tools in the batch run **concurrently**, each in its own goroutine:
+When an agent emits a batch of tool calls in a single turn, milk executes it in **call order** under a barrier model ([ADR-0062](../adr/0062-tool-batch-barrier-dispatch.md)):
 
+- **Pure reads run concurrently** — a maximal run of consecutive read-only calls (`read_file`, `list_dir`, `grep`, `find_files`, `get_memory`, `list_memory`, `get_session_context`, `get_context_stats`, `get_metrics`, `search_signals`, `list_tasks`, `milk_config_help`) overlaps within the run.
+- **Everything else is a barrier** — writes, `bash`, `http_get`/`http_request`, memory writes, orchestration (`spawn_background_agent`, `start_workflow`, agent-as-tool, MCP tools) execute alone, in order. A `bash "go build"` in the same batch as an `edit_file` always sees the edited file.
+- **A failed mutating barrier cancels the rest of the batch** — after `bash`/`write_file`/`edit_file`/`delete_file`/`move_file` fails (error result, or non-zero exit for bash), the remaining calls are skipped with an explanatory result instead of running against state that never materialised. A failed read cancels nothing.
 - **Cancellation propagates immediately** — Ctrl-C or `/stop` cancels every in-flight tool goroutine; none wait for the turn timeout.
-- **Per-tool timeout** — each tool gets its own timeout; a hung tool is cancelled without affecting the rest of the batch.
+- **Per-tool timeout** — each tool gets its own timeout; a hung tool is cancelled without affecting earlier results in the batch.
 - **Result order preserved** — results are appended to history in original call order, regardless of finish order.
 - **Permission checks are synchronous** — run before dispatch so the TUI presents prompts in order without interleaving.
+
+Relative paths and shell commands resolve against the **session working directory** (`session/new`'s `cwd` over ACP), not the process working directory — the two differ whenever milk runs headless for a project it wasn't started in.
 
 ```json
 {

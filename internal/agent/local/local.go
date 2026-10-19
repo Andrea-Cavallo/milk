@@ -2023,14 +2023,14 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		// call with identical arguments is unambiguous evidence of a stuck
 		// loop in any calling context — unlike the reasoning-based detectors
 		// below, it has no legitimate cross-pass false-positive case.
-		// Read-only tools (read_file, list_dir, grep, glob) are excluded from
+		// Read-only tools (read_file, list_dir, grep) are excluded from
 		// duplicate detection — re-reading is always legitimate (read-edit-verify,
 		// cross-referencing, context refresh). Only write/mutate tools are tracked.
 		allSeen := true
 		hasWriteTool := false
 		for _, tc := range toolCalls {
 			switch tc.Function.Name {
-			case "read_file", "list_dir", "grep", "glob", "current_need":
+			case "read_file", "list_dir", "grep", "current_need":
 				continue
 			}
 			hasWriteTool = true
@@ -2065,7 +2065,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			// (read-edit-verify pattern, cross-referencing, etc.). Only
 			// track write/mutate tools for duplicate detection.
 			switch tc.Function.Name {
-			case "read_file", "list_dir", "grep", "glob", "current_need":
+			case "read_file", "list_dir", "grep", "current_need":
 				continue
 			}
 			executedKeys[tc.Function.Name+"\x00"+tc.Function.Arguments] = true
@@ -2718,20 +2718,12 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 		}
 	}
 
-	// Dispatch all tool calls concurrently. Results are stored in order via a
-	// pre-sized slice so messages are appended in the original call order.
-	outcomes := make([]toolCallOutcome, len(toolCalls))
-	var wg sync.WaitGroup
-	for i, tc := range toolCalls {
-		a.noteToolUsed(tc.Function.Name) // feeds the prune layer (issue #236)
-		wg.Add(1)
-		go func(i int, tc toolCall) {
-			defer wg.Done()
-			outcome := a.dispatchOneTool(ctx, tc, i, denied[i], userPrompt, out, sess, mem, pendingImages)
-			outcomes[i] = outcome
-		}(i, tc)
-	}
-	wg.Wait()
+	// Dispatch the batch under the barrier model (ADR-0062): consecutive
+	// pure-read calls run concurrently, every other call is a barrier executed
+	// in order, and a failed mutating barrier (write/bash) cancels the rest of
+	// the batch. Results are stored in order via a pre-sized slice so messages
+	// are appended in the original call order.
+	outcomes := a.dispatchBatch(ctx, toolCalls, denied, userPrompt, out, sess, mem, pendingImages)
 
 	if a.onToolResult != nil {
 		for i, tc := range toolCalls {
@@ -2790,6 +2782,94 @@ Action streak detected: %s. You are stuck in a non-progressing loop. Stop and tr
 		}
 	}
 	return msgs, nil
+}
+
+// isParallelSafeTool reports whether a tool call is pure-read and therefore
+// safe to run concurrently with other reads in the same batch (ADR-0062).
+// Anything not listed here — writes, shell, network, orchestration, memory
+// writes, MCP tools — is a barrier executed alone, in order.
+func isParallelSafeTool(name string) bool {
+	switch name {
+	case "read_file", "list_dir", "grep", "find_files",
+		"get_memory", "list_memory", "get_session_context", "get_context_stats",
+		"get_metrics", "search_signals", "list_tasks", "milk_config_help":
+		return true
+	}
+	return false
+}
+
+// isCancellingTool reports whether a failed call aborts the rest of the batch
+// (ADR-0062): after a failed write or shell command, later calls would build
+// on state that never materialised, so they are skipped with an explanatory
+// result instead of running against the wrong world.
+func isCancellingTool(name string) bool {
+	switch name {
+	case "bash", "write_file", "edit_file", "delete_file", "move_file":
+		return true
+	}
+	return false
+}
+
+// toolCallFailed reports whether a mutating tool call failed: an error result,
+// or (for bash) a non-zero exit code. grep's "no matches" exit code 1 is
+// deliberately not covered — grep is a read and never a cancelling barrier.
+func toolCallFailed(name, result string) bool {
+	if isToolError(result) {
+		return true
+	}
+	if name == "bash" {
+		var r toolResult
+		if json.Unmarshal([]byte(result), &r) == nil {
+			return r.ExitCode != 0
+		}
+	}
+	return false
+}
+
+// dispatchBatch executes a batch of tool calls under the barrier model
+// (ADR-0062). Consecutive parallel-safe reads run concurrently; every other
+// call is a barrier executed alone and in order; a failed mutating barrier
+// cancels the remaining calls. Outcomes land at their original index so the
+// caller's message order is preserved.
+func (a *Agent) dispatchBatch(ctx context.Context, toolCalls []toolCall, denied []string, userPrompt string, out io.Writer, sess *session.Session, mem *memory.Store, pendingImages []ContentPart) []toolCallOutcome {
+	outcomes := make([]toolCallOutcome, len(toolCalls))
+	i := 0
+	for i < len(toolCalls) {
+		// Collect a run of consecutive pure-read calls and run them together.
+		j := i
+		for j < len(toolCalls) && isParallelSafeTool(toolCalls[j].Function.Name) {
+			j++
+		}
+		if j > i {
+			var wg sync.WaitGroup
+			for k := i; k < j; k++ {
+				a.noteToolUsed(toolCalls[k].Function.Name) // feeds the prune layer (issue #236)
+				wg.Add(1)
+				go func(k int) {
+					defer wg.Done()
+					outcomes[k] = a.dispatchOneTool(ctx, toolCalls[k], k, denied[k], userPrompt, out, sess, mem, pendingImages)
+				}(k)
+			}
+			wg.Wait()
+			i = j
+			if i >= len(toolCalls) {
+				break
+			}
+		}
+		// Barrier call: executed alone, in order.
+		tc := toolCalls[i]
+		a.noteToolUsed(tc.Function.Name)
+		outcomes[i] = a.dispatchOneTool(ctx, tc, i, denied[i], userPrompt, out, sess, mem, pendingImages)
+		if isCancellingTool(tc.Function.Name) && toolCallFailed(tc.Function.Name, outcomes[i].msg.Content) {
+			skip := toolResult{Error: fmt.Sprintf("skipped: %s failed earlier in this batch, so this call was cancelled", tc.Function.Name)}.String()
+			for k := i + 1; k < len(toolCalls); k++ {
+				outcomes[k] = toolCallOutcome{msg: Message{Role: "tool", Content: skip, ToolCallID: toolCalls[k].ID}}
+			}
+			break
+		}
+		i++
+	}
+	return outcomes
 }
 
 // dispatchOneTool executes a single tool call and returns its outcome.
@@ -2956,6 +3036,9 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 			Path string `json:"path"`
 		}
 		json.Unmarshal([]byte(tc.Function.Arguments), &openArgs) //nolint:errcheck
+		if sess != nil {
+			openArgs.Path = resolvePath(openArgs.Path, sess.CWD)
+		}
 		if a.onOpenFile == nil {
 			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: "open_file is only available in interactive (TUI) mode"}.String(), ToolCallID: tc.ID}}
 		}
@@ -3175,7 +3258,7 @@ func resetExecutedKeysAfterMutation(executedKeys map[string]bool, toolCalls []to
 	mutated := false
 	for _, tc := range toolCalls {
 		switch tc.Function.Name {
-		case "edit_file", "write_file", "delete_file", "move_file", "apply_patch":
+		case "edit_file", "write_file", "delete_file", "move_file":
 			mutated = true
 		}
 	}
@@ -3185,7 +3268,7 @@ func resetExecutedKeysAfterMutation(executedKeys map[string]bool, toolCalls []to
 	clear(executedKeys)
 	for _, tc := range toolCalls {
 		switch tc.Function.Name {
-		case "read_file", "list_dir", "grep", "glob", "current_need":
+		case "read_file", "list_dir", "grep", "current_need":
 			continue
 		}
 		executedKeys[tc.Function.Name+"\x00"+tc.Function.Arguments] = true
@@ -3201,7 +3284,7 @@ func invalidateReadsForEditedFiles(executedKeys map[string]bool, toolCalls []too
 	editedPaths := map[string]bool{}
 	for _, tc := range toolCalls {
 		switch tc.Function.Name {
-		case "edit_file", "write_file", "apply_patch":
+		case "edit_file", "write_file":
 			var args struct {
 				Path string `json:"path"`
 			}
