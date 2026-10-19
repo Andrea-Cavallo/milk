@@ -629,6 +629,11 @@ type Agent struct {
 	// drain time under "<role>:subagent" (recording at both levels
 	// double-counted and mis-tagged them as the parent role).
 	jobID string
+	// bgInbox receives follow-up input delivered to a running background job
+	// (send_background_agent — issue #250); runToolLoop drains it at
+	// iteration boundaries and injects each message as a user message. nil
+	// everywhere except a background-job clone.
+	bgInbox chan string
 }
 
 // TryBestRecorder is the interface for the try-best loop detector.
@@ -1689,7 +1694,8 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		tools = append(tools, a.mcpToolSet.Schemas(ctx)...)
 	}
 	if a.backgroundManager != nil {
-		tools = append(tools, spawnBackgroundAgentSchema(a.backgroundPeerNames()), cancelBackgroundAgentSchema())
+		tools = append(tools, spawnBackgroundAgentSchema(a.backgroundPeerNames()), cancelBackgroundAgentSchema(),
+			statusBackgroundAgentSchema(), waitBackgroundAgentSchema(), sendBackgroundAgentSchema())
 	}
 
 	// Assemble the system prompt from its components (sysPromptBuilder) so
@@ -1813,6 +1819,12 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		maxIter = defaultMaxToolIterations
 	}
 	for i := 0; i < maxIter; i++ {
+		// Follow-up input delivered to a running background job (issue #250,
+		// send_background_agent): drained at iteration boundaries and
+		// injected as user messages, so a job can react mid-task — "fix the
+		// green ball" without respawning. nil (every non-job loop) skips.
+		msgs = drainFollowups(msgs, a.bgInbox)
+
 		if i == maxIter-1 && !a.workflowRole {
 			// Last allowed iteration: force a real closing summary instead of
 			// silently exhausting the budget. Without this, every max-iteration
@@ -2226,6 +2238,95 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	return msgs, nil
 }
 
+// drainFollowups appends any follow-up input queued for a running background
+// job (send_background_agent — issue #250) to msgs as user messages, one per
+// queued item, in delivery order. A nil inbox (every loop except a
+// background-job clone) is a no-op.
+func drainFollowups(msgs []Message, inbox chan string) []Message {
+	for inbox != nil {
+		select {
+		case follow := <-inbox:
+			msgs = append(msgs, Message{Role: "user", Content: backgroundFollowupPrefix + follow})
+		default:
+			return msgs
+		}
+	}
+	return msgs
+}
+
+// backgroundFollowupPrefix marks a send_background_agent message when it is
+// injected into a running job's conversation (issue #250), so the model
+// reads it as new input from outside — not as its own output or the
+// original task.
+const backgroundFollowupPrefix = "[Follow-up input from the user (send_background_agent) — factor it into your work on the task]\n"
+
+// wait_background_agent's timeout bounds (issue #250): a default that fits
+// the "genuinely blocked, nothing else to do" case and a hard cap well under
+// the job timeout — waiting is not how a job's result is normally consumed.
+const (
+	defaultWaitBackgroundAgentTimeout = 60 * time.Second
+	maxWaitBackgroundAgentTimeout     = 10 * time.Minute
+)
+
+// describeBackgroundJobs renders status_background_agent's output: one
+// job's full detail when id is non-empty (ErrJobUnknown otherwise), else a
+// one-line-per-job listing. Results are shown in full for the detail view
+// (oversized tool results spill to a file like everywhere else) and
+// snippeted for the listing.
+func (a *Agent) describeBackgroundJobs(id string) (string, error) {
+	mgr := a.backgroundManager
+	if id != "" {
+		job, ok := mgr.Job(id)
+		if !ok {
+			return "", ErrJobUnknown
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s [%s] %q\n", job.ID, job.Status, job.Label)
+		fmt.Fprintf(&b, "task: %s\n", truncateRunes(job.Task, 500))
+		if job.Status == JobRunning {
+			fmt.Fprintf(&b, "running for %s\n", time.Since(job.StartedAt).Round(time.Second))
+		} else {
+			dur := ""
+			if !job.EndedAt.IsZero() {
+				dur = fmt.Sprintf(" after %s", job.EndedAt.Sub(job.StartedAt).Round(time.Second))
+			}
+			fmt.Fprintf(&b, "%s%s\n", job.Status, dur)
+		}
+		if job.Err != nil {
+			fmt.Fprintf(&b, "error: %v\n", job.Err)
+		}
+		switch {
+		case job.Result != "":
+			fmt.Fprintf(&b, "result:\n%s", job.Result)
+		case job.Status == JobRunning:
+			b.WriteString("result: (not finished)\n")
+		}
+		return b.String(), nil
+	}
+	jobs := mgr.Jobs()
+	if len(jobs) == 0 {
+		return "no background agent jobs yet — spawn one with spawn_background_agent", nil
+	}
+	var b strings.Builder
+	for _, job := range jobs {
+		line := fmt.Sprintf("%s [%s] %q", job.ID, job.Status, job.Label)
+		if job.Status == JobRunning {
+			line += fmt.Sprintf(" — running for %s", time.Since(job.StartedAt).Round(time.Second))
+		} else {
+			snippet := truncateRunes(strings.TrimSpace(job.Result), 160)
+			if job.Err != nil {
+				snippet = truncateRunes(job.Err.Error(), 160)
+			}
+			if snippet != "" {
+				line += " — " + snippet
+			}
+		}
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("(status_background_agent with a job_id shows one job in full)")
+	return b.String(), nil
+}
+
 // backgroundSystemPrompt returns the system prompt for a background job
 // spawned via spawn_background_agent (ADR-0043): a scoped, self-contained
 // research task with no awareness of any parent conversation. hasMemoryTools
@@ -2290,9 +2391,9 @@ func ParseBackgroundResult(raw string) (text, status, filesTouched string) {
 // A retried attempt writes into the same out as the attempt(s) before it, so
 // an attached viewer sees the retry happen rather than losing the earlier
 // output — that's intentional, not an oversight.
-func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer, mem *memory.Store) (string, session.TokenUsage, error) {
+func (a *Agent) runBackgroundTaskWithRetry(ctx context.Context, jobID string, inbox chan string, cwd, task, contextSummary string, out io.Writer, mem *memory.Store) (string, session.TokenUsage, error) {
 	return retryBackgroundTask(ctx, jobID, a.model, func() (string, session.TokenUsage, error) {
-		return a.RunBackgroundTask(ctx, jobID, cwd, task, contextSummary, out, mem)
+		return a.RunBackgroundTask(ctx, jobID, inbox, cwd, task, contextSummary, out, mem)
 	})
 }
 
@@ -2339,7 +2440,7 @@ func retryBackgroundTask(ctx context.Context, jobID, model string, fn func() (st
 // docs/internal/analysis/prompt-context-management-review.md §9.3: this is inspired by that
 // mechanism, scoped down to fit milk's existing isolation-by-default safety
 // posture rather than a port of it.
-func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, contextSummary string, out io.Writer, mem *memory.Store) (string, session.TokenUsage, error) {
+func (a *Agent) RunBackgroundTask(ctx context.Context, jobID string, inbox chan string, cwd, task, contextSummary string, out io.Writer, mem *memory.Store) (string, session.TokenUsage, error) {
 	// Operate on an isolated clone, not a directly. A background job is
 	// spawned into its own goroutine (see Manager.Spawn) and can easily
 	// still be running when the parent agent starts its very next turn on
@@ -2356,6 +2457,9 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID, cwd, task, context
 	// job's requests can be reconstructed from milk.log without guessing
 	// which of several concurrent jobs produced them.
 	bg.jobID = jobID
+	// Follow-up input for this job (send_background_agent — issue #250) is
+	// drained by the tool loop at iteration boundaries.
+	bg.bgInbox = inbox
 	if ask := a.bgPermAsk; ask != nil {
 		bg.permAsk = func(tool, summary string) bool { return ask(jobID, tool, summary) }
 	}
@@ -3067,10 +3171,81 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 		role := agentRoleForMetrics(a.escalationName)
 		job := a.backgroundManager.Spawn(args.Label, args.Task, role, runnerModel,
 			func(jobCtx context.Context, jobID string, jobOut io.Writer) (string, session.TokenUsage, error) {
-				return runner.runBackgroundTaskWithRetry(jobCtx, jobID, cwd, args.Task, contextSummary, jobOut, mem)
+				return runner.runBackgroundTaskWithRetry(jobCtx, jobID, a.backgroundManager.Inbox(jobID), cwd, args.Task, contextSummary, jobOut, mem)
 			})
 		result := toolResult{Output: fmt.Sprintf("Spawned background agent %s%s (%q). You will be notified when it completes.", job.ID, onWhom, args.Label)}.String()
 		return toolCallOutcome{msg: Message{Role: "tool", Content: result, ToolCallID: tc.ID}}
+	}
+
+	// status/wait/send_background_agent (issue #250): the rest of the
+	// spawn_background_agent lifecycle toolkit — checking on a job, blocking
+	// on its result, delivering follow-up input. Gated identically to
+	// spawn/cancel (schema only when a.backgroundManager is set, never in a
+	// background job's own tool list).
+	if tc.Function.Name == "status_background_agent" && a.backgroundManager != nil {
+		var args struct {
+			JobID string `json:"job_id"`
+		}
+		json.Unmarshal([]byte(tc.Function.Arguments), &args) //nolint:errcheck
+		out, err := a.describeBackgroundJobs(args.JobID)
+		if err != nil {
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: err.Error()}.String(), ToolCallID: tc.ID}}
+		}
+		return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Output: out}.String(), ToolCallID: tc.ID}}
+	}
+
+	if tc.Function.Name == "wait_background_agent" && a.backgroundManager != nil {
+		var args struct {
+			JobID       string  `json:"job_id"`
+			TimeoutSecs float64 `json:"timeout_secs"`
+		}
+		json.Unmarshal([]byte(tc.Function.Arguments), &args) //nolint:errcheck
+		d := time.Duration(args.TimeoutSecs * float64(time.Second))
+		if args.TimeoutSecs <= 0 {
+			d = defaultWaitBackgroundAgentTimeout
+		}
+		if d > maxWaitBackgroundAgentTimeout {
+			d = maxWaitBackgroundAgentTimeout
+		}
+		wctx, cancelWait := context.WithTimeout(toolCtx, d)
+		job, err := a.backgroundManager.Wait(wctx, args.JobID)
+		cancelWait()
+		switch {
+		case err != nil:
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: err.Error()}.String(), ToolCallID: tc.ID}}
+		case job.Status == JobRunning:
+			out := fmt.Sprintf("Background agent %s (%q) is still running after %s. Do not call wait_background_agent again immediately — you will be notified when it completes; carry on with other work meanwhile.", job.ID, job.Label, d)
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Output: out}.String(), ToolCallID: tc.ID}}
+		case job.Err != nil:
+			msg := fmt.Sprintf("background agent %s (%q) failed: %v", job.ID, job.Label, job.Err)
+			if job.Result != "" {
+				msg += "\npartial result before the failure:\n" + job.Result
+			}
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: msg}.String(), ToolCallID: tc.ID}}
+		default:
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Output: job.Result}.String(), ToolCallID: tc.ID}}
+		}
+	}
+
+	if tc.Function.Name == "send_background_agent" && a.backgroundManager != nil {
+		var args struct {
+			JobID   string `json:"job_id"`
+			Message string `json:"message"`
+		}
+		json.Unmarshal([]byte(tc.Function.Arguments), &args) //nolint:errcheck
+		if strings.TrimSpace(args.Message) == "" {
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: "message must not be empty"}.String(), ToolCallID: tc.ID}}
+		}
+		switch err := a.backgroundManager.Send(args.JobID, args.Message); {
+		case err == nil:
+			out := fmt.Sprintf("Delivered your input to background agent %s. It reaches the job at its next step; you do not need to repeat it.", args.JobID)
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Output: out}.String(), ToolCallID: tc.ID}}
+		case errors.Is(err, ErrJobFinished):
+			msg := fmt.Sprintf("background agent %s has already finished — input cannot be delivered. If it needs the correction, spawn a new job with spawn_background_agent.", args.JobID)
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: msg}.String(), ToolCallID: tc.ID}}
+		default:
+			return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: err.Error()}.String(), ToolCallID: tc.ID}}
+		}
 	}
 
 	// cancel_background_agent: the model-facing counterpart to the human-only

@@ -64,6 +64,13 @@ type Job struct {
 	// Snapshot (the UI goroutine). Excluded from jobstore.go's persisted
 	// jobRecord automatically, since that type lists its fields explicitly.
 	Live *livebuf.Buffer
+	// inbox receives follow-up input delivered by send_background_agent
+	// (issue #250); the job's own tool loop drains it at iteration
+	// boundaries and injects each message as an extra user message. Created
+	// in Spawn, never reassigned. done is closed once the job reaches its
+	// terminal state (finish), so Wait can block on it.
+	inbox chan string
+	done  chan struct{}
 }
 
 // JobRun is the body of a background job. jobID is the Manager-assigned ID
@@ -241,6 +248,8 @@ func (m *Manager) Spawn(label, task, role, model string, run JobRun) *Job {
 		LastAliveAt: time.Now(),
 		Live:        livebuf.New(0),
 		stateFile:   m.stateFile,
+		inbox:       make(chan string, jobInboxSize),
+		done:        make(chan struct{}),
 	}
 	m.jobs[job.ID] = job
 	m.persistLocked()
@@ -398,6 +407,9 @@ func (m *Manager) finish(job *Job, result string, tokens session.TokenUsage, err
 	} else {
 		job.Status = JobCompleted
 	}
+	// Terminal transition — exactly one per job (finish runs once: from the
+	// job's goroutine or its queue-drop path, never both). Unblocks Wait.
+	close(job.done)
 	m.persistLocked()
 	m.pending = append(m.pending, job)
 	onDone := m.onDone
@@ -521,4 +533,84 @@ func (m *Manager) Cancel(id string) bool {
 	}
 	cancel()
 	return true
+}
+
+// jobInboxSize bounds how many follow-up messages (send_background_agent)
+// may queue for one job before Send starts refusing — a running job drains
+// one message per tool-loop iteration, so this is deliberately small.
+const jobInboxSize = 8
+
+// Sentinel errors for the follow-up-input and wait seams (issue #250) —
+// returned verbatim to the model so it can tell unknown-ID from
+// already-finished from a full queue.
+var (
+	ErrJobUnknown   = errors.New("no background agent job with that ID")
+	ErrJobFinished  = errors.New("background agent job already finished")
+	ErrJobInboxFull = errors.New("job input queue is full (the job has not consumed earlier input yet)")
+)
+
+// Inbox returns the job's follow-up-input channel (send_background_agent —
+// issue #250), consumed by the job's own tool loop at iteration boundaries.
+// nil when the ID is unknown.
+func (m *Manager) Inbox(id string) chan string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if job, ok := m.jobs[id]; ok {
+		return job.inbox
+	}
+	return nil
+}
+
+// Send queues follow-up input for a running job (issue #250). The input is
+// delivered as an extra user message at the job's next tool-loop iteration.
+// ErrJobUnknown, ErrJobFinished or ErrJobInboxFull report why delivery could
+// not be queued; a message queued just as the job winds down may still be
+// lost (delivery is best-effort, like the rest of the job plumbing).
+func (m *Manager) Send(id, msg string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.jobs[id]
+	if !ok {
+		return ErrJobUnknown
+	}
+	if job.Status != JobRunning {
+		return ErrJobFinished
+	}
+	select {
+	case job.inbox <- msg:
+		return nil
+	default:
+		return ErrJobInboxFull
+	}
+}
+
+// Job returns a snapshot of the named job. ok is false for unknown IDs.
+func (m *Manager) Job(id string) (Job, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.jobs[id]
+	if !ok {
+		return Job{}, false
+	}
+	return *job, true
+}
+
+// Wait blocks until the job reaches its terminal state or ctx ends, and
+// returns a snapshot either way — the caller compares Status to tell
+// "finished" from "still running" (a cancelled Wait is not a failure).
+// ErrJobUnknown for IDs this Manager never spawned.
+func (m *Manager) Wait(ctx context.Context, id string) (Job, error) {
+	m.mu.Lock()
+	job, ok := m.jobs[id]
+	m.mu.Unlock()
+	if !ok {
+		return Job{}, ErrJobUnknown
+	}
+	select {
+	case <-job.done:
+	case <-ctx.Done():
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return *job, nil
 }

@@ -186,9 +186,14 @@ func parseBgStartArgs(arg string) (agent, task string, err error) {
 
 // userJobRunner builds the spawn body both hosts pass to Manager.Spawn for a
 // user-started job: fork the planned agent on the task text, persisting
-// through the session's memory store.
-func userJobRunner(agent *local.Agent, cwd, task string, mem *memory.Store) func(context.Context, string, io.Writer) (string, session.TokenUsage, error) {
+// through the session's memory store. mgr supplies the job's follow-up-input
+// channel (send_background_agent — issue #250); it may be nil.
+func userJobRunner(agent *local.Agent, mgr *local.Manager, cwd, task string, mem *memory.Store) func(context.Context, string, io.Writer) (string, session.TokenUsage, error) {
 	return func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
-		return agent.RunBackgroundTask(ctx, jobID, cwd, task, "", out, mem)
+		var inbox chan string
+		if mgr != nil {
+			inbox = mgr.Inbox(jobID)
+		}
+		return agent.RunBackgroundTask(ctx, jobID, inbox, cwd, task, "", out, mem)
 	}
 }
