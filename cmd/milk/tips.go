@@ -61,7 +61,7 @@ var curatedTips = []string{
 	`Start a line with {!} to run a shell command directly, e.g. {!git status}`,
 	`{Ctrl+R} searches your input history — {Ctrl+S} searches forward`,
 	`{F1}–{F4} toggle the memory / tasks / background / workflow panels (same as {/panel <name>})`,
-	`{/think on} streams the model's reasoning — {Ctrl+T} toggles it live`,
+	`{/think view} shows the model's reasoning on its own — {Ctrl+T} toggles the last thinking block`,
 	`{/escalate <msg>} forces one turn to the escalation agent — bare {/escalate} pins every turn`,
 	`{/learn <fact>} stores a persistent memory — {/memory} lists them, {/forget} deletes one`,
 	`{/bg start <task>} runs a background agent — {Ctrl+Enter} while a turn runs starts one too`,

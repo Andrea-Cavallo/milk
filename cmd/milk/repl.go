@@ -728,9 +728,6 @@ type model struct {
 	// blocks begin — reasoningPromotedMsg drops from here when the streamed
 	// reasoning is promoted to the turn's answer.
 	thinkBlocksTurnStart int
-	// showThinking controls whether reasoning is inspectable in the viewport
-	// (fold containers vs one-line placeholders) — /think on|off, Ctrl+T.
-	showThinking bool
 
 	// showTips toggles the idle tip line below the input (ADR-0061, /tips).
 	// Defaults on (config show_tips); the line's row is reserved while it is
@@ -1205,7 +1202,6 @@ func newModel(ctx context.Context, st *interactiveState, rtr *router.Router, age
 		transcript:          &strings.Builder{},
 		currentTurnThinking: &strings.Builder{},
 		searchQuery:         &strings.Builder{},
-		showThinking:        st.cfg.ShowReasoningDefault(),
 		showTips:            st.cfg.ShowTipsEnabled(),
 		mem:                 mem,
 		panelMemory:         true,
@@ -2044,7 +2040,7 @@ func (m *model) welcomeScreen() string {
 			dim("type a message and press Enter to start"),
 			"",
 			dim("routing: "+primaryName+" ↔ "+escName+"  ·  /escalate to pin  ·  /primary to unpin"),
-			dim("/need — set current goal  ·  F1-F4 — memory/tasks/agents/workflow panels  ·  /think on — reasoning tokens"),
+			dim("/need — set current goal  ·  F1-F4 — memory/tasks/agents/workflow panels  ·  /think view — reasoning stream"),
 			dim("/config — view config  ·  /config init — reconfigure  ·  /config open — edit in $EDITOR"),
 			dim("--new — fresh session  ·  --resume — resume last session  ·  /help for all commands"),
 		)
@@ -2512,7 +2508,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case workflowThinkChunkMsg:
-		if m.workflowState != nil && m.showThinking {
+		// Reasoning is consumed into the workflow's own live buffer like every
+		// other workflow output — the fold state of transcript think blocks and
+		// the ACP thought-relay toggle are both independent of this (ADR-0067).
+		if m.workflowState != nil {
 			m.workflowState.LiveBuffer().Append([]byte(dim(msg.text)))
 			if m.attached != nil && m.attached.kind == attachWorkflow {
 				m.syncAttachedContent()
@@ -3243,8 +3242,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleTabKey(dir), nil
 	case "ctrl+t":
-		m = m.toggleThinking()
-		return m, nil
+		return m.toggleLastThinkBlock(), nil
 	case "pgup", "ctrl+u":
 		m.vp.HalfPageUp()
 		return m, nil

@@ -34,7 +34,6 @@ func TestRetractStreamed_FallsBackToNoteWhenNotFound(t *testing.T) {
 
 func TestRetractStreamed_AdjustsThinkBlockAnchors(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = true
 	m.transcript.WriteString("AAA" + rawToolMarkup + "BBB")
 	// One block anchored at the transcript end (opened after all text), one
 	// anchored before the markup (inside the soon-to-be-replaced region is

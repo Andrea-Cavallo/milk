@@ -224,22 +224,21 @@ func TestWorkflowDisplaySend_RoutesAwayFromMainTranscript(t *testing.T) {
 }
 
 func TestWorkflowThinkChunk_StaysOutOfMainTranscript(t *testing.T) {
-	for _, show := range []bool{true, false} {
-		m := testModel()
-		m.showThinking = show
-		m.currentTurnThinking = &strings.Builder{}
-		m.workflowState = &workflow.State{WorkflowName: "swarm"}
-		newM, _ := m.Update(workflowThinkChunkMsg{text: "pondering"})
-		nm := newM.(model)
+	m := testModel()
+	m.currentTurnThinking = &strings.Builder{}
+	m.workflowState = &workflow.State{WorkflowName: "swarm"}
+	newM, _ := m.Update(workflowThinkChunkMsg{text: "pondering"})
+	nm := newM.(model)
 
-		if nm.transcript.Len() != 0 || len(nm.thinkBlocks) != 0 || nm.currentTurnThinking.Len() != 0 {
-			t.Errorf("showThinking=%v: workflow reasoning leaked into the main transcript", show)
-		}
-		if live := nm.workflowState.LiveBuffer().Snapshot(); show != strings.Contains(live, "pondering") {
-			t.Errorf("showThinking=%v: live buffer = %q", show, live)
-		}
-		if nm.lastWorkflowActivity.IsZero() {
-			t.Error("reasoning must count as workflow activity for the idle watchdog")
-		}
+	if nm.transcript.Len() != 0 || len(nm.thinkBlocks) != 0 || nm.currentTurnThinking.Len() != 0 {
+		t.Error("workflow reasoning leaked into the main transcript")
+	}
+	// Reasoning is consumed into the workflow's own live buffer like every
+	// other workflow output — always, independent of transcript fold state.
+	if live := nm.workflowState.LiveBuffer().Snapshot(); !strings.Contains(live, "pondering") {
+		t.Errorf("live buffer = %q", live)
+	}
+	if nm.lastWorkflowActivity.IsZero() {
+		t.Error("reasoning must count as workflow activity for the idle watchdog")
 	}
 }

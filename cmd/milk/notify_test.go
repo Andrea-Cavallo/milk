@@ -55,7 +55,7 @@ func newToastTestModel(t *testing.T) model {
 
 func TestNotify_RecordsHistoryTimestampAndVisible(t *testing.T) {
 	m := layoutTestModel(t, 120, 40)
-	m.notify("reasoning visibility: on", "/think off")
+	m.notify("memory panel opened", "/panel memory")
 
 	if len(m.toastHistory) != 1 {
 		t.Fatalf("history length = %d, want 1", len(m.toastHistory))
@@ -64,7 +64,7 @@ func TestNotify_RecordsHistoryTimestampAndVisible(t *testing.T) {
 	if ev.at.IsZero() {
 		t.Error("history entry must carry a timestamp")
 	}
-	if ev.text != "reasoning visibility: on" || ev.hint != "/think off" {
+	if ev.text != "memory panel opened" || ev.hint != "/panel memory" {
 		t.Errorf("history entry = %+v, want text/hint recorded", ev)
 	}
 	if len(m.toastVisible) != 1 {
@@ -562,26 +562,32 @@ func TestView_ToastOverlayPreservesPanelHeader(t *testing.T) {
 	}
 }
 
-// TestHandleThink_TogglesToastNotTranscript: the #162 exemplar emitter —
+// TestHandleThink_StateToastNotTranscript: the #162 exemplar emitter —
 // state changes are toasts, the bare query stays in the transcript.
-func TestHandleThink_TogglesToastNotTranscript(t *testing.T) {
+func TestHandleThink_StateToastNotTranscript(t *testing.T) {
 	m := layoutTestModel(t, 120, 40)
 
-	m2, _ := m.handleThinkCmd("on")
-	if !toastMentions(m2, "reasoning visibility: on") {
-		t.Errorf("expected a visibility toast, got %#v", m2.toastVisible)
+	m2, _ := m.handleThinkCmd("expand")
+	if !toastMentions(m2, "reasoning: all blocks expanded") {
+		t.Errorf("expected an expand toast, got %#v", m2.toastVisible)
 	}
-	if strings.Contains(m2.transcript.String(), "reasoning visibility") {
+	if strings.Contains(m2.transcript.String(), "all blocks expanded") {
 		t.Errorf("state change must not be appended to the transcript, got %q", m2.transcript.String())
 	}
 
 	// Bare query: explicit answer → transcript, no toast.
 	m3, _ := m2.handleThinkCmd("")
-	if !strings.Contains(m3.transcript.String(), "reasoning visibility") {
+	if !strings.Contains(m3.transcript.String(), "thinking block(s)") {
 		t.Errorf("bare /think must answer in the transcript, got %q", m3.transcript.String())
 	}
 	if len(m3.toastVisible) != len(m2.toastVisible) {
 		t.Errorf("bare /think must not toast, visible %d -> %d", len(m2.toastVisible), len(m3.toastVisible))
+	}
+
+	// /think on|off are gone — the answer says so instead of hiding anything.
+	m4, _ := m3.handleThinkCmd("off")
+	if !strings.Contains(m4.transcript.String(), "on|off are gone") {
+		t.Errorf("/think off must explain the removal, got %q", m4.transcript.String())
 	}
 }
 
@@ -627,12 +633,12 @@ func TestNotificationsCmd(t *testing.T) {
 	// Record two events, then view.
 	m = got
 	m.toastHistory = nil
-	m.notify("reasoning visibility: on", "/think off")
+	m.notify("memory panel opened", "/panel memory")
 	m.notify("config reloaded", "/config")
 	updated, _ = m.handleSlashInput("/notifications", "")
 	got = updated.(model)
 	out := got.transcript.String()
-	for _, want := range []string{"notification history", "reasoning visibility: on", "/think off", "config reloaded", "/config"} {
+	for _, want := range []string{"notification history", "memory panel opened", "/panel memory", "config reloaded", "/config"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("history output missing %q, got %q", want, out)
 		}
@@ -724,20 +730,26 @@ func TestNotificationsRegistration(t *testing.T) {
 	}
 }
 
-// TestToggleThinking_CtrlTPath: the Ctrl+T handler goes through
-// toggleThinking — same toast contract as /think on|off.
-func TestToggleThinking_CtrlTPath(t *testing.T) {
+// TestToggleLastThinkBlock_CtrlTPath: the Ctrl+T handler goes through
+// toggleLastThinkBlock — a per-block fold toggle, with a toast only where
+// there is no visible feedback (nothing to toggle).
+func TestToggleLastThinkBlock_CtrlTPath(t *testing.T) {
 	m := layoutTestModel(t, 120, 40)
-	m2 := m.toggleThinking()
-	if !toastMentions(m2, "reasoning visibility: on") {
-		t.Errorf("expected a toast from toggleThinking, got %#v", m2.toastVisible)
+	m2 := m.toggleLastThinkBlock()
+	if !toastMentions(m2, "no thinking blocks") {
+		t.Errorf("empty session must toast, got %#v", m2.toastVisible)
 	}
-	m3 := m2.toggleThinking()
-	if !toastMentions(m3, "reasoning visibility: off") {
-		t.Errorf("expected the off toast, got %#v", m3.toastVisible)
+	m3 := m2
+	m3.appendThinkingStreamed("a thought\n")
+	m4 := m3.toggleLastThinkBlock()
+	if len(m4.toastVisible) != len(m3.toastVisible) {
+		t.Errorf("toggling a block must not toast, visible %d -> %d", len(m3.toastVisible), len(m4.toastVisible))
 	}
-	if strings.Contains(m3.transcript.String(), "reasoning visibility") {
-		t.Errorf("toggle must not write to the transcript, got %q", m3.transcript.String())
+	if m4.thinkBlocks[0].expanded {
+		t.Error("Ctrl+T must fold the streaming block")
+	}
+	if strings.Contains(m4.transcript.String(), "reasoning") {
+		t.Errorf("toggle must not write to the transcript, got %q", m4.transcript.String())
 	}
 }
 

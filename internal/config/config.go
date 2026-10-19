@@ -1049,9 +1049,11 @@ type Config struct {
 	// AWSAuthRefresh enables AWS credential injection for the claude subprocess.
 	AWSAuthRefresh bool `json:"aws_auth_refresh,omitempty"`
 
-	// ShowReasoning controls whether thinking/reasoning tokens are visible in the
-	// transcript by default. Can be toggled live with /think on|off.
-	// false (default) = show "[thinking…]" placeholder; true = show reasoning.
+	// ShowReasoning is the default for the ACP `think` session option: whether
+	// thinking/reasoning tokens relay to ACP clients as agent_thought_chunk
+	// updates (and are replayed in ACP history). The TUI always renders
+	// reasoning as foldable think blocks (ADR-0067) — its fold state is
+	// independent of this field.
 	ShowReasoning *bool `json:"show_reasoning,omitempty"`
 
 	// ShowTips controls whether the TUI's idle tip line below the input is
@@ -2136,15 +2138,6 @@ func intOr(v, def int) int {
 		return v
 	}
 	return def
-}
-
-// ShowReasoningDefault returns the configured default for reasoning visibility
-// (false when unset, i.e. hide reasoning by default).
-func (c Config) ShowReasoningDefault() bool {
-	if c.ShowReasoning == nil {
-		return false
-	}
-	return *c.ShowReasoning
 }
 
 // ShowTipsEnabled reports whether the TUI's idle tip line is shown

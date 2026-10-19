@@ -16,24 +16,31 @@ import (
 // thinkBlock: its text lives in its own buffer, out of band from the main
 // transcript, anchored at the byte offset in the transcript it renders after.
 // The renderer splices blocks in as fold containers — a one-line header
-// ("▸ thinking · N lines · Ctrl+T") with the body shown only when expanded —
-// so thinking is a region the renderer can style, hide or fold instead of a
+// ("▸ thinking · N lines") with the body shown only when expanded — so
+// thinking is a region the renderer can style or fold instead of a
 // whole-buffer variant (the old transcript/transcriptNoThink pair).
 //
-// Display rules:
-//   - /think off: every block renders one placeholder line
-//     ("[thinking… Ctrl+T to show]"), bodies never shown.
-//   - /think on: blocks render as fold containers, collapsed by default once
-//     complete (issue #208: "collapsed by default even when the setting is
-//     on" — long reasoning must not flood the transcript). The block that is
-//     still streaming stays open so reasoning can be watched live; it folds
-//     when it closes unless the user pinned it open.
-//   - Clicking a fold header (or /think expand|collapse) toggles the body;
-//     per-block state is remembered (userSet pins it against auto-fold).
+// Display rules (headers are information-only: they carry the line count and
+// fold state, never a key hint — key hints live in /help and the tips line):
+//   - Every block always renders its header row. There is no hidden mode and
+//     no placeholder line: the header already shows the one thing a hidden
+//     stand-in could say (how much reasoning there is), so the quietest
+//     rendering is still informative.
+//   - A completed block is folded by default (issue #208: long reasoning must
+//     not flood the transcript). The block that is still streaming stays open
+//     so reasoning can be watched live; it folds when it closes unless the
+//     user pinned it open.
+//   - Clicking a fold header — or Ctrl+T for the most recent block — toggles
+//     just that block; per-block state is remembered (userSet pins it against
+//     auto-fold). /think expand|collapse pin all blocks at once, /think view
+//     swaps in a thinking-only stream.
 //
 // Consumption/display separation is preserved: loop detection and the session
 // turn record consume reasoning from their own accumulators regardless of
-// what the renderer shows.
+// what the renderer shows. The ACP `think` option (config show_reasoning) is
+// the data-plane relay toggle for agent_thought_chunk updates — it decides
+// whether thought chunks leave the process at all and is independent of these
+// per-block fold states (ADR-0067).
 
 // thinkBlock is one reasoning block of the visible transcript.
 type thinkBlock struct {
@@ -79,10 +86,6 @@ func (b *thinkBlock) thinkLines() int {
 	return n
 }
 
-// thinkHiddenPlaceholder is the one-line stand-in rendered in place of a
-// thinking block while reasoning visibility is off (/think off).
-const thinkHiddenPlaceholder = "[thinking… Ctrl+T to show]"
-
 // thinkFoldedPrefix/thinkExpandedPrefix are the fold-header glyphs. The
 // hit-test (thinkBlockAtLine) keys off these prefixes — see the note there on
 // why that is safe enough.
@@ -99,8 +102,9 @@ func lineLabel(n int) string {
 	return strconv.Itoa(n) + " lines"
 }
 
-// thinkHeader renders the one-line fold header for a block. showThinking
-// selects the visible form; streaming (open) blocks say so.
+// thinkHeader renders the one-line fold header for a block: glyph, line
+// count, and — while the block is still streaming — a streaming marker. The
+// header is information-only; it never carries a key hint.
 func thinkHeader(b *thinkBlock, streaming bool) string {
 	n := lineLabel(b.thinkLines())
 	if b.expanded {
@@ -109,7 +113,7 @@ func thinkHeader(b *thinkBlock, streaming bool) string {
 		}
 		return dim(thinkExpandedPrefix + n)
 	}
-	return dim(thinkFoldedPrefix + n + " · Ctrl+T")
+	return dim(thinkFoldedPrefix + n)
 }
 
 // renderThinkBlock renders one block's container (header + optional body).
@@ -117,9 +121,6 @@ func thinkHeader(b *thinkBlock, streaming bool) string {
 // transcriptDisplay inserts a separating newline when the surrounding text
 // needs one.
 func (m *model) renderThinkBlock(b *thinkBlock) string {
-	if !m.showThinking {
-		return dim(thinkHiddenPlaceholder) + "\n"
-	}
 	var sb strings.Builder
 	sb.WriteString(thinkHeader(b, !b.closed))
 	sb.WriteString("\n")
@@ -181,7 +182,7 @@ func isThinkHeaderLine(line string) bool {
 // on a header. Header lines appear in block order in the display, so the
 // ordinal of the clicked header is the block index.
 func (m *model) thinkBlockAtLine(line int) int {
-	if !m.showThinking || line < 0 {
+	if line < 0 {
 		return -1
 	}
 	lines := m.transcriptPlainLines()
@@ -212,30 +213,33 @@ func (m *model) toggleThinkBlock(idx int) {
 	m.invalidateThinkDisplay()
 }
 
+// toggleLastThinkBlock is the Ctrl+T action: flip the most recent block —
+// the one still streaming while reasoning is arriving, else the last
+// completed block — like clicking that block's fold header. Explicit action
+// wins over the auto-fold/pin rules exactly as a click does, so a pinned
+// block still toggles. Empty session → a toast instead of silence.
+func (m model) toggleLastThinkBlock() model {
+	if len(m.thinkBlocks) == 0 {
+		m.notify("no thinking blocks in this session yet", "")
+		return m
+	}
+	idx := len(m.thinkBlocks) - 1
+	for i := range m.thinkBlocks {
+		if !m.thinkBlocks[i].closed {
+			idx = i
+			break
+		}
+	}
+	m.toggleThinkBlock(idx)
+	return m
+}
+
 // setAllThinkBlocks expands or folds every block, pinning each (userSet).
 // Used by /think expand|collapse.
 func (m *model) setAllThinkBlocks(expanded bool) {
 	for i := range m.thinkBlocks {
 		m.thinkBlocks[i].userSet = true
 		m.thinkBlocks[i].expanded = expanded
-	}
-	m.invalidateThinkDisplay()
-}
-
-// applyThinkVisibility re-derives per-block state after the global toggle
-// (/think on|off, Ctrl+T): the streaming block opens for live watching when
-// reasoning becomes visible, pinned blocks keep their state.
-func (m *model) applyThinkVisibility() {
-	for i := range m.thinkBlocks {
-		b := &m.thinkBlocks[i]
-		if b.userSet {
-			continue
-		}
-		if b.closed {
-			b.expanded = false // completed blocks fold by default (issue #208)
-		} else {
-			b.expanded = m.showThinking
-		}
 	}
 	m.invalidateThinkDisplay()
 }

@@ -411,8 +411,9 @@ func handleSlashCommand(cmd, prompt string, st *interactiveState) (exit bool, di
 		// reaches here. Guard to prevent "unknown command" output, mirroring
 		// cmdNotifications.
 	case cmdThink:
-		// execThink is handled in repl.go where it can toggle model.showThinking.
-		// This case is a no-op here; the TUI intercepts cmdThink before it reaches
+		// /think is handled in handleSlashInput (commands.go) where it can
+		// reach the model's think-block fold state. This case is a no-op
+		// here; the TUI intercepts cmdThink before it reaches
 		// handleSlashCommand. Guard to prevent "unknown command" output.
 	case cmdNotifications:
 		// History lives on the TUI model; the TUI intercepts this in

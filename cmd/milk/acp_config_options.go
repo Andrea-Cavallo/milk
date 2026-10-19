@@ -11,7 +11,10 @@ import (
 // settings surface for the knobs that also have slash commands. The commands
 // and the options are two views of one state, never two copies of it:
 //
-//	think   → as.showThinking            (/think on|off)
+//	think   → as.showThinking            (/think on|off — the data-plane
+//	                                   thought-relay toggle: off withholds
+//	                                   agent_thought_chunk updates entirely;
+//	                                   the TUI's fold state is independent)
 //	routing → st.stickyEscalate/Primary  (/escalate, /primary, Ctrl+C unpin)
 //
 // Setting an option runs the same state change the command does; running a

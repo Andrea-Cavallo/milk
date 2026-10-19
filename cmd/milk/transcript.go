@@ -107,9 +107,10 @@ func (m *model) retractStreamed(from, to string) {
 // appendThinkingStreamed adds thinking/reasoning text to the current think
 // block (ADR-0067): the block's own buffer, not the transcript. The first
 // chunk of a reasoning run opens a block anchored at the transcript's current
-// end; the block renders as a fold container there (or a one-line placeholder
-// while /think is off). Throttled like appendTranscriptStreamed — see
-// model.viewportDirty.
+// end; the block renders as a fold container there — header always, body only
+// while expanded. The new block opens live (it is the reasoning you are
+// watching arrive) and folds on close unless pinned. Throttled like
+// appendTranscriptStreamed — see model.viewportDirty.
 func (m *model) appendThinkingStreamed(text string) {
 	for i := range m.thinkBlocks {
 		if !m.thinkBlocks[i].closed {
@@ -121,7 +122,7 @@ func (m *model) appendThinkingStreamed(text string) {
 	b := thinkBlock{
 		buf:      &strings.Builder{},
 		anchor:   m.transcript.Len(),
-		expanded: m.showThinking, // the streaming block is watched live when visible
+		expanded: true, // the streaming block is watched live; folds on close
 	}
 	b.buf.WriteString(text)
 	m.thinkBlocks = append(m.thinkBlocks, b)

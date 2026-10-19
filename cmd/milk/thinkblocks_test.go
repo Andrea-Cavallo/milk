@@ -10,7 +10,6 @@ import (
 
 func TestThinkBlocks_StreamIntoBlockThenFoldOnClose(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = true
 	m.appendThinkingStreamed("first\nsecond\n")
 	disp := m.transcriptDisplay()
 	if !strings.Contains(disp, thinkExpandedPrefix+"2 lines · streaming") {
@@ -23,7 +22,7 @@ func TestThinkBlocks_StreamIntoBlockThenFoldOnClose(t *testing.T) {
 	// is gone from the display (inspectable via expand, not dumped inline).
 	m.appendTranscript("the answer\n")
 	disp = m.transcriptDisplay()
-	if !strings.Contains(disp, thinkFoldedPrefix+"2 lines · Ctrl+T") {
+	if !strings.Contains(disp, thinkFoldedPrefix+"2 lines") {
 		t.Errorf("completed block must fold to its header, got %q", disp)
 	}
 	if strings.Contains(disp, "first") || strings.Contains(disp, "second") {
@@ -40,7 +39,6 @@ func TestThinkBlocks_StreamIntoBlockThenFoldOnClose(t *testing.T) {
 // strings.Builder panicked on the second write after such a copy.
 func TestThinkBlocks_MultiChunkAndSliceGrowth(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = true
 	for run := 0; run < 5; run++ {
 		m.appendThinkingStreamed("a")
 		m.appendThinkingStreamed("b")
@@ -57,24 +55,70 @@ func TestThinkBlocks_MultiChunkAndSliceGrowth(t *testing.T) {
 	}
 }
 
-func TestThinkBlocks_PlaceholderWhenHidden(t *testing.T) {
+// There is no hidden mode: a block always renders its header row — folded
+// with its line count once complete. The old one-line placeholder is gone
+// for good, and the folded body stays inspectable, not dumped inline.
+func TestThinkBlocks_NoHiddenMode(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = false
 	m.appendThinkingStreamed("secret\nthoughts\n")
+	m.appendTranscript("answer\n") // closes + folds
 	disp := m.transcriptDisplay()
-	if !strings.Contains(disp, thinkHiddenPlaceholder) {
-		t.Errorf("hidden block must render the placeholder, got %q", disp)
+	if !strings.Contains(disp, thinkFoldedPrefix+"2 lines") {
+		t.Errorf("completed block must render its fold header, got %q", disp)
+	}
+	if strings.Contains(disp, "[thinking") {
+		t.Errorf("no hidden placeholder may render anywhere, got %q", disp)
 	}
 	if strings.Contains(disp, "secret") {
-		t.Errorf("hidden reasoning must not render, got %q", disp)
+		t.Errorf("folded body must not render, got %q", disp)
 	}
-	// Toggling on is retroactive: the block appears as a fold (still
-	// collapsed unless pinned), never as inline dim text.
-	m.showThinking = true
-	m.applyThinkVisibility()
+}
+
+// Fold headers are information-only: glyph, line count, fold/streaming
+// state — never a key hint (key hints live in /help and the tips line).
+func TestThinkBlockHeaders_InfoOnly(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.appendThinkingStreamed("one\ntwo\nthree\n")
+	disp := m.transcriptDisplay()
+	if !strings.Contains(disp, thinkExpandedPrefix+"3 lines · streaming") {
+		t.Errorf("streaming header must carry the line count, got %q", disp)
+	}
+	m.appendTranscript("done\n")
 	disp = m.transcriptDisplay()
-	if !strings.Contains(disp, thinkFoldedPrefix) && !strings.Contains(disp, thinkExpandedPrefix) {
-		t.Errorf("toggling on must reveal the fold container, got %q", disp)
+	if !strings.Contains(disp, thinkFoldedPrefix+"3 lines") {
+		t.Errorf("folded header must carry the line count, got %q", disp)
+	}
+	if strings.Contains(disp, "Ctrl+T") || strings.Contains(disp, "/think") {
+		t.Errorf("headers must not carry key hints, got %q", disp)
+	}
+}
+
+// Ctrl+T toggles the most recent block — the streaming one while reasoning
+// is arriving, else the last completed block — and pins it like a header
+// click (explicit action wins over the auto-fold rules).
+func TestToggleLastThinkBlock_TogglesMostRecent(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.appendThinkingStreamed("first\n") // streaming block opens live
+	if !m.thinkBlocks[0].expanded {
+		t.Fatal("streaming block must open live")
+	}
+	m = m.toggleLastThinkBlock() // folds the streaming block
+	if m.thinkBlocks[0].expanded || !m.thinkBlocks[0].userSet {
+		t.Errorf("Ctrl+T must fold and pin the streaming block, got %+v", m.thinkBlocks[0])
+	}
+	m.appendTranscript("done\n")
+	m.appendThinkingStreamed("second\n")
+	m = m.toggleLastThinkBlock() // the streaming block again, not block 0
+	if m.thinkBlocks[1].expanded {
+		t.Error("Ctrl+T must toggle the streaming block, not a completed one")
+	}
+	m.appendTranscript("done\n")
+	m = m.toggleLastThinkBlock() // nothing open → the last block
+	if !m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
+		t.Errorf("Ctrl+T with nothing streaming must toggle the last block, got %+v", m.thinkBlocks[1])
+	}
+	if !m.thinkBlocks[0].userSet || m.thinkBlocks[0].expanded {
+		t.Errorf("earlier blocks must be untouched, got %+v", m.thinkBlocks[0])
 	}
 }
 
@@ -83,7 +127,6 @@ func TestThinkBlocks_ClickTogglesAndPins(t *testing.T) {
 	// coordinate space the mouse handler feeds thinkBlockAtLine coincide.
 	m := layoutTestModel(t, 200, 50)
 	m.colorizeMode = ColorizeOff
-	m.showThinking = true
 	m.appendThinkingStreamed("a\nb\n")
 	m.appendTranscript("done\n") // closes + folds the block
 	disp := m.transcriptDisplay()
@@ -136,7 +179,6 @@ func TestThinkBlocks_ClickTogglesAndPins(t *testing.T) {
 
 func TestThinkBlocks_PromotedReasoningDropped(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = true
 	m.appendThinkingStreamed("turn one thoughts\n")
 	m.appendTranscript("turn one answer\n")
 	m.thinkBlocksTurnStart = len(m.thinkBlocks) // dispatchAgent boundary
@@ -153,44 +195,34 @@ func TestThinkBlocks_PromotedReasoningDropped(t *testing.T) {
 	}
 }
 
-func TestThinkBlocks_VisibilityFollowsGlobalToggle(t *testing.T) {
+// A block pinned open mid-stream stays open past its close: the fold is
+// per-block state (userSet wins over auto-fold), not a global mode.
+func TestThinkBlocks_PinnedOpenSurvivesClose(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = false
-	m.appendThinkingStreamed("quiet\n") // opens folded/hidden
-	m.appendTranscript("ok\n")
-	m.appendThinkingStreamed("live\n") // streaming block, hidden for now
-	if m.thinkBlocks[1].expanded {
-		t.Error("block must not open while visibility is off")
+	m.appendThinkingStreamed("watching\n")
+	m.toggleThinkBlock(0) // fold
+	m.toggleThinkBlock(0) // pin open again
+	m.appendTranscript("done\n")
+	if !m.thinkBlocks[0].expanded || !m.thinkBlocks[0].userSet {
+		t.Fatalf("a block pinned open must stay expanded after close, got %+v", m.thinkBlocks[0])
 	}
-	m.showThinking = true
-	m.applyThinkVisibility()
-	if !m.thinkBlocks[1].expanded {
-		t.Error("streaming block must open for live watching when visibility turns on")
-	}
-	if m.thinkBlocks[0].expanded {
-		t.Error("completed block must stay folded")
-	}
-	m.showThinking = false
-	m.applyThinkVisibility()
-	if d := m.transcriptDisplay(); strings.Contains(d, "quiet") || strings.Contains(d, "live") {
-		t.Errorf("hidden reasoning must not render, got %q", d)
+	if d := m.transcriptDisplay(); !strings.Contains(d, "watching") {
+		t.Errorf("pinned body must render, got %q", d)
 	}
 }
 
 func TestThinkBlockHeaderLabels(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = true
 	m.appendThinkingStreamed("one line")
 	m.appendTranscript("\ndone\n")
 	d := m.transcriptDisplay()
-	if !strings.Contains(d, thinkFoldedPrefix+"1 line · Ctrl+T") {
+	if !strings.Contains(d, thinkFoldedPrefix+"1 line") {
 		t.Errorf("singular label expected, got %q", d)
 	}
 }
 
 func TestTranscriptDisplay_SplicesBlocksAtAnchors(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = true
 	m.appendTranscript("one\n")
 	m.appendThinkingStreamed("a\nb\n")
 	m.appendTranscript("two\n")
@@ -209,7 +241,6 @@ func TestTranscriptDisplay_SplicesBlocksAtAnchors(t *testing.T) {
 
 func TestThinkBlocks_ExpandCollapseAll(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.showThinking = true
 	m.appendThinkingStreamed("one\n")
 	m.appendTranscript("a\n")
 	m.appendThinkingStreamed("two\n")
@@ -235,7 +266,6 @@ func TestStartThinkView_ShowsAllBodies(t *testing.T) {
 	if cmd != nil || empty.attached != nil {
 		t.Errorf("empty session must not attach, got cmd=%v attached=%v", cmd != nil, empty.attached != nil)
 	}
-	m.showThinking = true
 	m.appendThinkingStreamed("first thought\n")
 	m.appendTranscript("a\n")
 	m.appendThinkingStreamed("second thought\n")

@@ -481,35 +481,15 @@ func (m model) handleColorizeCmd(arg string) model {
 	return m
 }
 
-// handleThinkCmd handles `/think [on|off|expand|collapse]`.
-// With no arg: shows the current reasoning visibility. With on/off: toggles it
-// retroactively — blocks render as fold containers when on (collapsed by
-// default once complete, ADR-0067), as one-line placeholders when off.
-// expand/collapse pins every block's fold state open/closed.
-//
-// State *changes* are turn-unrelated informational events → notification
-// toasts (issue #162); the bare query response stays in the transcript like
-// every other explicit query answer.
+// handleThinkCmd handles `/think [expand|collapse|view]` — the fold surface
+// of the think-block model (ADR-0067). There is no visibility toggle any
+// more: every block always renders its header row (folded once complete,
+// open while streaming), so /think on|off are gone. The bare query answers in
+// the transcript like every other explicit query answer; state *changes* are
+// turn-unrelated informational events → notification toasts (issue #162).
 func (m model) handleThinkCmd(arg string) (model, tea.Cmd) {
 	switch arg {
-	case "on":
-		if m.showThinking {
-			m.notify("reasoning visibility: already on", "/think off")
-			return m, nil
-		}
-		m.showThinking = true
-		m.applyThinkVisibility() // streaming block opens live; completed stay folded
-		m.notify("reasoning visibility: on — thinking blocks as folds (click a ▸ header to expand)", "/think off")
-	case "off":
-		if !m.showThinking {
-			m.notify("reasoning visibility: already off", "/think on")
-			return m, nil
-		}
-		m.showThinking = false
-		m.applyThinkVisibility()
-		m.notify("reasoning visibility: off — thinking blocks hidden ([thinking…])", "/think on")
 	case "expand":
-		m.showThinking = true
 		m.setAllThinkBlocks(true)
 		m.notify("reasoning: all blocks expanded", "/think collapse")
 	case "collapse":
@@ -517,12 +497,19 @@ func (m model) handleThinkCmd(arg string) (model, tea.Cmd) {
 		m.notify("reasoning: all blocks folded", "/think expand")
 	case "view":
 		return m.startThinkView()
-	default:
-		state := "off"
-		if m.showThinking {
-			state = "on"
+	case "":
+		expanded := 0
+		for i := range m.thinkBlocks {
+			if m.thinkBlocks[i].expanded {
+				expanded++
+			}
 		}
-		m.appendTranscript(fmt.Sprintf("%s reasoning visibility: %s, %d thinking block(s)  (use /think on|off|expand|collapse|view)\n", milkTag(), bold(state), len(m.thinkBlocks)))
+		m.appendTranscript(fmt.Sprintf("%s reasoning: %d thinking block(s) · %d expanded, %d folded  (use /think expand|collapse|view)\n",
+			milkTag(), len(m.thinkBlocks), expanded, len(m.thinkBlocks)-expanded))
+	case "on", "off":
+		m.appendTranscript(milkTag() + " /think on|off are gone — reasoning always renders as foldable blocks (open while streaming, folded when done). Use /think expand|collapse|view, or click a ▸ header / press Ctrl+T for one block.\n")
+	default:
+		m.appendTranscript(milkTag() + " usage: /think [expand|collapse|view]\n")
 	}
 	return m, nil
 }
@@ -653,20 +640,6 @@ func (m model) handleTipsBrowse(arg string) (model, tea.Cmd) {
 		usage()
 	}
 	return m, tick
-}
-
-// toggleThinking flips reasoning visibility and posts a notification toast.
-// Works at any time including while the agent is responding, since it only
-// mutates showThinking and per-block fold state — no input submission needed.
-func (m model) toggleThinking() model {
-	m.showThinking = !m.showThinking
-	m.applyThinkVisibility()
-	if m.showThinking {
-		m.notify("reasoning visibility: on — thinking blocks as folds", "/think off")
-	} else {
-		m.notify("reasoning visibility: off", "/think on")
-	}
-	return m
 }
 
 // handleSetupCmd dispatches /setup <subcommand>.
