@@ -849,6 +849,25 @@ type model struct {
 	panelBackground  bool
 	backgroundOffset int
 
+	// project tree + git graph panels (issue #206, ADR-0066)
+	panelProject      bool
+	projectOffset     int
+	projectExpanded   map[string]bool
+	projectFiles      []string
+	projectTruncated  bool
+	projectLines      []string
+	projectIDs        []string
+	lastTreeClickPath string
+	lastTreeClickTime time.Time
+	panelGit          bool
+	gitOffset         int
+	gitRows           []gitGraphLine
+	gitBranch         string
+	gitDirty          int
+	gitErr            string
+	gitLines          []string
+	gitIDs            []string
+
 	// pending /forget confirmation
 	pendingForget *forgetState
 
@@ -2156,6 +2175,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePanelCmd("background")
 		case "f4":
 			return m.handlePanelCmd("workflow")
+		case "f5":
+			return m.handlePanelCmd("project")
+		case "f6":
+			return m.handlePanelCmd("git")
 		case "alt+up":
 			cmd := m.tipSeek(-1) // also restarts the cycling timer
 			m.tipBrowseEcho()
@@ -2808,6 +2831,32 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.panelMemory {
 			return m, memoryPollTick()
 		}
+		return m, nil
+
+	case projectRefreshMsg:
+		if m.panelProject {
+			return m, tea.Batch(projectPollTick(), refreshProjectCmd(m.st.cwd))
+		}
+		return m, nil
+
+	case gitRefreshMsg:
+		if m.panelGit {
+			return m, tea.Batch(gitPollTick(), refreshGitCmd(m.st.cwd))
+		}
+		return m, nil
+
+	case projectDataMsg:
+		m.projectFiles = msg.files
+		m.projectTruncated = msg.truncated
+		m.rebuildProjectTree()
+		return m, nil
+
+	case gitDataMsg:
+		m.gitRows = msg.rows
+		m.gitBranch = msg.branch
+		m.gitDirty = msg.dirty
+		m.gitErr = msg.err
+		m.gitLines, m.gitIDs = buildGitPanelLines(m.gitRows, m.gitBranch, m.gitDirty, m.gitErr, gitPanelInner)
 		return m, nil
 
 	case attachRefreshMsg:

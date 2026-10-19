@@ -1732,8 +1732,35 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 			m.notify("background panel: off", "/panel background")
 		}
 		return m, nil
+	case "project":
+		m.panelManualOverride[regionProject] = true
+		m.panelProject = !m.panelProject
+		if !m.panelProject {
+			m.resetManualOverrideIfFinalized(regionProject)
+		}
+		m.syncLayout()
+		if m.panelProject {
+			m.notify("project panel: on", "/panel project")
+			// First refresh immediately; the poll keeps it live-ish afterwards.
+			return m, tea.Batch(projectPollTick(), refreshProjectCmd(m.st.cwd))
+		}
+		m.notify("project panel: off", "/panel project")
+		return m, nil
+	case "git":
+		m.panelManualOverride[regionGit] = true
+		m.panelGit = !m.panelGit
+		if !m.panelGit {
+			m.resetManualOverrideIfFinalized(regionGit)
+		}
+		m.syncLayout()
+		if m.panelGit {
+			m.notify("git panel: on", "/panel git")
+			return m, tea.Batch(gitPollTick(), refreshGitCmd(m.st.cwd))
+		}
+		m.notify("git panel: off", "/panel git")
+		return m, nil
 	default:
-		m.appendTranscript(milkTag() + " usage: /panel memory|tasks|background|workflow (or F1/F2/F3/F4)\n")
+		m.appendTranscript(milkTag() + " usage: /panel memory|tasks|background|workflow|project|git (or F1-F6)\n")
 		return m, nil
 	}
 }

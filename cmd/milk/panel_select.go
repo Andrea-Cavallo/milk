@@ -21,6 +21,8 @@ const (
 	regionTasks
 	regionBackground
 	regionWorkflow
+	regionProject
+	regionGit
 )
 
 // regionAt maps an absolute terminal column to the panel region it falls in
@@ -53,6 +55,18 @@ func (m *model) regionAt(x int) (panelRegion, int) {
 	if m.workflowPanelVisible() {
 		if x < off+workflowPanelWidth {
 			return regionWorkflow, x - off
+		}
+		off += workflowPanelWidth
+	}
+	if m.projectPanelVisible() {
+		if x < off+projectPanelWidth {
+			return regionProject, x - off
+		}
+		off += projectPanelWidth
+	}
+	if m.gitPanelVisible() {
+		if x < off+gitPanelWidth {
+			return regionGit, x - off
 		}
 	}
 	return regionNone, x
@@ -174,6 +188,10 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev tea.MouseEv
 				dragCmd = m.handleBackgroundPanelClick(lineIdx)
 			case regionWorkflow:
 				dragCmd = m.handleWorkflowPanelClick()
+			case regionProject:
+				dragCmd = m.handleProjectPanelClick(lineIdx)
+			case regionGit:
+				dragCmd = m.handleGitPanelClick(lineIdx)
 			}
 			break
 		}

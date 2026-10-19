@@ -116,10 +116,62 @@ func (m *model) mainWidth() int {
 	if m.workflowPanelVisible() {
 		w -= workflowPanelWidth
 	}
+	if m.projectPanelVisible() {
+		w -= projectPanelWidth
+	}
+	if m.gitPanelVisible() {
+		w -= gitPanelWidth
+	}
 	if w < 20 {
 		w = 20
 	}
 	return w
+}
+
+// sidePanelsWidthExcept sums the widths of the side panels currently marked
+// open, excluding exclude — raw open flags, never the width-guarded
+// visibility helpers (those call this, so consulting them here would recurse).
+// Used by the project/git visibility guards so a panel is only rendered when a
+// usable main area (40 cols) remains.
+func (m *model) sidePanelsWidthExcept(exclude panelRegion) int {
+	w := 0
+	if m.panelMemory && exclude != regionMemory {
+		w += memoryPanelWidth
+	}
+	if m.panelTasks && exclude != regionTasks {
+		w += tasksPanelWidth
+	}
+	if m.panelBackground && exclude != regionBackground {
+		w += backgroundPanelWidth
+	}
+	if m.workflowPanelOpen && exclude != regionWorkflow {
+		w += workflowPanelWidth
+	}
+	if m.panelProject && exclude != regionProject {
+		w += projectPanelWidth
+	}
+	if m.panelGit && exclude != regionGit {
+		w += gitPanelWidth
+	}
+	return w
+}
+
+// projectPanelVisible reports whether the project panel is open and the
+// terminal is wide enough to render it alongside a usable main area
+// (minimum 40 cols), like workflowPanelVisible.
+func (m *model) projectPanelVisible() bool {
+	if !m.panelProject {
+		return false
+	}
+	return m.width >= m.sidePanelsWidthExcept(regionProject)+projectPanelWidth+40
+}
+
+// gitPanelVisible — the same guard for the git panel.
+func (m *model) gitPanelVisible() bool {
+	if !m.panelGit {
+		return false
+	}
+	return m.width >= m.sidePanelsWidthExcept(regionGit)+gitPanelWidth+40
 }
 
 // workflowPanelVisible reports whether the workflow panel is open and the
@@ -361,6 +413,16 @@ func (m model) View() string {
 		wpanel := m.renderWorkflowPanel(vpH)
 		wbar := m.renderWorkflowPanelScrollbar(vpH)
 		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, wpanel, wbar)
+	}
+	if m.projectPanelVisible() {
+		prpanel := m.renderProjectPanel(vpH)
+		prbar := m.renderProjectPanelScrollbar(vpH)
+		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, prpanel, prbar)
+	}
+	if m.gitPanelVisible() {
+		gpanel := m.renderGitPanel(vpH)
+		gbar := m.renderGitPanelScrollbar(vpH)
+		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, gpanel, gbar)
 	}
 	// Notification toasts (issue #162) float over the top-right of the whole
 	// main area — pure render-time overlay, no layout rows consumed.

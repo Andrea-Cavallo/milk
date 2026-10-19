@@ -30,14 +30,18 @@ func (m *model) sidePanelLines(region panelRegion) (lines []string, inner int) {
 		return buildBackgroundPanelLines(jobs, local.BackgroundShells(), backgroundPanelInner), backgroundPanelInner
 	case regionWorkflow:
 		return buildWorkflowPanelLines(m.workflowState, workflowPanelInner), workflowPanelInner
+	case regionProject:
+		return m.projectLines, projectPanelInner
+	case regionGit:
+		return m.gitLines, gitPanelInner
 	}
 	return nil, 0
 }
 
 // panelShortcut returns the F-key label shown next to a panel's title,
-// matching the F1-F4 global shortcuts wired into repl.go's key handler
-// (mirrored by /panel <name>): memory, tasks, background, workflow — the
-// same left-to-right order panels are joined in View().
+// matching the F1-F6 global shortcuts wired into repl.go's key handler
+// (mirrored by /panel <name>): memory, tasks, background, workflow, project,
+// git — the same left-to-right order panels are joined in View().
 func panelShortcut(region panelRegion) string {
 	switch region {
 	case regionMemory:
@@ -48,6 +52,10 @@ func panelShortcut(region panelRegion) string {
 		return "F3"
 	case regionWorkflow:
 		return "F4"
+	case regionProject:
+		return "F5"
+	case regionGit:
+		return "F6"
 	}
 	return ""
 }
@@ -170,6 +178,10 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 		}
 		st := m.workflowState
 		return st == nil || st.WorkflowName == "" || st.Role == "done"
+	case regionProject, regionGit:
+		// No live content lifecycle — always finalized, so a manual close
+		// never blocks the next open (see resetManualOverrideIfFinalized).
+		return true
 	}
 	return true
 }
@@ -213,6 +225,10 @@ func panelSubName(region panelRegion) string {
 		return "background"
 	case regionWorkflow:
 		return "workflow"
+	case regionProject:
+		return "project"
+	case regionGit:
+		return "git"
 	}
 	return ""
 }
@@ -223,7 +239,7 @@ func panelDisplayName(region panelRegion) string {
 	switch region {
 	case regionBackground:
 		return "background"
-	case regionMemory, regionTasks, regionWorkflow:
+	case regionMemory, regionTasks, regionWorkflow, regionProject, regionGit:
 		return panelSubName(region)
 	}
 	return "side"
@@ -241,13 +257,17 @@ func (m *model) panelOpen(region panelRegion) bool {
 		return m.panelBackground
 	case regionWorkflow:
 		return m.workflowPanelVisible()
+	case regionProject:
+		return m.projectPanelVisible()
+	case regionGit:
+		return m.gitPanelVisible()
 	}
 	return false
 }
 
 // panelRenderOrder is the left-to-right order side panels are joined in by
-// View() — memory, tasks, background, workflow.
-var panelRenderOrder = []panelRegion{regionMemory, regionTasks, regionBackground, regionWorkflow}
+// View() — memory, tasks, background, workflow, project, git.
+var panelRenderOrder = []panelRegion{regionMemory, regionTasks, regionBackground, regionWorkflow, regionProject, regionGit}
 
 // panelAltBackground reports whether region should render with the subtle
 // alternating background tint (see withPanelBackground): true for every
@@ -317,6 +337,10 @@ func (m *model) panelOffsetPtr(region panelRegion) *int {
 		return &m.backgroundOffset
 	case regionWorkflow:
 		return &m.workflowPanelOffset
+	case regionProject:
+		return &m.projectOffset
+	case regionGit:
+		return &m.gitOffset
 	}
 	return nil
 }
