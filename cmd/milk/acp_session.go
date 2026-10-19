@@ -246,6 +246,8 @@ func (as *acpSession) buildRunners(cfg config.Config) error {
 		permAsk:      as.askPermissionWithOversight,
 		bgPermAsk:    as.backgroundPermissionAsk,
 		safetyAsk:    as.safetyAsk,
+		userAsk:      as.askUser,
+		bgUserAsk:    as.backgroundAskUser,
 		skipPerms:    as.skipPerms.Load,
 		onOpenFile:   func(path string) error { return acpOpenFile(cwd, path) },
 		onToolUse:    as.onLocalToolUse,
@@ -767,4 +769,69 @@ func (as *acpSession) backgroundPermissionAsk(jobID, tool, summary string) bool 
 			return err == nil && out.Allow
 		}, p)
 	return allow
+}
+
+// askUser answers an ask_user question on an ACP session (issue #249): the
+// question race over the client's form dialog (form-capable clients — the
+// same one-field elicit the setup wizard uses), remote oversight, and no
+// timed answer: a foreground question waits for a human. Clients without
+// form dialogs have no direct surface — the question then races remote
+// oversight alone and resolves unanswered without it.
+func (as *acpSession) askUser(ctx context.Context, question string, options []string) (string, bool) {
+	answer, ok, _ := askUserQuestion(ctx, as.notifier(),
+		oversight.InputRequest{Question: question, Options: options},
+		as.elicitAnswer(question, options), foregroundAskPolicy)
+	return answer, ok
+}
+
+// backgroundAskUser is askUser for unattended contexts (background jobs,
+// workflow steps): the same surfaces plus the timed "no answer" at the bg
+// deadline (ADR-0052), bounded by the job timeout exactly like
+// backgroundPermissionAsk so a silent question cannot hold a job slot.
+func (as *acpSession) backgroundAskUser(ctx context.Context, jobID, question string, options []string) (string, bool) {
+	ctx, cancel := context.WithTimeout(ctx, as.cfg.EffectiveBackgroundAgentTimeout())
+	defer cancel()
+	as.mu.Lock()
+	cfg, ov := as.cfg, as.permOverrides
+	as.mu.Unlock()
+	if jobID != "" {
+		question = "job " + jobID + ": " + question
+	}
+	answer, ok, _ := askUserQuestion(ctx, as.notifier(),
+		oversight.InputRequest{Question: question, Options: options},
+		as.elicitAnswer(question, options), bgAskPolicy(cfg, ov))
+	return answer, ok
+}
+
+// elicitAnswer is the ACP direct surface for ask_user: a one-field form
+// dialog on form-capable clients (acp.ACPHost.Elicit — the setup wizard's
+// form seam), nil when the client cannot render forms. A dismissed or
+// empty form is "no answer", never an answer.
+func (as *acpSession) elicitAnswer(question string, options []string) func(context.Context) (string, bool) {
+	if !as.formElicit {
+		return nil
+	}
+	msg := strings.TrimSpace(question)
+	if len(options) > 0 {
+		msg += "\n" + strings.Join(options, " · ")
+	}
+	return func(c context.Context) (string, bool) {
+		res, err := as.host.host.Elicit(c, acp.ElicitationRequest{
+			Message: stripANSI(msg),
+			Schema: acp.ElicitationSchema{
+				Type:       "object",
+				Title:      "Question",
+				Properties: map[string]acp.ElicitationProperty{"answer": {Type: "string", Title: "Your answer"}},
+				Required:   []string{"answer"},
+			},
+		})
+		if err != nil || res.Action != acp.ElicitationAccept {
+			return "", false
+		}
+		ans, _ := res.Content["answer"].(string)
+		if strings.TrimSpace(ans) == "" {
+			return "", false
+		}
+		return ans, true
+	}
 }

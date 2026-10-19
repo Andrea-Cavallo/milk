@@ -468,6 +468,10 @@ type permRequestMsg struct {
 	// with no reply, shows a countdown for it, and answers overflow with it.
 	autoDefault string
 	autoAt      time.Time
+	// freeText marks an ask_user question prompt: the answer is whatever the
+	// user types, so the "a"/"d" bulk keys are ordinary text and overflow
+	// resolves with silence (no autoDefault to apply).
+	freeText bool
 }
 
 // permDismissMsg withdraws a permission prompt whose answer came from
@@ -593,6 +597,21 @@ func (r *tuiInputReader) readLineCtx(ctx context.Context, prompt, label, autoDef
 	}
 }
 
+// readLineFreeText is readLineCtx for an ask_user question prompt: same
+// bridge, but the prompt is free text (no y/n, no bulk keys) and a timed ask
+// resolves with silence rather than an autoDefault string.
+func (r *tuiInputReader) readLineFreeText(ctx context.Context, prompt, label string, autoAt time.Time) (string, error) {
+	respCh := make(chan string, 1)
+	r.send(permRequestMsg{prompt: prompt, label: label, respCh: respCh, autoAt: autoAt, freeText: true})
+	select {
+	case s := <-respCh:
+		return s, nil
+	case <-ctx.Done():
+		r.send(permDismissMsg{respCh: respCh})
+		return "", ctx.Err()
+	}
+}
+
 // makeLocalPermAsk returns the permAsk callback for the local agent, routed
 // through events.Host.RequestPermission (Phase 1's one real Host migration —
 // see docs/internal/design/machine-readable-output-design.md) and raced over the three
@@ -614,6 +633,30 @@ func makeLocalPermAsk(host events.Host, ps *local.PermStore, n oversight.Notifie
 			},
 			foregroundAskPolicy)
 		return allow
+	}
+}
+
+// makeLocalUserAsk returns the ask_user callback for the local agent: the
+// question race (ADR-0052's ask layer with a question instead of a
+// permission — issue #249) over direct input (host.Elicit — the TUI's
+// free-text prompt) and remote oversight (Telegram's AskInput), no timed
+// answer: a foreground question waits for a human. Silence resolves nothing
+// — only a real answer or ctx cancellation returns.
+func makeLocalUserAsk(host events.Host, n oversight.Notifier) func(ctx context.Context, question string, options []string) (string, bool) {
+	return func(ctx context.Context, question string, options []string) (string, bool) {
+		answer, ok, _ := askUserQuestion(ctx, n, oversight.InputRequest{Question: question, Options: options},
+			func(c context.Context) (string, bool) {
+				res, err := host.Elicit(c, events.ElicitationRequest{
+					Prompt: userAskPrompt(question, options, ""),
+					Label:  "ask_user",
+				})
+				if err != nil || res.Cancelled || strings.TrimSpace(res.Value) == "" {
+					return "", false
+				}
+				return res.Value, true
+			},
+			foregroundAskPolicy)
+		return answer, ok
 	}
 }
 
@@ -1303,14 +1346,35 @@ func (m model) handleBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		m.pendingPerm.respCh <- "n"
-		m.appendTranscript("n\n")
+		if m.pendingPerm.freeText {
+			// Explicit no-answer for a question prompt (an accidental Enter
+			// is ignored below instead of answering empty).
+			m.pendingPerm.respCh <- ""
+			m.appendTranscript("(no answer)\n")
+		} else {
+			m.pendingPerm.respCh <- "n"
+			m.appendTranscript("n\n")
+		}
 		m.pendingPerm = nil
 		m.dequeueNextPerm()
 		m.afterPermResolved()
 		return m, nil
 	case "enter":
 		answer := strings.TrimSpace(m.ta.Value())
+		if m.pendingPerm.freeText {
+			if answer == "" {
+				return m, nil // ignore accidental Enter on a question
+			}
+			m.ta.Reset()
+			m.leadingPasted = false
+			m.syncLayout()
+			m.appendTranscript(answer + "\n")
+			m.pendingPerm.respCh <- answer
+			m.pendingPerm = nil
+			m.dequeueNextPerm()
+			m.afterPermResolved()
+			return m, nil
+		}
 		m.ta.Reset()
 		m.leadingPasted = false
 		m.syncLayout()
@@ -1370,10 +1434,15 @@ const permQueueMax = 5
 
 func (m model) handlePermRequest(msg permRequestMsg) (tea.Model, tea.Cmd) {
 	if m.pendingPerm != nil {
-		if len(m.permQueue) >= permQueueMax && msg.autoDefault != "" {
-			// Background ask overflow: the timed default answers it now.
-			m.appendTranscript(fmt.Sprintf("%s too many pending permission prompts — auto-answering %q (timed default)\n", milkTag(), msg.autoDefault))
-			msg.respCh <- msg.autoDefault
+		if len(m.permQueue) >= permQueueMax && (msg.autoDefault != "" || (msg.freeText && !msg.autoAt.IsZero())) {
+			// Background ask overflow: the timed answer resolves it now —
+			// the default string for permissions, silence for questions.
+			ans := msg.autoDefault
+			if msg.freeText {
+				ans = ""
+			}
+			m.appendTranscript(fmt.Sprintf("%s too many pending prompts — auto-answering %q (timed default)\n", milkTag(), ans))
+			msg.respCh <- ans
 			return m, nil
 		}
 		m.permQueue = append(m.permQueue, msg)
@@ -3790,6 +3859,32 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 			}, p)
 		return allow
 	}
+	// Unattended questions (the ask_user tool from background jobs and
+	// workflow steps) use the question race with the timed "no answer" at
+	// the bg deadline (ADR-0052) — bounded like the background permission
+	// ask so a silent question can never hold a job's concurrency slot.
+	localBgUserAsk := func(ctx context.Context, jobID, question string, options []string) (string, bool) {
+		ctx, cancel := context.WithTimeout(ctx, st.cfg.EffectiveBackgroundAgentTimeout())
+		defer cancel()
+		p := bgAskPolicy(st.cfg, st.permOverrides)
+		note := autoNoteQuestion(p.deadline)
+		if jobID != "" {
+			note = "job " + jobID + " — " + note
+		}
+		answer, ok, _ := askUserQuestion(ctx, st.notifier, oversight.InputRequest{Question: question, Options: options},
+			func(c context.Context) (string, bool) {
+				res, err := localHost.Elicit(c, events.ElicitationRequest{
+					Prompt: userAskPrompt(question, options, note),
+					Label:  "ask_user",
+					AutoAt: time.Now().Add(p.deadline),
+				})
+				if err != nil || res.Cancelled || strings.TrimSpace(res.Value) == "" {
+					return "", false
+				}
+				return res.Value, true
+			}, p)
+		return answer, ok
+	}
 	// Unattended safety confirmations (the doom-loop gate) use the same flow
 	// with the safety policy — its own default knob, so one "allow" can't
 	// silently re-enable unattended runaway loops.
@@ -3834,6 +3929,8 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		permAsk:             localPermAsk,
 		bgPermAsk:           localBgPermAsk,
 		safetyAsk:           localSafetyAsk,
+		userAsk:             makeLocalUserAsk(localHost, st.notifier),
+		bgUserAsk:           localBgUserAsk,
 		skipPerms:           func() bool { return st.skipPermissions },
 		onOpenFile:          localOpenFile,
 		onRetract:           localOnRetract,

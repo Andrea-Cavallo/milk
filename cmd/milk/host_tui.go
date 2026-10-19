@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/scoutme/milk/internal/events"
 )
@@ -43,10 +42,12 @@ func (h *tuiHost) RequestPermission(ctx context.Context, req events.PermissionRe
 }
 
 // Elicit collects one line of structured input via the existing
-// permRequestMsg flow, labeled per req.Label. Cancellation semantics match
-// RequestPermission.
+// permRequestMsg flow, labeled per req.Label — free text, so the permission
+// bulk keys never swallow the answer. Cancellation semantics match
+// RequestPermission; AutoAt (when set) carries the timed answer's countdown
+// like a background permission ask.
 func (h *tuiHost) Elicit(ctx context.Context, req events.ElicitationRequest) (events.ElicitationResult, error) {
-	line, err := h.ir.readLineCtx(ctx, req.Prompt, req.Label, "", time.Time{})
+	line, err := h.ir.readLineFreeText(ctx, req.Prompt, req.Label, req.AutoAt)
 	if err != nil {
 		return events.ElicitationResult{}, err
 	}

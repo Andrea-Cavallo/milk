@@ -21,6 +21,12 @@ type PermRequest struct {
 	BlockedPath string
 }
 
+// InputRequest carries an ask_user question to the remote interface.
+type InputRequest struct {
+	Question string
+	Options  []string // optional suggested choices; free text still accepted
+}
+
 // Notifier is the interface for remote oversight backends.
 // All methods are best-effort — implementations must not block the caller
 // on network errors and must return quickly.
@@ -51,6 +57,14 @@ type Notifier interface {
 	// silence means: the timeout action for foreground asks, the timed
 	// default for background ones.
 	AskPermission(ctx context.Context, req PermRequest) (decision PermDecision, answered bool)
+
+	// AskInput sends an ask_user question to the remote interface and waits
+	// for a free-text reply. answered reports whether a human actually
+	// replied; a timeout — the backend's own prompt timeout or ctx
+	// cancellation — is silence, and for questions silence is never an
+	// answer (unlike AskPermission there is no timeout action): the caller
+	// keeps waiting on its other surfaces or the timed answer.
+	AskInput(ctx context.Context, req InputRequest) (answer string, answered bool)
 }
 
 // Noop is a no-op Notifier used when remote oversight is disabled.
@@ -66,4 +80,7 @@ func (Noop) AskPermission(_ context.Context, _ PermRequest) (PermDecision, bool)
 	// callers fall back to for foreground asks (deny, like the default
 	// timeout action).
 	return PermDeny, false
+}
+func (Noop) AskInput(_ context.Context, _ InputRequest) (string, bool) {
+	return "", false
 }

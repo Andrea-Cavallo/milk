@@ -209,7 +209,7 @@ Two guards keep an agent that lost its context from re-planning the same work: t
 
 ## Background sub-agents
 
-`spawn_background_agent` (ADR-0043 — see [docs/guides/tooling.md](tooling.md#spawn_background_agent--forking-yourself-for-background-research) for the tool itself) forks an inference-server-backed agent to research a self-contained question asynchronously, one job per call, tracked for the life of the session by a per-session job manager.
+`spawn_background_agent` (ADR-0043 — see [docs/guides/tooling.md](tooling.md#spawn_background_agent-forking-yourself-for-background-research) for the tool itself) forks an inference-server-backed agent to research a self-contained question asynchronously, one job per call, tracked for the life of the session by a per-session job manager.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -319,6 +319,8 @@ Forward agent activity and permission prompts to a mobile device.
 `safety_*` governs the doom-loop gate's unattended confirmations only (separate from tool asks on purpose — `safety_default: "allow"` re-enables unattended runaway loops and warns at startup). Override both for the session with `/permissions default allow|deny [safety]` and `/permissions timeout <secs> [safety]`; `/permissions` lists the policy and any pending asks. Foreground asks are unchanged: direct input and remote oversight, no deadline; `timeout_action` (above) resolves remote-side silence for those. `dangerously_skip_permissions` keeps auto-approving tool asks (including background ones) but never bypasses the doom-loop gate.
 
 **Remote input**: any message sent to the bot is injected as a new turn (`[telegram] …` in the transcript); queued while a turn is in progress, delivered as the next turn once it completes.
+
+**Questions (`ask_user`)**: the agent's clarifying questions are relayed too — the question and its options are posted to the chat and any reply is returned to the agent as the answer, through the same three-source ask layer as permission prompts (direct input, this remote surface, and — for unattended asks only — the timed answer). Silence is never an answer here: unlike permission prompts there is no remote timeout action, and the timed "no answer" only ever applies to background questions at their deadline.
 
 **Over ACP** (`milk serve --acp`): everything above runs too, with one notifier per serve process — permission prompts race the ACP client (first answer wins, remote asks serialized process-wide), and bot messages run as turns in the live session the user touched most recently (queued until one exists if none do), echoed to the client as ordinary user messages. See docs/reference/acp-integration.md's "Remote oversight (Telegram)" section.
 

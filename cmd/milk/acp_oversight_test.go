@@ -21,11 +21,12 @@ import (
 // fakeNotifier records every oversight call as a "kind:…"-shaped string.
 // AskPermission records the request, then either returns a programmed
 // decision (permCh) or blocks until its context ends (a client that never
-// answers).
+// answers). AskInput behaves the same over inputCh.
 type fakeNotifier struct {
-	mu     sync.Mutex
-	calls  []string
-	permCh chan oversight.PermDecision
+	mu      sync.Mutex
+	calls   []string
+	permCh  chan oversight.PermDecision
+	inputCh chan string
 }
 
 func (f *fakeNotifier) record(s string) {
@@ -75,6 +76,20 @@ func (f *fakeNotifier) AskPermission(ctx context.Context, req oversight.PermRequ
 	}
 	<-ctx.Done()
 	return oversight.PermTimeout, false
+}
+
+func (f *fakeNotifier) AskInput(ctx context.Context, req oversight.InputRequest) (string, bool) {
+	f.record("input:" + req.Question)
+	if f.inputCh != nil {
+		select {
+		case a := <-f.inputCh:
+			return a, true
+		case <-ctx.Done():
+			return "", false
+		}
+	}
+	<-ctx.Done()
+	return "", false
 }
 
 // setTestNotifier installs a fake under the server's lock — the field is

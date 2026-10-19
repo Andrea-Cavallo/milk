@@ -415,6 +415,21 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 		{
 			"type": "function",
 			"function": map[string]any{
+				"name":        "ask_user",
+				"description": "Ask the user a clarifying question and wait for their answer. Use it when the request is ambiguous in a way that changes what you should do — missing constraints, conflicting goals, or a choice between real alternatives — and the answer is not derivable from the code, the conversation, or a quick search. One question per call, phrased so a person who just walked up can answer it without context; include `options` when there are realistic choices. The answer comes back as the tool result. The user may be remote or away — in unattended contexts the question is bounded by a timed answer and may come back unanswered, in which case decide and continue instead of asking again.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"question": map[string]any{"type": "string", "description": "The question to ask."},
+						"options":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional realistic choices; free-text answers are still accepted."},
+					},
+					"required": []string{"question"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
 				"name":        "start_workflow",
 				"description": workflowToolDescription(),
 				"parameters": map[string]any{

@@ -411,6 +411,14 @@ type Agent struct {
 	safetyAsk func(jobID, tool, summary string) SafetyOutcome
 	permStore *PermStore
 	permAsk   func(tool, summary string) bool // returns true if user allows; nil = deny all (non-TUI)
+	// userAsk answers an ask_user tool call — the agent's one way to ask the
+	// human a clarifying question mid-turn (issue #249). ok=false means
+	// nobody answered (the surfaces were silent). nil = ask_user unavailable.
+	userAsk func(ctx context.Context, question string, options []string) (string, bool)
+	// bgUserAsk is the unattended variant (background jobs, workflow steps):
+	// same question race, bounded by the timed answer so a silent ask can
+	// never hang a job's concurrency slot; see WithBackgroundUserAsk.
+	bgUserAsk func(ctx context.Context, jobID, question string, options []string) (string, bool)
 	// bashAllowedPatterns is AgentConfig.BashAllowedPatterns: bash command
 	// prefixes pre-approved without a grant/ask, checked in checkPermission
 	// before the PermStore/permAsk flow (permissions.go's matchesBashPattern).
@@ -1104,6 +1112,31 @@ func (a *Agent) WithPermissions(ps *PermStore, ask func(tool, summary string) bo
 	a.permStore = ps
 	a.permAsk = ask
 	return a
+}
+
+// WithUserAsk returns a copy whose ask_user tool asks fn — the three-source
+// question race (ADR-0052's ask layer with a question instead of a
+// permission): direct input and remote oversight, no timed answer — a
+// foreground question waits for a human. fn blocks until someone answers or
+// ctx ends; ok=false is "nobody answered". nil leaves ask_user unavailable
+// (non-interactive embedders), where the tool fails with a clear error like
+// open_file does.
+func (a *Agent) WithUserAsk(fn func(ctx context.Context, question string, options []string) (string, bool)) *Agent {
+	copy := *a
+	copy.userAsk = fn
+	return &copy
+}
+
+// WithBackgroundUserAsk returns a copy whose unattended contexts (background
+// jobs, workflow steps) can ask through fn — the full background question
+// flow: every surface plus the timed "no answer" at the deadline (ADR-0052).
+// fn must be safe for concurrent use and must return rather than block
+// forever. jobID attributes the question to the job ("" for a workflow step).
+// nil = unattended contexts cannot ask and say so.
+func (a *Agent) WithBackgroundUserAsk(fn func(ctx context.Context, jobID, question string, options []string) (string, bool)) *Agent {
+	copy := *a
+	copy.bgUserAsk = fn
+	return &copy
 }
 
 // WithSkipPermissions returns a copy of the agent with the skip-permissions flag set.
@@ -2889,6 +2922,61 @@ func (a *Agent) dispatchBatch(ctx context.Context, toolCalls []toolCall, denied 
 	return outcomes
 }
 
+// runAskUser implements the ask_user tool (issue #249): the agent's one way
+// to ask the human a clarifying question mid-turn. The question goes through
+// the host's question race (ADR-0052's ask layer with a question instead of a
+// permission) — direct input, remote oversight, and, in unattended contexts,
+// the timed "no answer" at the deadline. Unwired (non-interactive embedders)
+// the tool fails with a clear error, exactly like open_file. An unanswered
+// question is returned as guidance, never as an error — the model must be
+// able to continue on its own judgment rather than retry the call.
+func (a *Agent) runAskUser(ctx context.Context, tc toolCall) toolCallOutcome {
+	fail := func(err string) toolCallOutcome {
+		return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Error: err}.String(), ToolCallID: tc.ID}}
+	}
+	var args struct {
+		Question string   `json:"question"`
+		Options  []string `json:"options"`
+	}
+	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+		return fail("invalid arguments: " + err.Error())
+	}
+	if strings.TrimSpace(args.Question) == "" {
+		return fail("question must not be empty")
+	}
+
+	var answer string
+	var answered bool
+	if a.jobID != "" || a.workflowRole {
+		// Unattended (background job, workflow step): the bounded ask —
+		// every surface plus the timed answer, never the open-ended
+		// foreground prompt (mirrors AsWorkflowExecutor's permAsk remap).
+		if a.bgUserAsk == nil {
+			return fail("ask_user is not available in this context (no ask surface for unattended work)")
+		}
+		answer, answered = a.bgUserAsk(ctx, a.jobID, args.Question, args.Options)
+	} else {
+		if a.userAsk == nil {
+			return fail("ask_user is only available in interactive sessions (no ask surface is wired here)")
+		}
+		answer, answered = a.userAsk(ctx, args.Question, args.Options)
+	}
+
+	switch {
+	case ctx.Err() != nil:
+		return fail("ask_user cancelled: " + ctx.Err().Error())
+	case answered:
+		return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Output: answer}.String(), ToolCallID: tc.ID}}
+	default:
+		out := "Nobody answered the question (the ask surfaces were silent or the timed answer applied)."
+		if len(args.Options) > 0 {
+			out += fmt.Sprintf(" The options were: %s.", strings.Join(args.Options, " / "))
+		}
+		out += " Proceed on your own best judgment; do not ask again in this turn."
+		return toolCallOutcome{msg: Message{Role: "tool", Content: toolResult{Output: out}.String(), ToolCallID: tc.ID}}
+	}
+}
+
 // dispatchOneTool executes a single tool call and returns its outcome.
 // deniedResult is non-empty when checkPermission already rejected the tool.
 // pendingImages, when non-empty, are forwarded to an agent_<name> tool-agent
@@ -3046,6 +3134,10 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 	// Pre-checked: permission was already denied before dispatch.
 	if deniedResult != "" {
 		return toolCallOutcome{msg: Message{Role: "tool", Content: deniedResult, ToolCallID: tc.ID}}
+	}
+
+	if tc.Function.Name == "ask_user" {
+		return a.runAskUser(toolCtx, tc)
 	}
 
 	if tc.Function.Name == "open_file" {

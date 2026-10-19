@@ -294,6 +294,45 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 	return oversight.PermTimeout, false
 }
 
+// AskInput sends an ask_user question and waits for a free-text reply via the
+// background poll loop — the same single prompt slot as AskPermission (the
+// caller serializes remote asks; see cmd/milk's oversight ask mutex). The
+// reply is the answer exactly as typed. Silence (cfg.PermTimeout or ctx) is
+// not an answer: answered is false and the caller keeps waiting on its other
+// surfaces or the timed answer — unlike permissions, questions have no
+// timeout action.
+func (n *Notifier) AskInput(ctx context.Context, req oversight.InputRequest) (string, bool) {
+	lines := []string{fmt.Sprintf("❓ *%s*", escMD(req.Question))}
+	if len(req.Options) > 0 {
+		opts := make([]string, len(req.Options))
+		for i, o := range req.Options {
+			opts[i] = escMD(o)
+		}
+		lines = append(lines, "Options: "+strings.Join(opts, " · "))
+	}
+	lines = append(lines, "\nReply with your answer\\.")
+	n.send(strings.Join(lines, "\n"))
+
+	ch := make(chan string, 1)
+	n.mu.Lock()
+	n.permCh = ch
+	n.mu.Unlock()
+
+	defer func() {
+		n.mu.Lock()
+		n.permCh = nil
+		n.mu.Unlock()
+	}()
+
+	select {
+	case reply := <-ch:
+		return reply, true
+	case <-time.After(n.cfg.PermTimeout):
+	case <-ctx.Done():
+	}
+	return "", false
+}
+
 // send sends a MarkdownV2-formatted message synchronously, ignoring errors.
 func (n *Notifier) send(text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -44,7 +44,7 @@ type Policy struct {
 	ToolCompactThresholdPct int      // default 65
 	ToolPruneThresholdPct   int      // default 75
 	InstructionsTrimChars   int      // default 4000
-	ProtectedTools          []string // default {"bash","read_file"}
+	ProtectedTools          []string // default {"bash","read_file","ask_user"}
 }
 
 const (
@@ -69,7 +69,7 @@ func DefaultPolicy() Policy {
 		ToolCompactThresholdPct: defaultToolCompactThresholdPct,
 		ToolPruneThresholdPct:   defaultToolPruneThresholdPct,
 		InstructionsTrimChars:   defaultInstructionsTrimChars,
-		ProtectedTools:          []string{"bash", "read_file"},
+		ProtectedTools:          []string{"bash", "read_file", "ask_user"},
 	}
 }
 

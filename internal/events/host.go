@@ -116,6 +116,13 @@ type PermissionOutcome struct {
 type ElicitationRequest struct {
 	Prompt string
 	Label  string
+	// AutoDefault and AutoAt mark this a bounded background question (the
+	// ask_user tool's timed answer, ADR-0052): when AutoAt passes with no
+	// reply, the ask resolves as unanswered. The TUI shows a countdown for
+	// it and answers queued overflow with silence; other hosts can ignore
+	// both.
+	AutoDefault string
+	AutoAt      time.Time
 }
 
 // ElicitationResult is the user's raw input in response to an
