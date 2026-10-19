@@ -123,11 +123,15 @@ func (m *model) statusBar() string {
 		if rem < 0 {
 			rem = 0
 		}
-		act := "deny"
-		if m.pendingPerm.autoDefault == "y" {
-			act = "allow"
+		if m.pendingPerm.freeText {
+			left += yellow(fmt.Sprintf(" [question pending — %s]", autoNoteQuestion(rem)))
+		} else {
+			act := "deny"
+			if m.pendingPerm.autoDefault == "y" {
+				act = "allow"
+			}
+			left += yellow(fmt.Sprintf(" [permission pending — auto-%s in %s]", act, rem))
 		}
-		left += yellow(fmt.Sprintf(" [permission pending — auto-%s in %s]", act, rem))
 	}
 	if m.quitPending {
 		if m.workflowRunning {

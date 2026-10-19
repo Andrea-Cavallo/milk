@@ -11,6 +11,8 @@ package main
 // wirings cannot drift and every agent a session runs asks the same way.
 
 import (
+	"context"
+
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/tasks"
 )
@@ -32,6 +34,12 @@ type localAgentWiring struct {
 	// safetyAsk is the doom-loop gate for unattended contexts; see
 	// WithSafetyAsk. nil = no gate.
 	safetyAsk func(jobID, tool, summary string) local.SafetyOutcome
+	// userAsk answers the ask_user tool (issue #249) — the question race
+	// over direct input and remote oversight. nil = ask_user unavailable.
+	userAsk func(ctx context.Context, question string, options []string) (string, bool)
+	// bgUserAsk is the unattended variant (background jobs, workflow steps),
+	// bounded by the timed "no answer". nil = unattended contexts cannot ask.
+	bgUserAsk func(ctx context.Context, jobID, question string, options []string) (string, bool)
 	// skipPerms is the live counterpart of the config's
 	// dangerously_skip_permissions: the host's /skip-permissions toggle.
 	skipPerms func() bool
@@ -68,6 +76,12 @@ func wireLocalAgent(a *local.Agent, w localAgentWiring) *local.Agent {
 	}
 	if w.safetyAsk != nil {
 		a = a.WithSafetyAsk(w.safetyAsk)
+	}
+	if w.userAsk != nil {
+		a = a.WithUserAsk(w.userAsk)
+	}
+	if w.bgUserAsk != nil {
+		a = a.WithBackgroundUserAsk(w.bgUserAsk)
 	}
 	if w.onOpenFile != nil {
 		a = a.WithOnOpenFile(w.onOpenFile)

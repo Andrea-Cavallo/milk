@@ -15,7 +15,7 @@ func TestDefaultPolicy(t *testing.T) {
 		ToolCompactThresholdPct: 65,
 		ToolPruneThresholdPct:   75,
 		InstructionsTrimChars:   4000,
-		ProtectedTools:          []string{"bash", "read_file"},
+		ProtectedTools:          []string{"bash", "read_file", "ask_user"},
 	}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("DefaultPolicy() = %+v, want %+v", p, want)

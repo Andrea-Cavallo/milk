@@ -28,6 +28,7 @@ The primary agent (HTTP or Bedrock backends) has these tools available with no c
 | `open_file(path)` | — | ok — opens the file: the configured editor in the TUI, the platform opener over ACP; refused (TUI-only note) where no opener is wired, e.g. single-prompt mode or background jobs |
 | `current_need(goal)` | one-sentence goal | ok — same effect as the user typing `/need <goal>` |
 | `export_session(format, output_path)` | `"text"`\|`"json"`, optional file path | transcript inline, or written to `output_path` |
+| `ask_user(question, options?)` | question + optional suggested choices | the user's answer — or explicit "nobody answered" guidance. Races direct input and remote oversight; unattended asks are bounded by the timed answer (see [Asking the human mid-turn](#ask_user-asking-the-human-mid-turn)) |
 | `milk_config_help(topic)` | e.g. `"mcp add"`, `"agent add"` | a section of milk's own embedded reference docs — lets the agent look up how to manage milk's own config instead of guessing the schema; omit `topic` to list what's available. Backed by `internal/selfdocs`, which indexes `docs/reference/spec.md`/`providers.md`/`workflows.md`/`tooling.md`/`operations.md` by heading — same content this site is built from |
 | `spawn_background_agent(task, label, full_context?)` | self-contained task description + short display label + optional full-context flag | an immediate acknowledgement (job ID) — the eventual result arrives asynchronously, injected into the agent's next turn and shown live in the TUI. See [ADR-0043](../adr/0043-background-subagents.md) |
 | `cancel_background_agent(job_id)` | a job ID returned by `spawn_background_agent` | confirmation, or an error if the job is already finished/unknown — the model-facing equivalent of `/bg stop` |
@@ -45,6 +46,15 @@ Restrict or extend the set per agent with `limits.included_tools` / `limits.excl
 **`full_context` (optional, default `false`)**: a job is isolated by design — no session history and no injected percepts, just the task text (the memory tools are still available when the calling agent has them, so a job can look things up deliberately). Setting `full_context: true` additionally injects the spawning agent's own recent-activity summary (the same rolling, already-budget-capped summary handed to the escalation agent on hand-off) as extra orientation, for a task that genuinely depends on what the caller has been doing rather than a self-contained question. This makes the job more expensive and defeats most of the point of forking — prefer putting everything the task needs directly in `task` instead; reach for `full_context` only when that's not practical.
 
 Claude CLI and subprocess (aider, smolagents) agents use their own native tool sets instead of this list.
+
+### `ask_user` — asking the human mid-turn
+
+The agent's one way to ask a clarifying question instead of proceeding on a guess when the request is ambiguous in a way that changes what to do. The question goes through the same three-source ask layer as permission prompts (ADR-0052), with free text instead of y/n: **direct input** (the TUI's prompt queue as a free-text prompt — the `a`/`d` bulk keys don't apply, any typed line is the answer — or a one-field form dialog on form-capable ACP clients), **remote oversight** (Telegram relays the question and its options and takes free-text replies), and, in unattended contexts only, a timed **no answer** at the background-ask deadline. Silence is never an answer: only a real reply, the timed answer, or cancellation resolve the race.
+
+- Foreground questions (ordinary turns) wait for a human; unattended ones (background jobs, workflow steps) are bounded exactly like background permission asks (`permissions.background_timeout_secs`), so a silent question can never hold a job's concurrency slot.
+- An unanswered question comes back as guidance ("proceed on your own best judgment; don't ask again"), never as an error — the model continues instead of retrying the call.
+- In non-interactive embedders (single-prompt mode, tool agents with no host ask) the tool fails with a clear "not available" error, exactly like `open_file`.
+- `ask_user` is in the default `protected_tools` set (ADR-0058) — a question survives context pressure like `bash` and `read_file`.
 
 ---
 

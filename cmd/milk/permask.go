@@ -8,6 +8,11 @@ package main
 // the timed answer, the one source allowed to speak for nobody. Background
 // asks surface everywhere (main TUI included) instead of failing closed, and
 // the deadline guarantees an answer within a bounded time.
+//
+// Questions (the ask_user tool, issue #249) race the same three sources via
+// askUserQuestion: a question instead of a permission, free text instead of
+// y/n, and a timed "no answer" instead of a timed default — but silence is
+// still never an answer, and the remote surface's timeout never resolves one.
 
 import (
 	"context"
@@ -22,15 +27,15 @@ import (
 	"github.com/scoutme/milk/internal/oversight"
 )
 
-// oversightPermMu serializes the *remote* side of permission asks
-// process-wide: the Telegram backend has a single prompt slot
-// (internal/oversight/telegram's permCh), so two concurrent AskPermission
-// calls would steal it from each other — the loser would time out, and its
+// oversightAskMu serializes the *remote* side of asks process-wide: the
+// Telegram backend has a single prompt slot (internal/oversight/telegram's
+// permCh, shared by AskPermission and AskInput), so two concurrent remote
+// asks would steal it from each other — the loser would time out, and its
 // reply could fall through to the input callback and be injected as a typed
-// message. The lock is taken by the asking goroutine and held until
-// AskPermission has fully returned (including its permCh cleanup), so a
-// waiter can never clear the slot of the next one.
-var oversightPermMu sync.Mutex
+// message. The lock is taken by the asking goroutine and held until the
+// remote ask has fully returned (including its permCh cleanup), so a waiter
+// can never clear the slot of the next one.
+var oversightAskMu sync.Mutex
 
 // permSource is where an ask's answer came from — metrics labels and
 // messaging.
@@ -78,7 +83,7 @@ func askPermission(ctx context.Context, n oversight.Notifier, req oversight.Perm
 	}
 	// Always cancel on return: the losing surface's wait (the remote's
 	// prompt slot, a queued TUI prompt) must stop as soon as the ask is
-	// resolved — the remote goroutine holds oversightPermMu until its
+	// resolved — the remote goroutine holds oversightAskMu until its
 	// AskPermission returns, so a leaked waiter would deadlock every later
 	// ask.
 	ctx, cancel := context.WithCancel(ctx)
@@ -94,8 +99,8 @@ func askPermission(ctx context.Context, n oversight.Notifier, req oversight.Perm
 	}
 	if remote {
 		go func() {
-			oversightPermMu.Lock()
-			defer oversightPermMu.Unlock()
+			oversightAskMu.Lock()
+			defer oversightAskMu.Unlock()
 			if ctx.Err() != nil {
 				return // already answered elsewhere — don't prompt the backend
 			}
@@ -131,6 +136,100 @@ func askPermission(ctx context.Context, n oversight.Notifier, req oversight.Perm
 		// ctx-aware prompt is withdrawn by its own ctx handling.
 		return p.def, permSrcDefault
 	}
+}
+
+// askUserQuestion races the direct surface and remote oversight for a
+// free-text answer to an agent's question (the ask_user tool — issue #249)
+// and returns the first real answer plus its source. Unlike permissions,
+// silence is never an answer: questions have no remote timeout action, so
+// only the direct surface, the timed "no answer" at p.deadline (background
+// asks), or external cancellation may resolve an unanswered question. With
+// no surface at all the call returns immediately with answered=false and
+// src=permSrcNoSurface. direct reports (answer, ok); ok=false is a surface
+// that withdrew or gave up (a dismissed dialog), which resolves the race as
+// "nobody answered" unless another source still speaks before cancel.
+func askUserQuestion(ctx context.Context, n oversight.Notifier, req oversight.InputRequest, direct func(context.Context) (string, bool), p askPolicy) (answer string, answered bool, src permSource) {
+	remote := oversightRemote(n)
+	if direct == nil && !remote {
+		return "", false, permSrcNoSurface
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		answer string
+		ok     bool
+		src    permSource
+	}
+	ch := make(chan result, 3)
+	if direct != nil {
+		go func() {
+			a, ok := direct(ctx)
+			if ok {
+				ch <- result{a, true, permSrcDirect}
+				return
+			}
+			if ctx.Err() == nil {
+				// The surface gave up without answering (e.g. a dismissed
+				// dialog) — a resolution, not a pending race.
+				ch <- result{"", false, permSrcDirect}
+			}
+		}()
+	}
+	if remote {
+		go func() {
+			oversightAskMu.Lock()
+			defer oversightAskMu.Unlock()
+			if ctx.Err() != nil {
+				return // already answered elsewhere — don't prompt the backend
+			}
+			if a, ok := n.AskInput(ctx, req); ok {
+				ch <- result{a, true, permSrcRemote}
+			}
+			// Remote silence is never an answer for a question.
+		}()
+	}
+	if p.deadline > 0 {
+		go func() {
+			t := time.NewTimer(p.deadline)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				ch <- result{"", false, permSrcDefault}
+			case <-ctx.Done():
+			}
+		}()
+	}
+	select {
+	case res := <-ch:
+		return res.answer, res.ok, res.src
+	case <-ctx.Done():
+		// External cancellation (a job's context ended) — nobody answered.
+		return "", false, permSrcDefault
+	}
+}
+
+// userAskPrompt renders the ask_user question for the direct surface: the
+// question, the options when any, and — for timed background asks — the note
+// about the timed answer. These prompts are free text (no y/n): the TUI
+// routes them through the same prompt queue with the freeText flag set, so
+// the "a"/"d" bulk keys never swallow an answer.
+func userAskPrompt(question string, options []string, note string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("\n%s agent question:\n%s\n", milkTag(), bold(strings.TrimSpace(question))))
+	for i, o := range options {
+		b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, o))
+	}
+	if note != "" {
+		b.WriteString(fmt.Sprintf("%s %s\n", milkTag(), yellow(note)))
+	}
+	b.WriteString(fmt.Sprintf("%s your answer: ", milkTag()))
+	return b.String()
+}
+
+// autoNoteQuestion renders the timed answer for a background question, e.g.
+// "no answer in 6m0s" (the permission wording is autoNote's allow/deny).
+func autoNoteQuestion(d time.Duration) string {
+	return fmt.Sprintf("no answer in %s", d)
 }
 
 // safetyAskRun is the doom-loop gate's unattended-context ask (ADR-0052):
@@ -318,7 +417,11 @@ func (m model) handlePermissionsCmd(rest string) model {
 			if rem < 0 {
 				rem = 0
 			}
-			line += "  (" + autoNote(msg.autoDefault == "y", rem) + ")"
+			if msg.freeText {
+				line += "  (" + autoNoteQuestion(rem) + ")"
+			} else {
+				line += "  (" + autoNote(msg.autoDefault == "y", rem) + ")"
+			}
 		}
 		sb.WriteString(fmt.Sprintf("  [%s] %s\n", state, line))
 	}
