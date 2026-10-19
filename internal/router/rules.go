@@ -14,6 +14,10 @@ import (
 
 var reCodeFence = regexp.MustCompile("```")
 
+// approxTokens is the shared token estimate behind the hard thresholds
+// (rune count / 4).
+func approxTokens(s string) int { return utf8.RuneCountInString(s) / 4 }
+
 // Signal represents a single detected routing cue.
 type Signal struct {
 	Name   string
@@ -36,12 +40,12 @@ func rulesDecision(prompt string, cfg config.Config) Decision {
 func rulesDecisionCtx(ctx context.Context, prompt string, cfg config.Config) Decision {
 	r := cfg.Rules
 	lower := strings.ToLower(prompt)
-	approxTokens := utf8.RuneCountInString(prompt) / 4
+	tokens := approxTokens(prompt)
 
 	// --- Hard conclusive rules (always win) ---
 
 	// Long prompt → escalate
-	if approxTokens > r.EscalateAboveTokens {
+	if tokens > r.EscalateAboveTokens {
 		return Decision{Target: TargetEscalation, Conclusive: true, Reason: "prompt exceeds token threshold"}
 	}
 
@@ -53,7 +57,7 @@ func rulesDecisionCtx(ctx context.Context, prompt string, cfg config.Config) Dec
 	}
 
 	// Very short prompt → local (shell one-liners, quick queries)
-	if r.LocalBelowTokens > 0 && approxTokens <= r.LocalBelowTokens {
+	if r.LocalBelowTokens > 0 && tokens <= r.LocalBelowTokens {
 		return Decision{Target: TargetLocal, Conclusive: true, Reason: "short prompt (local)"}
 	}
 

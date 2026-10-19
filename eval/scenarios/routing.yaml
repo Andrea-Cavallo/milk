@@ -1,0 +1,80 @@
+# Routing scenarios — multi-turn confirmation behaviour (issue #263).
+#
+# Guards the "proceed/go ahead" routing design: a bare confirmation executes
+# the confirmed task, so the answer must match the confirmed task's depth —
+# not the depth a bare "go ahead" implies. The cheap failure this catches is a
+# shallow sketch or a clarifying question where the hard task should have run.
+# (Routing itself is unit-tested in internal/router/confirm_test.go; these
+# scenarios measure the *effect* of routing on output quality.)
+category: routing
+
+scenarios:
+  - name: proceed-on-hard-design-task
+    description: >
+      Turn 1 asks for the design of a hard architecture change (memory
+      consolidation: weight model, decay, promotion). Turn 2 is the bare
+      confirmation "go ahead". Regression guard for #263: the execution must
+      reach full design depth — a shallow sketch or a clarifying question is
+      the exact failure mode of routing the confirmation to the cheap primary.
+    difficulty: hard
+    multi_turn: true
+    turns:
+      - prompt: >-
+          I want to design the new memory consolidation for our percept store:
+          how should the consolidation pass weigh percepts, decay old ones and
+          promote stable facts? Sketch the design first, don't write code.
+        rubric:
+          - criterion: design-sketch
+            description: >
+              Does the turn lay out a real design (weight model, decay and
+              promotion mechanics, at least one edge case) instead of asking
+              clarifying questions or giving a stub?
+            weight: 1
+            scoring: scale_1_5
+      - prompt: >-
+          go ahead
+        rubric:
+          - criterion: confirmed-depth
+            description: >
+              Does the answer deliver the full design at the depth the
+              confirmed task demands — concrete mechanics (formulas or
+              pseudocode), the decay/promotion lifecycle, and edge cases —
+              rather than a shallow summary or a "what would you like me to
+              focus on?" reply?
+            weight: 3
+            scoring: scale_1_5
+          - criterion: continuity
+            description: >
+              Does the answer continue the turn-1 design (same model and
+              vocabulary) instead of restarting the discussion from scratch?
+            weight: 1
+            scoring: scale_1_5
+
+  - name: proceed-small-followup-stays-proportional
+    description: >
+      The over-escalation guard (issue #263 failure mode): a hard task is
+      confirmed and executed, and the user then confirms a small new-scope
+      follow-up ("yes, list the files too"). The answer must be quick and
+      proportional — a huge essay for a trivial ask is the failure this
+      scenario catches.
+    difficulty: easy
+    multi_turn: true
+    turns:
+      - prompt: >-
+          Design a retry strategy for our flaky HTTP client: backoff, jitter,
+          which errors are retryable. Just the design, no code.
+        rubric:
+          - criterion: design-quality
+            description: Does the turn give a real retry design (backoff, jitter, retryable classes)?
+            weight: 1
+            scoring: scale_1_5
+      - prompt: >-
+          yes, list the files in this project too
+        rubric:
+          - criterion: proportional
+            description: >
+              Is the answer a direct, short listing of the files (or how to
+              list them) — exactly the small ask — without a large essay,
+              re-planning, or design work nobody asked for?
+            weight: 2
+            scoring: binary

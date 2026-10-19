@@ -14,12 +14,13 @@ Decision order per turn:
 0. **Direct-bash shortcut** — when `direct_bash: true` and the input matches the shell-command heuristic, milk prompts `y/N` before running it locally via `sh -c` inside an embedded PTY pane. Skips confirmation if the first token is in `direct_bash_allow`. Fires after slash-command handling but before agent routing. On Windows, where no real PTY is available, milk instead pipes the child's stdout/stderr and streams them into the transcript live (preferring `bash`/`sh` on PATH — Git Bash, MSYS2, WSL interop — falling back to `cmd /C`); the child gets no stdin, so interactive prompts (editors, y/n confirmations) won't work there. WSL itself is unaffected and keeps using the real embedded-PTY path.
 1. **Explicit flags** — `--escalate` forces the escalation agent; `--primary` forces the primary agent. Always wins.
 2. **Session state** — if `ESCALATION_WAITING`, bypass the router entirely and send directly to the escalation agent via `--resume`.
-3. **Rules layer** — a layered scorer:
+3. **Confirmation prompts** — a short "proceed / go ahead / yes / do it" prompt carries no routing signals of its own, so it is routed on the **confirmed content** instead (see [Confirmation prompts](#confirmation-prompts-proceed--go-ahead)): the scope the prompt itself adds, the agent's new-scope question, or the pending task the confirmation stands for.
+4. **Rules layer** — a layered scorer:
    - Hard rules: prompt length above `escalate_above_tokens` → escalation; keyword match → escalation.
    - Short-prompt shortcut: at or below `local_below_tokens` → conclusive local.
    - Weighted signal scorer: local verbs, escalate verbs, path references, code blocks, and open-question prefixes each contribute a signed score; conclusive once the score reaches `escalate_threshold` or `local_threshold`.
-4. **Primary model classification** — when the scorer is inconclusive, the primary model itself is asked to classify (`route: local | escalate`); behavior configurable via `classifier_fallback`.
-5. **Default** — attempt the primary agent; escalate if it calls `escalate(reason)`.
+5. **Primary model classification** — when the scorer is inconclusive, the primary model itself is asked to classify (`route: local | escalate`); behavior configurable via `classifier_fallback`.
+6. **Default** — attempt the primary agent; escalate if it calls `escalate(reason)`.
 
 ### Direct-bash configuration
 
@@ -77,8 +78,23 @@ Real example (from a live config) adding bilingual open-question prefixes:
 | `classifier_fallback` | string | `"local"` | `"local"` asks the primary model to classify; `"escalation"` escalates directly when the scorer is inconclusive |
 | `local_verbs` / `escalate_verbs` | []string | English + Italian | Substring-matched; one match per prompt (first hit wins) |
 | `open_question_prefixes` | []string | English + Italian | Prefix-matched (word boundary) against the trimmed prompt start |
+| `confirmation_phrases` | []string | English + Italian | Word-exact phrase list that marks a prompt as a confirmation (see below) |
+| `confirmation_new_scope_markers` | []string | English + Italian | Words/marks that make an agent question *new scope* ("want me to also …?") rather than a continuation ask ("shall I proceed?") |
 
 **Guidelines**: `escalate_keywords` should only contain multi-word or highly specific phrases where local routing would *always* be wrong — single common words like "design" are too broad (*"the design looks off"* is a local task). Put ambiguous terms in `escalate_verbs` instead, where they contribute a score rather than a binding decision.
+
+### Confirmation prompts ("proceed" / "go ahead")
+
+A bare *"proceed", "go ahead", "yes", "do it", "sounds good"* carries no routing signals — scored in isolation it hits the short-prompt shortcut and goes local, handing the **execution of the hard task it confirms** to the cheap primary (issue #263). Instead, confirmation-class prompts are routed on the **confirmed content** (ADR-0065):
+
+1. **The prompt's own scope** wins — *"yes, do the big refactor"* routes on `do the big refactor`. A short scope with an escalate keyword/verb marker escalates (marker-aware shortcut); a short scope without one stays local (*"yes, list the files too"*). This is the over-escalation guard: new small scope is never dragged to the escalation agent just because the session is on a hard task.
+2. **The agent's new-scope question** — when the last agent message proposes new scope (contains a `confirmation_new_scope_markers` hit: *"Want me to also rename the test file?"*), the bare confirmation routes on that question, with ordinary rules semantics.
+3. **The pending task** — otherwise the confirmation stands for the last non-confirmation user message (chained confirmations walk back past their siblings; a tail-bearing one contributes its own scope). User words bind on their escalate markers (*"refactor the whole dispatch layer" + "proceed"* → escalation, even though the task text itself is 7 tokens).
+4. **No history** → the prompt itself is routed as before (status quo).
+
+Everything else is the ordinary rules layer applied to the resolved text, so a long confirmed task routes exactly as the same text would typed directly — and the model classifier, when the scorer is inconclusive, classifies the *resolved content*, not "proceed". `ESCALATION_WAITING`, explicit pins (`/escalate`, `/primary`, auto-sticky) and single-turn overrides are checked first and are unaffected.
+
+Phrases match word-exact and case-insensitive (*"proceeding with the fix"* is not a confirmation), and may chain (*"yes, please go ahead and do it"*). Detection only *starts* the confirmation path; a prompt that merely opens with a lexicon word keeps its own routing.
 
 ---
 
