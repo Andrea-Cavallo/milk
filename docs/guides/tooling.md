@@ -10,9 +10,11 @@ The primary agent (HTTP or Bedrock backends) has these tools available with no c
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `bash(command)` | `command string` | stdout, stderr, exit_code |
-| `find_files(path, pattern)` | root dir + glob (e.g. `*_test.go`) | matching file paths — locate by filename; use `grep` for contents |
-| `grep(pattern, path, recursive)` | pattern/path/bool | matches — searches file contents (extended regex, e.g. `foo\|bar`); use `find_files` for filenames |
+| `bash(command, workdir?, run_in_background?)` | `command string` | stdout, stderr, exit_code — or a `shell_id` with `run_in_background` (see [Background shells](#background-shells)) |
+| `bash_output(shell_id, tail_lines?)` | shell ID from `bash run_in_background` | status line (running/exited/killed) + retained output |
+| `kill_bash(shell_id)` | shell ID | ok — stops the shell's process group; output stays readable until reaped |
+| `find_files(path, pattern)` | root dir + glob (`*`, `?`, `**` — e.g. `*_test.go`, `src/**/*.ts`) | matching file paths, newest-first, capped at 500 with a truncation marker — honors `.gitignore` via git when available; use `grep` for contents |
+| `grep(pattern, path, recursive, ignore_case?, context?, include?, max_results?)` | pattern/path + optional filters | matching lines (extended regex, e.g. `foo\|bar`) — ripgrep when available (honors `.gitignore`), `grep -E` fallback; capped at 200 matching lines with a truncation marker; use `find_files` for filenames |
 | `read_file(path, offset, limit)` | path + optional range (`offset` is a 1-based line number matching the output numbering) | content |
 | `write_file(path, content)` | — | ok — creates parent directories; expands `~`; writes atomically (temp file + rename) |
 | `edit_file(path, old_string, new_string, replace_all)` | — | ok — exact-string replacement first; on a miss falls back to a whitespace/indentation/escape-tolerant match (uniqueness still required, reported as `fuzzy match: <strategy>`), and on total failure returns the closest matching block as a hint that is **never** applied silently. Writes atomically (temp file + rename) and preserves CRLF |
@@ -45,6 +47,24 @@ Restrict or extend the set per agent with `limits.included_tools` / `limits.excl
 Claude CLI and subprocess (aider, smolagents) agents use their own native tool sets instead of this list.
 
 ---
+
+## Background shells
+
+Long-running processes (dev servers, watchers, REPLs) go through `bash` with `run_in_background: true` instead of blocking the turn ([ADR-0063](../adr/0063-background-shells.md)):
+
+```json
+{"name": "bash", "arguments": {"command": "npm run dev", "run_in_background": true}}
+→ started background shell s1 — read its output with bash_output(shell_id: "s1"), stop it with kill_bash(shell_id: "s1")
+
+{"name": "bash_output", "arguments": {"shell_id": "s1", "tail_lines": 20}}
+{"name": "kill_bash", "arguments": {"shell_id": "s1"}}
+```
+
+- A shell **outlives the turn** that started it and is killed when milk exits; it is never persisted across restarts.
+- Bounded: max 16 concurrent shells, auto-killed after 1 hour, output retained in a 256 KB buffer (oldest dropped). A finished shell's output stays readable for 30 minutes, then is reaped.
+- `bash` also takes `workdir` for a per-command working-directory override (default: the session cwd).
+- Permissions: `run_in_background` rides the normal `bash` permission ask; `bash_output` is read-only; `kill_bash` can only stop shells this agent started.
+
 
 ## Agent-as-Tool
 

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -162,12 +163,14 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 			"type": "function",
 			"function": map[string]any{
 				"name":        "bash",
-				"description": "Execute a shell command and return stdout, stderr, and exit code.",
+				"description": "Execute a shell command and return stdout, stderr, and exit code. Runs in the session working directory (or workdir). Set run_in_background=true for long-running processes (dev servers, watchers) — it returns a shell_id immediately; read output with bash_output, stop with kill_bash.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"command":         map[string]any{"type": "string", "description": "Shell command to execute"},
-						"timeout_seconds": map[string]any{"type": "integer", "description": "Timeout in seconds (default 120, max 600)"},
+						"command":           map[string]any{"type": "string", "description": "Shell command to execute"},
+						"workdir":           map[string]any{"type": "string", "description": "Working directory for the command (default: session cwd)"},
+						"run_in_background": map[string]any{"type": "boolean", "description": "Start the command in the background and return a shell_id (default false)"},
+						"timeout_seconds":   map[string]any{"type": "integer", "description": "Timeout in seconds (default 120, max 600); ignored with run_in_background"},
 					},
 					"required": []string{"command"},
 				},
@@ -176,13 +179,42 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 		{
 			"type": "function",
 			"function": map[string]any{
+				"name":        "bash_output",
+				"description": "Read the current output of a background shell started with bash(run_in_background). Shows a status line (running/exited/killed) plus output.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"shell_id":   map[string]any{"type": "string", "description": "The shell ID returned by bash run_in_background"},
+						"tail_lines": map[string]any{"type": "integer", "description": "Return only the last N lines (default: all retained output)"},
+					},
+					"required": []string{"shell_id"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "kill_bash",
+				"description": "Stop a background shell started with bash(run_in_background), by its shell ID. Its output stays readable via bash_output until reaped.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"shell_id": map[string]any{"type": "string", "description": "The shell ID returned by bash run_in_background"},
+					},
+					"required": []string{"shell_id"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
 				"name":        "find_files",
-				"description": "Find files by name pattern (glob) under a directory. Use this to locate files by filename, e.g. '*_test.go', '*.md'. For searching file contents use grep.",
+				"description": "Find files by name pattern (glob) under a directory. Use this to locate files by filename, e.g. '*_test.go', '*.md', 'src/**/index.ts'. Honors .gitignore (via git) where possible; results are capped and sorted newest-first. For searching file contents use grep.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"path":    map[string]any{"type": "string", "description": "Root directory to search under"},
-						"pattern": map[string]any{"type": "string", "description": "Glob filename pattern, e.g. '*_test.go'"},
+						"pattern": map[string]any{"type": "string", "description": "Glob filename pattern: '*' and '?' within a segment, '**' for any depth (e.g. '*_test.go', 'src/**/*.ts'). A pattern with '/' matches the path relative to the root; otherwise it matches the basename."},
 					},
 					"required": []string{"path", "pattern"},
 				},
@@ -192,13 +224,17 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 			"type": "function",
 			"function": map[string]any{
 				"name":        "grep",
-				"description": "Search for a pattern inside file contents. Returns matching lines with line numbers. Use find_files to locate files by name instead.",
+				"description": "Search for a pattern inside file contents. Returns matching lines with line numbers (extended regex, e.g. 'foo|bar'). Uses ripgrep when available (honors .gitignore) and falls back to grep -E. Use find_files to locate files by name instead.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"pattern":   map[string]any{"type": "string", "description": "Regex pattern to search for"},
-						"path":      map[string]any{"type": "string", "description": "File or directory path to search"},
-						"recursive": map[string]any{"type": "boolean", "description": "Search recursively in directories"},
+						"pattern":     map[string]any{"type": "string", "description": "Extended regex pattern to search for"},
+						"path":        map[string]any{"type": "string", "description": "File or directory path to search"},
+						"recursive":   map[string]any{"type": "boolean", "description": "Search recursively in directories (directories are searched recursively regardless)"},
+						"ignore_case": map[string]any{"type": "boolean", "description": "Case-insensitive match (default false)"},
+						"context":     map[string]any{"type": "integer", "description": "Include N lines of context around each match (default 0)"},
+						"include":     map[string]any{"type": "string", "description": "Only search files matching this glob, e.g. '*.go'"},
+						"max_results": map[string]any{"type": "integer", "description": "Cap on returned matching lines (default 200); the tail says how many more matched"},
 					},
 					"required": []string{"pattern", "path"},
 				},
@@ -660,6 +696,10 @@ func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Sess
 	switch name {
 	case "bash":
 		return runBash(ctx, args, cwd)
+	case "bash_output":
+		return runBashOutput(args)
+	case "kill_bash":
+		return runKillBash(args)
 	case "find_files":
 		return runFindFiles(ctx, args, cwd)
 	case "grep":
@@ -1034,6 +1074,23 @@ const (
 
 func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool) {
 	command, _ := args["command"].(string)
+	dir := cwd
+	if wd, _ := args["workdir"].(string); wd != "" {
+		dir = resolvePath(wd, cwd)
+	}
+
+	// run_in_background: start a long-lived shell and return its ID
+	// immediately (ADR-0063). timeout_seconds does not apply — the shell is
+	// bounded by the registry's lifetime cap and kill_bash instead.
+	if bg, _ := args["run_in_background"].(bool); bg {
+		s, err := bgShells.start(command, dir)
+		if err != nil {
+			return toolResult{Error: err.Error()}.String(), false
+		}
+		return toolResult{Output: fmt.Sprintf(
+			"started background shell %s — read its output with bash_output(shell_id: %q), stop it with kill_bash(shell_id: %q)",
+			s.id, s.id, s.id)}.String(), false
+	}
 
 	timeout := bashDefaultTimeout
 	if v, ok := args["timeout_seconds"]; ok {
@@ -1050,8 +1107,8 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	if cwd != "" {
-		cmd.Dir = cwd
+	if dir != "" {
+		cmd.Dir = dir
 	}
 	setProcGroup(cmd)
 	var stdout, stderr bytes.Buffer
@@ -1131,6 +1188,110 @@ func runMilkConfigHelp(args map[string]any) (string, bool) {
 	return toolResult{Output: body}.String(), false
 }
 
+// findFilesMaxResults is the default cap for find_files; a truncated result
+// says how many matches were withheld.
+const findFilesMaxResults = 500
+
+// grepMaxResults is the default cap for grep (matching lines).
+const grepMaxResults = 200
+
+// walkSkipDirs are directory names never descended into by the find_files
+// walk fallback (when git enumeration is unavailable). The git path honors
+// .gitignore properly; this list is the crude substitute.
+var walkSkipDirs = map[string]bool{".git": true, ".claude": true, "node_modules": true, "vendor": true}
+
+// globToRegex converts a glob to an anchored regexp: `*` within a segment,
+// `?` single char, and `**` for any depth (`**/` matching zero or more
+// directories).
+func globToRegex(pattern string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '*':
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				i++
+				if i+1 < len(pattern) && pattern[i+1] == '/' {
+					i++
+					b.WriteString("(?:[^/]+/)*")
+				} else {
+					b.WriteString(".*")
+				}
+			} else {
+				b.WriteString("[^/]*")
+			}
+		case '?':
+			b.WriteString("[^/]")
+		default:
+			if strings.ContainsRune(`\.+()|[]{}^$`, rune(pattern[i])) {
+				b.WriteString(`\`)
+			}
+			b.WriteByte(pattern[i])
+		}
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
+}
+
+// matchGlob reports whether rel matches pattern. A pattern containing "/" is
+// matched against the whole relative path; otherwise against the basename.
+func matchGlob(pattern, rel string) bool {
+	re := globToRegex(pattern)
+	target := rel
+	if !strings.Contains(pattern, "/") {
+		target = filepath.Base(rel)
+	}
+	return re.MatchString(target)
+}
+
+// gitEnumerate lists files under root relative to it via git (tracked +
+// untracked, honoring .gitignore). ok=false when git is missing or root is
+// not inside a work tree — callers fall back to the directory walk.
+func gitEnumerate(ctx context.Context, root string) ([]string, bool) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return nil, false
+	}
+	if err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+		return nil, false
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return nil, false
+	}
+	var out []string
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out, true
+}
+
+// walkEnumerate lists files under root relative to it via a plain walk,
+// skipping walkSkipDirs.
+func walkEnumerate(root string) []string {
+	var out []string
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error { //nolint:errcheck
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if walkSkipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr == nil {
+			out = append(out, rel)
+		}
+		return nil
+	})
+	return out
+}
+
 func runFindFiles(ctx context.Context, args map[string]any, cwd string) (string, bool) {
 	path, _ := args["path"].(string)
 	path = expandTilde(path)
@@ -1140,25 +1301,56 @@ func runFindFiles(ctx context.Context, args map[string]any, cwd string) (string,
 	if !filepath.IsAbs(path) && cwd != "" {
 		path = filepath.Join(cwd, path)
 	}
+	root := filepath.Clean(path)
 	pattern, _ := args["pattern"].(string)
-	cmd := exec.CommandContext(ctx, "find", path,
-		"-not", "-path", "*/.git/*",
-		"-not", "-path", "*/.claude/*",
-		"-name", pattern,
-		"-type", "f")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	code := 0
-	if err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			code = exit.ExitCode()
-		} else {
-			return toolResult{Error: err.Error()}.String(), false
-		}
+	if pattern == "" {
+		return toolResult{Error: "pattern is required"}.String(), false
 	}
-	return toolResult{Output: stdout.String(), Error: stderr.String(), ExitCode: code}.String(), false
+
+	relFiles, ok := gitEnumerate(ctx, root)
+	if !ok {
+		relFiles = walkEnumerate(root)
+	}
+
+	type entry struct {
+		rel   string
+		mtime time.Time
+	}
+	var matches []entry
+	for _, rel := range relFiles {
+		if !matchGlob(pattern, filepath.ToSlash(rel)) {
+			continue
+		}
+		var mtime time.Time
+		if info, err := os.Stat(filepath.Join(root, rel)); err == nil {
+			mtime = info.ModTime()
+		}
+		matches = append(matches, entry{rel, mtime})
+	}
+	// Newest first (MiMo-Code's ordering): recent files are what a model
+	// almost always means by a filename search.
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].mtime.Equal(matches[j].mtime) {
+			return matches[i].rel < matches[j].rel
+		}
+		return matches[i].mtime.After(matches[j].mtime)
+	})
+
+	truncated := 0
+	if len(matches) > findFilesMaxResults {
+		truncated = len(matches) - findFilesMaxResults
+		matches = matches[:findFilesMaxResults]
+	}
+
+	var lines []string
+	for _, m := range matches {
+		lines = append(lines, filepath.Join(root, m.rel))
+	}
+	out := strings.Join(lines, "\n")
+	if truncated > 0 {
+		out += fmt.Sprintf("\n[truncated: %d more matches; refine the pattern or narrow path]", truncated)
+	}
+	return toolResult{Output: out}.String(), false
 }
 
 func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool) {
@@ -1172,25 +1364,59 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 		path = filepath.Join(cwd, path)
 	}
 	recursive, _ := args["recursive"].(bool)
-
-	// Always exclude hidden/binary directories and skip binary files.
-	// -E is required: the tool advertises "Regex pattern" and models write
-	// extended syntax (foo|bar, a+, a?) — GNU basic grep treats those as
-	// literals and the search silently returns nothing.
-	// -r is forced when path is a directory, regardless of the recursive flag.
-	gargs := []string{"-E", "-n", "--color=never", "--binary-files=without-match",
-		"--exclude-dir=.git", "--exclude-dir=.claude"}
-	if recursive {
-		gargs = append(gargs, "-r")
-	} else {
-		// If path is a directory, force recursive to avoid grep opening binary index files.
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			gargs = append(gargs, "-r")
-		}
+	ignoreCase, _ := args["ignore_case"].(bool)
+	contextLines := intArg(args, "context")
+	include, _ := args["include"].(string)
+	maxResults := intArg(args, "max_results")
+	if maxResults <= 0 {
+		maxResults = grepMaxResults
 	}
-	gargs = append(gargs, pattern, path)
 
-	cmd := exec.CommandContext(ctx, "grep", gargs...)
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("rg"); err == nil {
+		// ripgrep: extended regex by default, honors .gitignore/.rgignore,
+		// skips binary files and hidden dirs.
+		gargs := []string{"--line-number", "--color", "never", "-e", pattern}
+		if ignoreCase {
+			gargs = append(gargs, "-i")
+		}
+		if contextLines > 0 {
+			gargs = append(gargs, "-C", strconv.Itoa(contextLines))
+		}
+		if include != "" {
+			gargs = append(gargs, "--glob", include)
+		}
+		gargs = append(gargs, path)
+		cmd = exec.CommandContext(ctx, "rg", gargs...)
+	} else {
+		// grep fallback: extended regex (-E) is required — the tool
+		// advertises "Regex pattern" and models write foo|bar, a+, a?.
+		// .gitignore is not honored here (no cheap POSIX way); rg or git
+		// gives that.
+		gargs := []string{"-E", "-n", "--color=never", "--binary-files=without-match",
+			"--exclude-dir=.git", "--exclude-dir=.claude",
+			"--exclude-dir=node_modules", "--exclude-dir=vendor"}
+		if ignoreCase {
+			gargs = append(gargs, "-i")
+		}
+		if contextLines > 0 {
+			gargs = append(gargs, "-C", strconv.Itoa(contextLines))
+		}
+		if include != "" {
+			gargs = append(gargs, "--include="+include)
+		}
+		if recursive {
+			gargs = append(gargs, "-r")
+		} else {
+			// If path is a directory, force recursive to avoid grep opening binary index files.
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				gargs = append(gargs, "-r")
+			}
+		}
+		gargs = append(gargs, "-e", pattern, path)
+		cmd = exec.CommandContext(ctx, "grep", gargs...)
+	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1203,8 +1429,17 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 			return toolResult{Error: err.Error()}.String(), false
 		}
 	}
+
+	out := stdout.String()
+	// Cap matching lines (context lines ride along with their match).
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if out != "" && len(lines) > maxResults {
+		omitted := len(lines) - maxResults
+		out = strings.Join(lines[:maxResults], "\n") +
+			fmt.Sprintf("\n[truncated: %d more matching lines; refine the pattern or raise max_results]", omitted)
+	}
 	return toolResult{
-		Output:   stdout.String(),
+		Output:   out,
 		Error:    stderr.String(),
 		ExitCode: code,
 	}.String(), false
