@@ -63,3 +63,4 @@
 * [62. Tool batches execute under a barrier model](0062-tool-batch-barrier-dispatch.md)
 * [63. Background shells: lifecycle, permissions, cleanup](0063-background-shells.md)
 * [64. Background shells in the TUI and ACP: one merged background surface](0064-background-shell-surface.md)
+* [65. Confirmation-aware routing: "proceed/go ahead" routes on the confirmed content](0065-confirmation-aware-routing.md)

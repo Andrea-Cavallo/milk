@@ -17,10 +17,12 @@ import (
 const instrumentationScope = "github.com/scoutme/milk"
 
 // routerRule maps a human-readable decision reason to a stable label for the
-// milk.router.decisions metric. Labels match the spec: explicit, state,
+// milk.router.decisions metric. Labels: explicit, state, confirmation,
 // hard_threshold, soft_score, classifier, default.
 func routerRule(reason string) string {
 	switch {
+	case strings.Contains(reason, "confirmation"):
+		return "confirmation"
 	case strings.Contains(reason, "flag"):
 		return "explicit"
 	case strings.Contains(reason, "ESCALATION_WAITING"):
@@ -96,19 +98,36 @@ func (r *Router) route(ctx context.Context, sess *session.Session, prompt string
 		return Decision{Target: TargetEscalation, Conclusive: true, Reason: "session state ESCALATION_WAITING"}, nil
 	}
 
-	// 3. Rules layer
+	// 3. Confirmation prompts (issue #263, ADR-0065): "proceed/go ahead/yes"
+	// routes on the resolved confirmed content, not the bare prompt text.
+	if ci, ok := matchConfirmation(prompt, r.cfg.Rules.ConfirmationPhrases); ok {
+		scope, userAuthored := resolveConfirmedScope(sess, prompt, ci, r.cfg)
+		if d := confirmationDecision(ctx, scope, r.cfg, userAuthored); d.Conclusive {
+			return d, nil
+		}
+		// Inconclusive scope → classify the scope itself, not "proceed".
+		return r.fallbackDecision(ctx, scope), nil
+	}
+
+	// 4. Rules layer
 	if d := rulesDecisionCtx(ctx, prompt, r.cfg); d.Conclusive {
 		return d, nil
 	}
 
-	// 4. Configurable fallback: local LLM classifier or direct escalation
+	// 5. Configurable fallback: local LLM classifier or direct escalation
+	return r.fallbackDecision(ctx, prompt), nil
+}
+
+// fallbackDecision consults the configured classifier fallback for text the
+// rules layer left inconclusive.
+func (r *Router) fallbackDecision(ctx context.Context, text string) Decision {
 	switch r.cfg.Rules.ClassifierFallback {
 	case "claude", "escalation":
-		return Decision{Target: TargetEscalation, Conclusive: true, Reason: "classifier-fallback=escalation"}, nil
+		return Decision{Target: TargetEscalation, Conclusive: true, Reason: "classifier-fallback=escalation"}
 	default: // "local" or unset
 		if r.localAgent != nil {
 			classifyStart := time.Now()
-			escalate, err := r.localAgent.Classify(ctx, prompt)
+			escalate, err := r.localAgent.Classify(ctx, text)
 			classifyElapsed := time.Since(classifyStart)
 			if err != nil {
 				fmt.Printf("[router] classifier error: %v — defaulting to local\n", err)
@@ -117,12 +136,10 @@ func (r *Router) route(ctx context.Context, sess *session.Session, prompt string
 					attribute.String("model", r.cfg.ActiveAgent().Model),
 				)
 				if escalate {
-					return Decision{Target: TargetEscalation, Conclusive: true, Reason: "model classifier"}, nil
+					return Decision{Target: TargetEscalation, Conclusive: true, Reason: "model classifier"}
 				}
 			}
 		}
 	}
-
-	// 5. Default: local
-	return Decision{Target: TargetLocal, Conclusive: true, Reason: "default"}, nil
+	return Decision{Target: TargetLocal, Conclusive: true, Reason: "default"}
 }

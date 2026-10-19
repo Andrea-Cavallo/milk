@@ -297,6 +297,12 @@ func mergeRules(dst, src Rules) Rules {
 	if src.OpenQuestionPrefixes != nil {
 		dst.OpenQuestionPrefixes = src.OpenQuestionPrefixes
 	}
+	if src.ConfirmationPhrases != nil {
+		dst.ConfirmationPhrases = src.ConfirmationPhrases
+	}
+	if src.ConfirmationNewScopeMarkers != nil {
+		dst.ConfirmationNewScopeMarkers = src.ConfirmationNewScopeMarkers
+	}
 	return dst
 }
 
@@ -405,6 +411,20 @@ type Rules struct {
 	// Matching is case-insensitive and anchored to the start of the trimmed prompt.
 	// Add language-specific or domain-specific prefixes here to extend coverage.
 	OpenQuestionPrefixes []string `json:"open_question_prefixes"`
+
+	// ConfirmationPhrases is the lexicon of "proceed/go ahead" style
+	// confirmation phrases (issue #263). A prompt that starts with one is
+	// routed on the confirmed content instead of its bare text. Matching is
+	// word-exact and case-insensitive; longest phrase wins. Empty falls back
+	// to DefaultConfirmationPhrases.
+	ConfirmationPhrases []string `json:"confirmation_phrases"`
+
+	// ConfirmationNewScopeMarkers marks an agent question as proposing NEW
+	// scope ("want me to also rename X?") rather than asking to continue the
+	// pending task ("shall I proceed?"). A bare confirmation answering such a
+	// question routes on the question itself, not the pending task. Empty
+	// falls back to DefaultConfirmationNewScopeMarkers.
+	ConfirmationNewScopeMarkers []string `json:"confirmation_new_scope_markers"`
 }
 
 // DefaultOpenQuestionPrefixes is the built-in fallback used when
@@ -417,6 +437,38 @@ var DefaultOpenQuestionPrefixes = []string{
 	// Italian
 	"cosa", "come", "perché", "quando", "dove", "chi", "quale", "quali",
 	"potresti", "puoi", "dovresti", "è possibile", "ci sono", "sai",
+}
+
+// DefaultConfirmationPhrases is the built-in fallback used when
+// Rules.ConfirmationPhrases is empty. Phrases are matched word-exact at the
+// start of the prompt (longest first); several may chain
+// ("yes, go ahead and do it"), and anything left over is the confirmed
+// scope the router routes on.
+var DefaultConfirmationPhrases = []string{
+	// English
+	"go ahead", "go on", "proceed", "continue", "carry on",
+	"do it", "do that", "make it so", "ship it", "land it",
+	"implement it", "apply it", "go for it", "let's do it", "let's go",
+	"let's proceed", "sounds good", "sound good", "that sounds good",
+	"sgtm", "lgtm", "looks good", "that works", "works for me",
+	"yes", "yeah", "yep", "yup", "y", "ok", "okay", "sure",
+	"right", "correct", "exactly", "affirmative", "yes please",
+	"good to go", "all good",
+	// Italian
+	"procedi", "vai avanti", "avanti", "continua", "fallo", "fai pure",
+	"vai", "sì", "certo", "va bene", "perfetto", "esatto", "d'accordo",
+	"giusto",
+}
+
+// DefaultConfirmationNewScopeMarkers is the built-in fallback used when
+// Rules.ConfirmationNewScopeMarkers is empty. Single words match on word
+// boundaries, multi-word markers as substrings.
+var DefaultConfirmationNewScopeMarkers = []string{
+	// English
+	"also", "too", "as well", "additionally", "in addition",
+	"while you're at it", "another thing",
+	// Italian
+	"anche", "inoltre",
 }
 
 // DefaultMaxPayloadBytes is the default maximum HTTP request body size for
@@ -1376,6 +1428,11 @@ func defaults() Config {
 				"cosa", "come", "perché", "quando", "dove", "chi", "quale", "quali",
 				"potresti", "puoi", "dovresti", "è possibile", "ci sono", "sai",
 			},
+			// Prepopulated like the other keyword lists so the generated
+			// config shows the knobs (issue #263). Values are exactly what
+			// the router falls back to when the field is empty.
+			ConfirmationPhrases:         append([]string(nil), DefaultConfirmationPhrases...),
+			ConfirmationNewScopeMarkers: append([]string(nil), DefaultConfirmationNewScopeMarkers...),
 		},
 	}
 }
