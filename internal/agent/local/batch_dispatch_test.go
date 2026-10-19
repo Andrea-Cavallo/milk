@@ -133,6 +133,108 @@ func TestBatch_FailedReadDoesNotCancel(t *testing.T) {
 	}
 }
 
+// Issue #271 regression: a bash call that exits 0 while writing to stderr is
+// a SUCCESS. stderr is informational (grep's "binary file matches", compiler
+// and git notices) — it must not cancel the rest of the batch.
+func TestBatch_BashExitZeroStderrDoesNotCancel(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "later.txt")
+
+	a := &Agent{skipPerms: true, toolTimeout: 5 * time.Second}
+	tcs := []toolCall{
+		{ID: "warn", Function: toolCallFunction{Name: "bash", Arguments: `{"command":"echo oops >&2"}`}},
+		{ID: "w", Function: toolCallFunction{Name: "write_file", Arguments: `{"path":"` + f + `","content":"x"}`}},
+	}
+	msgs, err := a.executeToolCalls(context.Background(), nil, tcs, "", "", io.Discard, nil, nil, "", nil)
+	if err != nil {
+		t.Fatalf("executeToolCalls: %v", err)
+	}
+	res := toolResultsByCall(msgs)
+	if toolCallFailed("bash", res["warn"]) {
+		t.Errorf("exit-0-with-stderr must not count as a bash failure: %q", res["warn"])
+	}
+	if strings.Contains(res["w"], "skipped") {
+		t.Errorf("write must not be skipped after an exit-0 bash with stderr, got %q", res["w"])
+	}
+	if _, statErr := os.Stat(f); statErr != nil {
+		t.Errorf("write after an exit-0 bash with stderr must land: %v", statErr)
+	}
+}
+
+// A bash launch failure (the working directory does not exist) is a failure
+// and cancels the rest of the batch — runBash reports it as exit code -1.
+func TestBatch_BashStartFailureCancels(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "never.txt")
+
+	a := &Agent{skipPerms: true, toolTimeout: 5 * time.Second}
+	tcs := []toolCall{
+		{ID: "boom", Function: toolCallFunction{Name: "bash", Arguments: `{"command":"echo hi","workdir":"` + filepath.Join(dir, "no-such-dir") + `"}`}},
+		{ID: "w", Function: toolCallFunction{Name: "write_file", Arguments: `{"path":"` + f + `","content":"x"}`}},
+	}
+	msgs, err := a.executeToolCalls(context.Background(), nil, tcs, "", "", io.Discard, nil, nil, "", nil)
+	if err != nil {
+		t.Fatalf("executeToolCalls: %v", err)
+	}
+	res := toolResultsByCall(msgs)
+	if !toolCallFailed("bash", res["boom"]) {
+		t.Errorf("a launch failure must fail the bash call: %q", res["boom"])
+	}
+	if !strings.Contains(res["w"], "skipped") || !strings.Contains(res["w"], "cancelled") {
+		t.Errorf("write must be skipped after a failed launch, got %q", res["w"])
+	}
+}
+
+// A bash timeout is a failure and cancels the rest of the batch (exit code -1
+// from the timeout path — no string matching on the error text).
+func TestBatch_BashTimeoutCancels(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "never.txt")
+
+	a := &Agent{skipPerms: true, toolTimeout: 5 * time.Second}
+	tcs := []toolCall{
+		{ID: "hang", Function: toolCallFunction{Name: "bash", Arguments: `{"command":"sleep 5","timeout_seconds":0.3}`}},
+		{ID: "w", Function: toolCallFunction{Name: "write_file", Arguments: `{"path":"` + f + `","content":"x"}`}},
+	}
+	msgs, err := a.executeToolCalls(context.Background(), nil, tcs, "", "", io.Discard, nil, nil, "", nil)
+	if err != nil {
+		t.Fatalf("executeToolCalls: %v", err)
+	}
+	res := toolResultsByCall(msgs)
+	if !toolCallFailed("bash", res["hang"]) {
+		t.Errorf("a timeout must fail the bash call: %q", res["hang"])
+	}
+	if !strings.Contains(res["w"], "skipped") || !strings.Contains(res["w"], "cancelled") {
+		t.Errorf("write must be skipped after a timed-out bash, got %q", res["w"])
+	}
+}
+
+// grep's "no matches" (exit 1) is a read, never a cancelling barrier.
+func TestBatch_GrepNoMatchDoesNotCancel(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "data.txt")
+	if err := os.WriteFile(f, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &Agent{skipPerms: true, toolTimeout: 5 * time.Second}
+	tcs := []toolCall{
+		{ID: "miss", Function: toolCallFunction{Name: "grep", Arguments: `{"pattern":"zzz-no-match","path":"` + f + `"}`}},
+		{ID: "w", Function: toolCallFunction{Name: "write_file", Arguments: `{"path":"` + filepath.Join(dir, "out.txt") + `","content":"x"}`}},
+	}
+	msgs, err := a.executeToolCalls(context.Background(), nil, tcs, "", "", io.Discard, nil, nil, "", nil)
+	if err != nil {
+		t.Fatalf("executeToolCalls: %v", err)
+	}
+	res := toolResultsByCall(msgs)
+	if toolCallFailed("grep", res["miss"]) {
+		t.Errorf("grep no-match must not count as a failure: %q", res["miss"])
+	}
+	if strings.Contains(res["w"], "skipped") {
+		t.Errorf("write must run after a no-match grep, got %q", res["w"])
+	}
+}
+
 // Pure-read runs still execute concurrently (the barrier model only
 // serialises side-effecting calls). Two read_file calls on FIFOs: the writer
 // fills B first and only then A — if the reads ran sequentially (A first),

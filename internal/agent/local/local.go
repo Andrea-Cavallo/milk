@@ -2542,16 +2542,36 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID string, inbox chan 
 }
 
 // backgroundPartialResult extracts the best available partial answer from a
-// tool-loop trajectory that ended in an error: the last real assistant text
-// if any, else a digest of the tool activity (so "what had it already
-// found/looked at" survives a mid-tooling failure), else "".
+// tool-loop trajectory that ended in an error: the last real assistant text —
+// the conclusions the model had already formed — kept *alongside* a digest of
+// the tool activity (so "what had it already found/looked at" survives a
+// mid-tooling failure), or "" when neither exists. Salvage (ADR-0068, issue
+// #271): before this, a trajectory with assistant text returned only that
+// text and dropped the trail, and one without returned only the trail — a
+// hard-timed-out job lost one half of its work either way.
 func backgroundPartialResult(msgs []Message) string {
+	last := lastAssistantText(msgs)
+	trail := summarizeToolTrail(msgs, "")
+	switch {
+	case last == "":
+		return trail
+	case trail == "":
+		return last
+	default:
+		return last + "\n\n" + trail
+	}
+}
+
+// lastAssistantText returns the most recent non-empty assistant message
+// content in a tool-loop trajectory — what the model had already written
+// when the loop was cut off.
+func lastAssistantText(msgs []Message) string {
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role == "assistant" && msgs[i].Content != "" {
 			return msgs[i].Content
 		}
 	}
-	return summarizeToolTrail(msgs, "")
+	return ""
 }
 
 // cloneForBackground returns an independent Agent for a spawn_background_agent
@@ -2908,7 +2928,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 			if strings.HasPrefix(tc.Function.Name, "agent_") {
 				continue
 			}
-			a.onToolResult(tc.ID, tc.Function.Name, outcomes[i].msg.Content, isToolError(outcomes[i].msg.Content))
+			a.onToolResult(tc.ID, tc.Function.Name, outcomes[i].msg.Content, toolCallFailed(tc.Function.Name, outcomes[i].msg.Content))
 		}
 	}
 
@@ -2918,7 +2938,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 			if strings.HasPrefix(tc.Function.Name, "agent_") {
 				continue
 			}
-			exitOK := !isToolError(outcomes[i].msg.Content)
+			exitOK := !toolCallFailed(tc.Function.Name, outcomes[i].msg.Content)
 			if v := a.tryBest.RecordToolCall(tc.Function.Name, tc.Function.Arguments, outcomes[i].msg.Content, exitOK); v != nil {
 				// Inject a recovery nudge as a system message.
 				nudge := fmt.Sprintf(`<system-reminder>
@@ -3006,20 +3026,25 @@ func isCancellingTool(name string) bool {
 	return false
 }
 
-// toolCallFailed reports whether a mutating tool call failed: an error result,
-// or (for bash) a non-zero exit code. grep's "no matches" exit code 1 is
-// deliberately not covered — grep is a read and never a cancelling barrier.
+// toolCallFailed reports whether a tool call failed. For bash the exit code
+// is the single signal (issue #271, ADR-0062's update): stderr on an exit-0
+// run is informational (grep's "binary file matches", compiler and git
+// notices) and is not a failure, so the result's Error field must not decide
+// it there — runBash reports launch failures, timeouts and kills as exit
+// code -1 instead. Every other tool fails on isToolError: their Error field
+// is a genuine failure. Whether a failure *cancels* the rest of the batch is
+// a separate question answered by isCancellingTool at the call site. grep's
+// "no matches" exit code 1 is deliberately not covered — grep is a read and
+// never a cancelling barrier.
 func toolCallFailed(name, result string) bool {
-	if isToolError(result) {
-		return true
-	}
 	if name == "bash" {
 		var r toolResult
-		if json.Unmarshal([]byte(result), &r) == nil {
-			return r.ExitCode != 0
+		if json.Unmarshal([]byte(result), &r) != nil {
+			return false
 		}
+		return r.ExitCode != 0
 	}
-	return false
+	return isToolError(result)
 }
 
 // dispatchBatch executes a batch of tool calls under the barrier model
