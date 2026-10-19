@@ -108,11 +108,10 @@ func (m *model) retractStreamed(from, to string) {
 // block (ADR-0067): the block's own buffer, not the transcript. The first
 // chunk of a reasoning run opens a block anchored at the transcript's current
 // end; the block renders as a fold container there — header always, body only
-// while expanded. The new block opens folded like every other block (no
-// auto-open, ever): its header shows the line count live as reasoning arrives,
-// and only an explicit open (Ctrl+T / header click) shows the body — which
-// pins it open past the block's close. Throttled like
-// appendTranscriptStreamed — see model.viewportDirty.
+// while expanded. A new block keeps the session's current folding status
+// (thinkFoldOpen — the status the previous block was left in): folded by
+// default until the user opens one, and open-and-pinned when the user is
+// watching. Throttled like appendTranscriptStreamed — see model.viewportDirty.
 func (m *model) appendThinkingStreamed(text string) {
 	for i := range m.thinkBlocks {
 		if !m.thinkBlocks[i].closed {
@@ -124,9 +123,12 @@ func (m *model) appendThinkingStreamed(text string) {
 	b := thinkBlock{
 		buf:    &strings.Builder{},
 		anchor: m.transcript.Len(),
-		// folded by default, exactly like a completed block — the header's
-		// line count is the live signal while reasoning streams in.
-		expanded: false,
+		// Keep the folding status of the previous block (session state, not
+		// the previous block's row — the turn-boundary tidy folds older blocks
+		// without changing it). userSet matches so a block created in
+		// watch-mode stays open past its close, like one opened directly.
+		expanded: m.thinkFoldOpen,
+		userSet:  m.thinkFoldOpen,
 	}
 	b.buf.WriteString(text)
 	m.thinkBlocks = append(m.thinkBlocks, b)
@@ -139,7 +141,7 @@ func (m *model) appendThinkingStreamed(text string) {
 // text region is highlighted with an inverted background, respecting column
 // boundaries on the first and last lines.
 func (m *model) wrappedTranscript() string {
-	raw := m.transcriptDisplay()
+	raw, openAt := m.transcriptDisplayAt()
 	if raw == "" {
 		return m.applySelectionHighlight(m.welcomeScreen())
 	}
@@ -165,10 +167,15 @@ func (m *model) wrappedTranscript() string {
 	}
 
 	// Count new lines since last re-colorize to decide if threshold is met.
-	newLines := 0
-	if txGrew > 0 {
-		newLines = strings.Count(raw[m.colorizeTransLen:], "\n")
-		m.colorizeLinesSeen += newLines
+	// Counted against the display's total length (colorizeSeenLen), not the
+	// commit point: the commit is deliberately capped before an open think
+	// block's container (see below), whose arriving lines still count toward
+	// the threshold — but must not be re-counted on every render.
+	if txLen > m.colorizeSeenLen {
+		m.colorizeLinesSeen += strings.Count(raw[m.colorizeSeenLen:], "\n")
+		m.colorizeSeenLen = txLen
+	} else if txLen < m.colorizeSeenLen {
+		m.colorizeSeenLen = txLen
 	}
 
 	if !m.colorizeForce && !vpChanged && m.colorizeCached != "" && m.colorizeLinesSeen < colorizeLineThresh {
@@ -207,6 +214,16 @@ func (m *model) wrappedTranscript() string {
 	effLen := txLen
 	if idx := danglingEscapeStart(raw); idx >= 0 {
 		effLen = idx
+	}
+	// Never commit the cache into an open think block's container (its first
+	// byte is openAt): the container is re-rendered from scratch on every
+	// chunk — the header's live line count and the body's per-line styling
+	// both rewrite bytes mid-display — so a cached prefix reaching into it
+	// would go stale while the appended suffix started at shifted offsets:
+	// garbled lines. The commit stops before the container; the streaming
+	// tail is re-wrapped fresh on every render instead.
+	if openAt < effLen {
+		effLen = openAt
 	}
 	m.colorizeForce = false
 	m.colorizeLinesSeen = 0
@@ -281,26 +298,13 @@ func danglingEscapeStart(s string) int {
 // cached colorized content when available so coordinates match the viewport exactly.
 // Falls back to a fresh render when the cache is empty (e.g. ColorizeOff mode or
 // before first paint).
+// transcriptPlainLines returns the transcript lines stripped of ANSI, using
+// the same render the viewport shows so coordinates match it exactly —
+// including an open think block's container, which the colorize cache
+// deliberately never commits (a stale cache copy alone would omit the
+// streaming block and skew click hit-testing and selection).
 func (m *model) transcriptPlainLines() []string {
-	var wrapped string
-	if m.colorizeCached != "" {
-		// Fast path: cache already holds the wrapped+colorized content.
-		wrapped = m.colorizeCached
-	} else {
-		// Slow path: render fresh so selection coordinates are still correct.
-		vw := m.vpWidth()
-		if m.transcript.Len() == 0 && len(m.thinkBlocks) == 0 {
-			wrapped = m.welcomeScreen()
-		} else {
-			raw := m.transcriptDisplay()
-			if vw <= 0 {
-				wrapped = raw
-			} else {
-				colorized := colorizeTranscriptWrapped(raw, m.colorizeMode)
-				wrapped = ansi.Wrap(expandTabsForWrap(colorized), vw, "")
-			}
-		}
-	}
+	wrapped := m.wrappedTranscript()
 	lines := strings.Split(wrapped, "\n")
 	for i, l := range lines {
 		lines[i] = ansi.Strip(l)
@@ -487,6 +491,7 @@ func (m *model) reseedTranscriptFromHistory() {
 	m.transcript.Reset()
 	m.thinkBlocks = nil
 	m.thinkBlocksTurnStart = 0
+	m.thinkFoldOpen = false
 	if text := seedTranscriptText(m.st, true); text != "" {
 		m.appendTranscript(text)
 	}

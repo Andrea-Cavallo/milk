@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -130,18 +131,21 @@ func TestToggleLastThinkBlock_TogglesMostRecent(t *testing.T) {
 	if !m.thinkBlocks[0].expanded {
 		t.Error("a block the user opened mid-stream must stay open when streaming ends")
 	}
-	m.appendThinkingStreamed("second\n")
-	m = m.toggleLastThinkBlock() // the streaming block again, not block 0
+	m.appendThinkingStreamed("second\n") // keeps the session's open status
 	if !m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
-		t.Error("Ctrl+T must toggle the streaming block, not a completed one")
+		t.Fatalf("a new block must keep the folding status of the previous one, got %+v", m.thinkBlocks[1])
 	}
-	m = m.toggleLastThinkBlock() // fold it again, still pinned
+	m = m.toggleLastThinkBlock() // the streaming block again, not block 0 — folds it
 	if m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
-		t.Errorf("Ctrl+T must fold and pin the streaming block, got %+v", m.thinkBlocks[1])
+		t.Errorf("Ctrl+T must toggle the streaming block, not a completed one, got %+v", m.thinkBlocks[1])
+	}
+	m = m.toggleLastThinkBlock() // open it again, still pinned
+	if !m.thinkBlocks[1].expanded {
+		t.Errorf("Ctrl+T must re-open the streaming block, got %+v", m.thinkBlocks[1])
 	}
 	m.appendTranscript("done\n")
-	m = m.toggleLastThinkBlock() // nothing open → the last block
-	if !m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
+	m = m.toggleLastThinkBlock() // nothing streaming → the last block
+	if m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
 		t.Errorf("Ctrl+T with nothing streaming must toggle the last block, got %+v", m.thinkBlocks[1])
 	}
 	if !m.thinkBlocks[0].userSet || !m.thinkBlocks[0].expanded {
@@ -177,14 +181,16 @@ func TestThinkBlocks_ClickTogglesAndPins(t *testing.T) {
 	if d := m.transcriptDisplay(); !strings.Contains(d, "a\nb") {
 		t.Errorf("expanded body must render, got %q", d)
 	}
-	// Pinned state survives a fold-on-close of a later streaming block.
+	// The pinned state survives later blocks — and the new block keeps the
+	// session's fold status (open, set by the click above) without touching
+	// block 0.
 	m.appendThinkingStreamed("more\n")
 	m.appendTranscript("again\n")
 	if !m.thinkBlocks[0].expanded {
 		t.Error("pinned expansion must survive later closes")
 	}
-	if m.thinkBlocks[1].expanded {
-		t.Error("unpinned completed block must fold")
+	if !m.thinkBlocks[1].expanded {
+		t.Errorf("a new block must keep the session's open status, got %+v", m.thinkBlocks[1])
 	}
 	// A click on the second header toggles the second block, not the first.
 	disp = m.transcriptDisplay()
@@ -223,8 +229,8 @@ func TestThinkBlocks_PromotedReasoningDropped(t *testing.T) {
 }
 
 // A block pinned open mid-stream stays open past its close: the fold is
-// per-block state (userSet wins over the close), not a global mode. A block
-// the user never touched stays folded.
+// per-block state (userSet wins over the close). A new block keeps the
+// session's fold status, so a folded session stays folded block after block.
 func TestThinkBlocks_PinnedOpenSurvivesClose(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.appendThinkingStreamed("watching\n")
@@ -236,11 +242,13 @@ func TestThinkBlocks_PinnedOpenSurvivesClose(t *testing.T) {
 	if d := m.transcriptDisplay(); !strings.Contains(d, "watching") {
 		t.Errorf("pinned body must render, got %q", d)
 	}
-	// The block the user never touched stays folded.
+	// Fold it back — the status is folded again, and a block the user never
+	// touches in a folded session stays folded.
+	m.toggleThinkBlock(0)
 	m.appendThinkingStreamed("quiet\n")
 	m.appendTranscript("done\n")
 	if m.thinkBlocks[1].expanded {
-		t.Errorf("an untouched block must stay folded, got %+v", m.thinkBlocks[1])
+		t.Errorf("a block created in a folded session must stay folded, got %+v", m.thinkBlocks[1])
 	}
 }
 
@@ -320,5 +328,133 @@ func TestStartThinkView_ShowsAllBodies(t *testing.T) {
 	// glyph even for blocks that are folded in the transcript.
 	if !strings.Contains(snap, thinkExpandedPrefix) || strings.Contains(snap, thinkFoldedPrefix) {
 		t.Errorf("thinking view headers must render expanded:\n%s", snap)
+	}
+}
+
+// A new reasoning block keeps the session's folding status — the status the
+// previous block was left in — instead of resetting to folded. Folding status
+// is one session-wide bit (model.thinkFoldOpen), set only by explicit fold
+// actions: open one block and the following arrive open; fold one and the
+// following arrive folded.
+func TestThinkBlocks_NewBlockKeepsFoldStatus(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.appendThinkingStreamed("first\n")
+	if m.thinkBlocks[0].expanded {
+		t.Fatal("default status is folded — the first block must start folded")
+	}
+	m.toggleThinkBlock(0) // open + pin → the status is open
+	m.appendTranscript("a\n")
+	m.appendThinkingStreamed("second\n")
+	if !m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
+		t.Errorf("new block must keep the open status (open and pinned past close), got %+v", m.thinkBlocks[1])
+	}
+	m.toggleThinkBlock(1) // fold → the status is folded again
+	m.appendTranscript("b\n")
+	m.appendThinkingStreamed("third\n")
+	if m.thinkBlocks[2].expanded {
+		t.Errorf("new block must keep the folded status, got %+v", m.thinkBlocks[2])
+	}
+	m.setAllThinkBlocks(true) // /think expand → the status is open again
+	m.appendTranscript("c\n")
+	m.appendThinkingStreamed("fourth\n")
+	if !m.thinkBlocks[3].expanded {
+		t.Errorf("new block must keep the /think expand status, got %+v", m.thinkBlocks[3])
+	}
+}
+
+// A new turn collapses the previous turns' blocks (the dispatchAgent tidy) —
+// a display-only change: the fold status new blocks are created with is
+// deliberately untouched, so a user watching reasoning keeps watching into
+// the new turn.
+func TestThinkBlocks_NewTurnCollapsesPreviousTurnBlocks(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.appendThinkingStreamed("one\n")
+	m.appendTranscript("a\n")
+	m.appendThinkingStreamed("two\n")
+	m.toggleThinkBlock(1) // watch mode: the status is open
+	m.appendTranscript("b\n")
+	// The turn boundary as dispatchAgent runs it:
+	m.closeOpenThinkBlock()
+	m.collapseThinkBlocksBefore(len(m.thinkBlocks))
+	m.thinkBlocksTurnStart = len(m.thinkBlocks)
+	for i := range m.thinkBlocks {
+		if m.thinkBlocks[i].expanded {
+			t.Errorf("block %d must be collapsed at the new turn, got %+v", i, m.thinkBlocks[i])
+		}
+	}
+	d := m.transcriptDisplay()
+	if strings.Contains(d, "one\n") || strings.Contains(d, "two\n") {
+		t.Errorf("collapsed bodies must not render after the tidy, got %q", d)
+	}
+	// The status survived the tidy: the new turn's first block arrives open.
+	m.appendThinkingStreamed("three\n")
+	if !m.thinkBlocks[2].expanded {
+		t.Errorf("the tidy must not change the fold status, got %+v", m.thinkBlocks[2])
+	}
+}
+
+// Fold containers render on the thinking surface (their own background), so
+// the thinking region is a visibly different surface from the standard
+// transcript. The styling is render-time only: the buffers stay plain.
+func TestThinkBlocks_ThinkingSurfaceBackground(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+	m := newTestModelForPanels(t)
+	m.appendThinkingStreamed("a thought\n")
+	m.appendTranscript("done\n")
+	disp := m.transcriptDisplay()
+	if !strings.Contains(disp, ansiThinkBg) {
+		t.Errorf("fold container must render on the thinking background:\n%q", disp)
+	}
+	// Expanded: the body sits on the surface too.
+	m.toggleThinkBlock(0)
+	if disp = m.transcriptDisplay(); !strings.Contains(disp, "a thought") {
+		t.Fatalf("expanded body must render:\n%q", disp)
+	}
+	if strings.Contains(m.transcript.String(), ansiThinkBg) {
+		t.Error("the thinking surface must not leak into the transcript buffer")
+	}
+	if b := m.thinkBlocks[0].text(); strings.Contains(b, ansiThinkBg) {
+		t.Error("the thinking surface must not leak into the block buffer")
+	}
+}
+
+// Streaming into an open block must never garble earlier lines: the render
+// cache is capped before the open block's container, because the container is
+// re-rendered from scratch on every chunk — the header's live line count and
+// the body's per-line styling both rewrite bytes mid-display, so a cached
+// prefix reaching into it goes stale while the appended suffix starts at
+// shifted offsets. This exercises the hot streaming path end to end with
+// styling on, including a header digit roll (9 → 10 lines).
+func TestWrappedTranscript_StreamingBlockNoGarbling(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+	m := layoutTestModel(t, 120, 40)
+	m.colorizeMode = ColorizeFenced // plain lines pass through untouched
+	m.appendTranscript("before\n")
+	m.thinkFoldOpen = true // watch mode: the block is born open and pinned
+	for i := 1; i <= 9; i++ {
+		m.appendThinkingStreamed(fmt.Sprintf("line %d\n", i))
+		_ = m.wrappedTranscript() // warm/extend the render cache between chunks
+	}
+	m.appendThinkingStreamed("line 10") // partial line + the header count rolls 9 → 10
+	_ = m.wrappedTranscript()
+	m.appendThinkingStreamed(" tail\n")
+	got := m.transcriptPlainLines()
+	var want []string
+	want = append(want, "before", thinkExpandedPrefix+"10 lines · streaming")
+	for i := 1; i <= 9; i++ {
+		want = append(want, fmt.Sprintf("line %d", i))
+	}
+	want = append(want, "line 10 tail", "") // trailing newline
+	if len(got) != len(want) {
+		t.Fatalf("render lines = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("render line %d = %q, want %q (full: %q)", i, got[i], want[i], got)
+		}
 	}
 }

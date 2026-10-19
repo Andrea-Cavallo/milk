@@ -728,6 +728,12 @@ type model struct {
 	// blocks begin — reasoningPromotedMsg drops from here when the streamed
 	// reasoning is promoted to the turn's answer.
 	thinkBlocksTurnStart int
+	// thinkFoldOpen is the session's current think-block fold status: a new
+	// reasoning block is created in this state (it keeps the folding status
+	// the previous block was left in). Updated only by explicit fold actions
+	// (header click, Ctrl+T, /think expand|collapse); the turn-boundary tidy
+	// that collapses previous turns' blocks does not change it (ADR-0067).
+	thinkFoldOpen bool
 
 	// showTips toggles the idle tip line below the input (ADR-0061, /tips).
 	// Defaults on (config show_tips); the line's row is reserved while it is
@@ -1084,10 +1090,15 @@ type model struct {
 	// new lines, or when the viewport width changes, or when the caller
 	// explicitly sets colorizeForce = true (e.g. after agentDoneMsg, resize).
 	colorizeCached    string // last colorized output
-	colorizeTransLen  int    // transcript byte length when cache was built
+	colorizeTransLen  int    // transcript byte length cache was committed to
 	colorizeVPWidth   int    // vpWidth when cache was built
 	colorizeForce     bool   // if true, bypass cache on next render
 	colorizeLinesSeen int    // new lines since last full re-colorize
+	// colorizeSeenLen is the display byte length seen by the previous render
+	// — the base for counting arriving lines (colorizeLinesSeen). Distinct
+	// from colorizeTransLen, which is deliberately capped before an open
+	// think block's container and would otherwise re-count it every render.
+	colorizeSeenLen int
 
 	// Per-turn colorization cache: stores colorized output for each completed
 	// turn (splitTurns segments ending with "\n\n"). Completed turns never
@@ -3739,6 +3750,10 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 	m.currentTurnInputChars = 0
 	m.currentTurnThinking.Reset()
 	m.closeOpenThinkBlock()
+	// Turn-boundary tidy: the new turn collapses the previous turns' blocks.
+	// Display-only — thinkFoldOpen (the status new blocks are created with)
+	// is deliberately untouched.
+	m.collapseThinkBlocksBefore(len(m.thinkBlocks))
 	m.thinkBlocksTurnStart = len(m.thinkBlocks)
 	m.loopInterrupt = false
 	m.loopInterruptLabel = ""

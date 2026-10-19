@@ -37,6 +37,14 @@ import (
 //     auto-fold), so a block opened mid-stream STAYS open when streaming
 //     ends. /think expand|collapse pin all blocks at once, /think view
 //     swaps in a thinking-only stream.
+//   - A new block keeps the session's current folding status (model
+//     thinkFoldOpen — the status the previous block was left in): folded by
+//     default, open-and-pinned while the user is watching. Turn boundaries
+//     collapse the previous turns' blocks (a display tidy) without changing
+//     that status.
+//   - Fold containers render on their own background (the thinking surface:
+//     ansiThinkBg) so the thinking region reads as a different surface from
+//     the standard transcript, at every fold state.
 //
 // Consumption/display separation is preserved: loop detection and the session
 // turn record consume reasoning from their own accumulators regardless of
@@ -101,6 +109,19 @@ const (
 	thinkExpandedPrefix = "▾ thinking · "
 )
 
+// ansiThinkBg is the thinking-surface background: fold containers render on
+// it so the thinking region is a visibly different surface from the standard
+// transcript (header and body alike, every fold state). Applied at render
+// time only — the transcript and block buffers stay plain.
+const ansiThinkBg = "\033[48;5;235m"
+
+// thinkHeaderLine styles a fold-header line: dim on the thinking surface.
+func thinkHeaderLine(s string) string { return colorize(s, ansiThinkBg+ansiDim) }
+
+// thinkBodyLine styles a reasoning body: full-contrast text on the thinking
+// surface (the background — not dimming — marks reasoning).
+func thinkBodyLine(s string) string { return colorize(s, ansiThinkBg) }
+
 // lineLabel renders "N lines"/"1 line" for the fold header.
 func lineLabel(n int) string {
 	if n == 1 {
@@ -119,11 +140,11 @@ func thinkHeader(b *thinkBlock, streaming bool) string {
 	n := lineLabel(b.thinkLines())
 	if b.expanded {
 		if streaming {
-			return dim(thinkExpandedPrefix + n + " · streaming")
+			return thinkHeaderLine(thinkExpandedPrefix + n + " · streaming")
 		}
-		return dim(thinkExpandedPrefix + n)
+		return thinkHeaderLine(thinkExpandedPrefix + n)
 	}
-	return dim(thinkFoldedPrefix + n)
+	return thinkHeaderLine(thinkFoldedPrefix + n)
 }
 
 // renderThinkBlock renders one block's container (header + optional body).
@@ -136,7 +157,7 @@ func (m *model) renderThinkBlock(b *thinkBlock) string {
 	sb.WriteString("\n")
 	if b.expanded {
 		if body := b.text(); body != "" {
-			sb.WriteString(dim(body))
+			sb.WriteString(thinkBodyLine(body))
 			if !strings.HasSuffix(body, "\n") {
 				sb.WriteString("\n")
 			}
@@ -150,11 +171,24 @@ func (m *model) renderThinkBlock(b *thinkBlock) string {
 // Everything downstream (colorize + wrap + selection) runs on the returned
 // string exactly like it ran on the old activeTranscript() variant.
 func (m *model) transcriptDisplay() string {
+	s, _ := m.transcriptDisplayAt()
+	return s
+}
+
+// transcriptDisplayAt is transcriptDisplay plus the byte offset where the
+// first open (streaming) block's container begins — the boundary of the
+// display's stable prefix. The streaming tail beyond it is re-rendered from
+// scratch on every chunk (the header's live count and the body's per-line
+// styling rewrite bytes), so the render cache must never commit into it
+// (wrappedTranscript caps the commit there). With no open block the offset is
+// the display's full length.
+func (m *model) transcriptDisplayAt() (string, int) {
 	text := m.transcript.String()
 	if len(m.thinkBlocks) == 0 {
-		return text
+		return text, len(text)
 	}
 	var sb strings.Builder
+	openAt := -1
 	pos := 0
 	for i := range m.thinkBlocks {
 		b := &m.thinkBlocks[i]
@@ -170,11 +204,17 @@ func (m *model) transcriptDisplay() string {
 		if sb.Len() > 0 && !strings.HasSuffix(prefix, "\n") {
 			sb.WriteString("\n")
 		}
+		if !b.closed && openAt < 0 {
+			openAt = sb.Len()
+		}
 		sb.WriteString(m.renderThinkBlock(b))
 		pos = at
 	}
 	sb.WriteString(text[pos:])
-	return sb.String()
+	if openAt < 0 {
+		openAt = sb.Len()
+	}
+	return sb.String(), openAt
 }
 
 // isThinkHeaderLine reports whether a plain (ANSI-stripped) transcript line is
@@ -212,7 +252,9 @@ func (m *model) thinkBlockAtLine(line int) int {
 }
 
 // toggleThinkBlock flips one block's expand state and pins it (userSet), so a
-// mid-stream click keeps the body open past the block's close.
+// mid-stream click keeps the body open past the block's close. The result
+// becomes the session's fold status: the next reasoning block is created in
+// it (new blocks keep the folding status of the previous one).
 func (m *model) toggleThinkBlock(idx int) {
 	if idx < 0 || idx >= len(m.thinkBlocks) {
 		return
@@ -220,6 +262,7 @@ func (m *model) toggleThinkBlock(idx int) {
 	b := &m.thinkBlocks[idx]
 	b.userSet = true
 	b.expanded = !b.expanded
+	m.thinkFoldOpen = b.expanded
 	m.invalidateThinkDisplay()
 }
 
@@ -245,13 +288,37 @@ func (m model) toggleLastThinkBlock() model {
 }
 
 // setAllThinkBlocks expands or folds every block, pinning each (userSet).
-// Used by /think expand|collapse.
+// Used by /think expand|collapse; the result becomes the session's fold
+// status for new blocks.
 func (m *model) setAllThinkBlocks(expanded bool) {
 	for i := range m.thinkBlocks {
 		m.thinkBlocks[i].userSet = true
 		m.thinkBlocks[i].expanded = expanded
 	}
+	m.thinkFoldOpen = expanded
 	m.invalidateThinkDisplay()
+}
+
+// collapseThinkBlocksBefore folds every block before index n — the
+// turn-boundary tidy (a new turn collapses the previous turns' blocks). It is
+// display-only: thinkFoldOpen, the status new blocks are created with, is
+// deliberately untouched — the tidy must not silently flip the user's
+// watch/fold preference.
+func (m *model) collapseThinkBlocksBefore(n int) {
+	if n > len(m.thinkBlocks) {
+		n = len(m.thinkBlocks)
+	}
+	changed := false
+	for i := 0; i < n; i++ {
+		if m.thinkBlocks[i].expanded {
+			m.thinkBlocks[i].expanded = false
+			m.thinkBlocks[i].userSet = true // explicitly tidied — no auto-reopen
+			changed = true
+		}
+	}
+	if changed {
+		m.invalidateThinkDisplay()
+	}
 }
 
 // closeOpenThinkBlock ends the streaming block (regular content or turn end
@@ -339,7 +406,7 @@ func (m model) startThinkView() (model, tea.Cmd) {
 		sb.WriteString(thinkHeader(&v, !b.closed))
 		sb.WriteString("\n")
 		if body := b.text(); body != "" {
-			sb.WriteString(body)
+			sb.WriteString(thinkBodyLine(body))
 			if !strings.HasSuffix(body, "\n") {
 				sb.WriteString("\n")
 			}
