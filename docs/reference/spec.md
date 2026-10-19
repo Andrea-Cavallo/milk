@@ -170,7 +170,7 @@ and, for ACP integration specifically, [docs/reference/acp-integration.md](acp-i
 
 `milk` with no prompt argument starts a REPL built on charmbracelet/bubbletea. The input prompt uses `❯` as the prefix. The status bar reflects the current routing state and active agent.
 
-**Slash commands:** `/escalate`, `/primary`, `/sessions`, `/new`, `/clear`, `/resume`, `/drop`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/init`, `/open`, `/update`, `/notifications`, `/help`, `/exit` (`/list` is a deprecated hidden alias of `/sessions`, kept one release)
+**Slash commands:** `/escalate`, `/primary`, `/sessions`, `/new`, `/clear`, `/resume`, `/drop`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/init`, `/open`, `/update`, `/restart`, `/notifications`, `/help`, `/exit` (`/list` is a deprecated hidden alias of `/sessions`, kept one release)
 
 **Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [session <id|prefix>] [json|<path>]` — see [docs/guides/operations.md — Memory](../guides/operations.md#memory).
 
@@ -240,12 +240,21 @@ Same commands on the CLI as `milk config`, `milk config init`, `milk config show
 | Subcommand | Action |
 |---|---|
 | `/update` / `/update check` | Check GitHub now (15s timeout); explicit checks bypass the 24h throttle. In the TUI, a release already found is reported without a new request |
-| `/update install` | Download and apply the newest release (status-bar progress in the TUI). The binary is replaced in place; the running milk process must be restarted to use it. On Windows the running binary cannot be replaced, so milk reports the saved download path instead of claiming success |
+| `/update install` | Download and apply the newest release (status-bar progress in the TUI). The binary is replaced in place; the running milk process must be restarted to use it — `/restart` does exactly that. On Windows the running binary cannot be replaced, so milk reports the saved download path instead of claiming success |
 | `/update skip` | Suppress the pending release: its tag is written to `update_skipped_version` and filtered from every later check (including the startup check) until a newer release appears |
 
 Startup/background release checks are throttled by `update_last_check` (at most once per 24h, shared between the TUI and ACP) and gated by `update_check`/`update_channel` (see Configuration). When a newer release is found at startup, the TUI shows a status-bar badge (`⬆ <tag> available — /update install`); `milk serve --acp` sends an equivalent one-shot notice per session (see [docs/reference/acp-integration.md](acp-integration.md)).
 
 The CLI equivalent is `milk update check` and `milk update install` (non-interactive; `install` ignores `/update skip` and always takes the latest release).
+
+**/restart** (TUI only, issue #258) quits and relaunches milk with the very same starting command, resuming the current session:
+
+- **Binary launch** — re-execs the (possibly just `/update install`-replaced) binary with the original argv; session-shaping flags (`--new`, `--continue`, `--session`) are replaced by `--session <current-id>` so the conversation resumes even when milk was launched with `--new`. Every other flag is replayed verbatim.
+- **`task run` launch** — re-runs the same task (`task run`) in the launch directory, so the binary is rebuilt from the changed codebase instead of re-running a stale one. Detected from the parent process at startup; the session then resumes via the default resume-most-recent behavior.
+- **Busy refusal** — refused while a turn, PTY shell pane, workflow, background agent or background shell is running (finish or cancel it first, e.g. Ctrl+C or `/bg stop`).
+- **Safety** — the relaunch argv comes only from the process's own startup capture (argv, binary path, parent process), never from config or a model-provided string. The terminal is restored (alt-screen left) before the exec.
+
+Not available over ACP (the client cannot survive its server process being replaced) or in one-shot CLI mode. A `go run ./cmd/milk` launch is not restartable (the temporary binary is gone after exit) — use `task run` or an installed binary.
 
 **Multi-line input**: Shift+Enter/Alt+Enter inserts a newline; Enter submits. Bracketed paste is handled transparently.
 
