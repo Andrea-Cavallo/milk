@@ -228,7 +228,8 @@ a render bug the model had introduced:
   region reads as a different surface from the standard transcript. Header
   stays dim on the surface; the body is full-contrast (the background, not
   dimming, marks reasoning now). Applied at render time only: the transcript
-  and block buffers stay plain.
+  and block buffers stay plain. (Made a full-row surface in the fourth pass
+  below — at this point the background still spanned only the glyphs.)
 - **Streaming-render fix (garbling).** The containers introduced a real bug:
   `wrappedTranscript`'s fast path appended only the raw tail past its cached
   prefix, but an open block's container is re-rendered from scratch on every
@@ -243,3 +244,37 @@ a render bug the model had introduced:
   re-colorize threshold is tracked separately so the uncommitted tail does
   not re-count itself every render). `transcriptPlainLines` now renders
   through the same path, so click hit-testing covers the streaming block.
+
+## Update (2026-10-19, fourth pass): the surface is a full-row one
+
+Live-testing feedback: the surface read as "a different color as font
+background" — the 256-color grey only painted behind the glyphs, because the
+per-line styling wrapped just the line's text. Short fold headers painted a
+~20-column strip; word-wrap continuation rows of long reasoning lines
+painted nothing past their last word.
+
+- **Every row of a container paints the full viewport width.** After wrapping
+  (`tintThinkSurface`), every row that renders on the surface — the header,
+  body lines, blank body lines, and word-wrap continuation rows alike — is
+  padded to the viewport width with background-coloured spaces and
+  re-wrapped in the surface code (`withPanelBackground`'s per-line
+  convention, the same treatment the panel tint uses). The rows are final at
+  that point, so the padding cannot re-wrap; the pad is render-time only and
+  `transcriptPlainLines` strips and trims it back off, so hit-testing,
+  selection and copy stay plain and the transcript/block buffers are
+  untouched.
+- **Padding is post-wrap on purpose** (vs padding the raw display): the raw
+  display bytes stay exactly as the render cache and `transcriptDisplayAt`'s
+  open-container boundary know them, so the streaming-commit cap and the
+  width-change invalidation (`colorizeVPWidth`) are untouched by this change
+  — the cache stores the untinted wrap and the width-dependent pad is applied
+  to the returned render. Blank body lines now carry their surface code pair
+  (`thinkSurfaceLines`) so they can't punch a hole in the surface, and rows
+  are classified as surface rows by their SGR state (an open surface run
+  carries across the newline into wrap continuation rows).
+- **`colorizeFull` routes container rows around glamour.** glamour needs its
+  input ANSI-stripped, which erased the surface entirely in `full` mode and
+  reflowed the body; styled spans (surface rows, dim notes) are now preserved
+  verbatim through `colorizeCodeBlocks`, and whitespace-only gaps between
+  spans pass through instead of being collapsed (which glued adjacent rows
+  together).
