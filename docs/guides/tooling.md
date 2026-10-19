@@ -14,8 +14,8 @@ The primary agent (HTTP or Bedrock backends) has these tools available with no c
 | `find_files(path, pattern)` | root dir + glob (e.g. `*_test.go`) | matching file paths — locate by filename; use `grep` for contents |
 | `grep(pattern, path, recursive)` | pattern/path/bool | matches — searches file contents (extended regex, e.g. `foo\|bar`); use `find_files` for filenames |
 | `read_file(path, offset, limit)` | path + optional range (`offset` is a 1-based line number matching the output numbering) | content |
-| `write_file(path, content)` | — | ok — creates parent directories; expands `~` |
-| `edit_file(path, old_string, new_string, replace_all)` | — | ok — exact-string replacement; rejects ambiguous matches unless `replace_all=true` |
+| `write_file(path, content)` | — | ok — creates parent directories; expands `~`; writes atomically (temp file + rename) |
+| `edit_file(path, old_string, new_string, replace_all)` | — | ok — exact-string replacement first; on a miss falls back to a whitespace/indentation/escape-tolerant match (uniqueness still required, reported as `fuzzy match: <strategy>`), and on total failure returns the closest matching block as a hint that is **never** applied silently. Writes atomically (temp file + rename) and preserves CRLF |
 | `delete_file(path)` | — | ok — permission-gated |
 | `move_file(source, destination)` | — | ok — permission-gated; creates destination parent directories |
 | `list_dir(path)` | — | entries (names, types, sizes) |

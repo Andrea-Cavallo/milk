@@ -239,7 +239,7 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 			"type": "function",
 			"function": map[string]any{
 				"name":        "edit_file",
-				"description": "Replace a string in a file. By default requires the string to be unique; set replace_all=true to replace every occurrence.",
+				"description": "Replace a string in a file. By default requires the string to be unique; set replace_all=true to replace every occurrence. If the exact string is not found, milk falls back to whitespace/indentation-tolerant matching (reported as 'fuzzy match'); when nothing matches, the error returns the closest matching block as a hint — never a silent fuzzy edit.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -1218,7 +1218,7 @@ func runWriteFile(args map[string]any, cwd string) (string, bool) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return toolResult{Error: err.Error()}.String(), false
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := writeFileAtomic(path, []byte(content), 0o644); err != nil {
 		return toolResult{Error: err.Error()}.String(), false
 	}
 	return toolResult{Output: "wrote " + path}.String(), false
@@ -1290,28 +1290,22 @@ func runEditFile(args map[string]any, cwd string) (string, bool) {
 	if err != nil {
 		return toolResult{Error: err.Error()}.String(), false
 	}
-	content := string(data)
 
-	count := strings.Count(content, oldStr)
-	if count == 0 {
-		return toolResult{Error: "old_string not found in " + path}.String(), false
-	}
-	if !replaceAll && count > 1 {
-		return toolResult{Error: fmt.Sprintf("old_string is ambiguous: found %d occurrences in %s; use replace_all=true to replace all", count, path)}.String(), false
-	}
-
-	n := 1
-	if replaceAll {
-		n = -1
-	}
-	updated := strings.Replace(content, oldStr, newStr, n)
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+	updated, count, strategy, err := applyEdit(string(data), oldStr, newStr, path, replaceAll)
+	if err != nil {
 		return toolResult{Error: err.Error()}.String(), false
 	}
-	if replaceAll {
-		return toolResult{Output: fmt.Sprintf("edited %s (%d replacements)", path, count)}.String(), false
+	if err := writeFileAtomic(path, []byte(updated), 0o644); err != nil {
+		return toolResult{Error: err.Error()}.String(), false
 	}
-	return toolResult{Output: "edited " + path}.String(), false
+	fuzzy := ""
+	if strategy != "exact" {
+		fuzzy = " (fuzzy match: " + strategy + ")"
+	}
+	if replaceAll {
+		return toolResult{Output: fmt.Sprintf("edited %s (%d replacements)%s", path, count, fuzzy)}.String(), false
+	}
+	return toolResult{Output: "edited " + path + fuzzy}.String(), false
 }
 
 func runListDir(args map[string]any, cwd string) (string, bool) {
