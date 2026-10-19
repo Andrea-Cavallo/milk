@@ -102,6 +102,40 @@ func (as *acpSession) setupTasks() {
 	ts.SetOnChange(as.emitTasksPlan)
 }
 
+// setupShells surfaces background shells (ADR-0063/0064) as tool-call rows,
+// the shell counterpart of setupBackground's job rows: one synthetic row per
+// shell, live output streamed into it via streamLive, terminal status on
+// exit. The shell registry is process-global (the tool contract), so every
+// session gets every shell — the listener is per-session and unregistered in
+// close().
+func (as *acpSession) setupShells() {
+	var stopsMu sync.Mutex
+	stops := map[string]func(){}
+	as.removeShellListener = local.AddShellListener(
+		func(info local.ShellInfo) {
+			buf, ok := local.ShellLive(info.ID)
+			if !ok {
+				return
+			}
+			as.notify(acp.BackgroundShellCall(info))
+			stop := as.streamLive(acp.ShellToolCallID(info.ID), buf)
+			stopsMu.Lock()
+			stops[info.ID] = stop
+			stopsMu.Unlock()
+		},
+		func(info local.ShellInfo) {
+			stopsMu.Lock()
+			stop := stops[info.ID]
+			delete(stops, info.ID)
+			stopsMu.Unlock()
+			if stop != nil {
+				stop() // flush output before the terminal status row
+			}
+			as.notify(acp.BackgroundShellCall(info))
+		},
+	)
+}
+
 func (as *acpSession) emitTasksPlan() {
 	list, err := as.taskStore.List(tasks.ListOpts{})
 	if err != nil {
@@ -180,7 +214,7 @@ func acpBg(as *acpSession, rest string) (string, string) {
 	parts := strings.Fields(arg)
 	switch {
 	case len(parts) == 0 || parts[0] == "list":
-		return renderBgList(as.mgr.Jobs()), ""
+		return renderBgList(as.mgr.Jobs(), local.BackgroundShells()), ""
 	case parts[0] == "start":
 		spec, task, err := parseBgStartArgs(strings.TrimPrefix(arg, "start"))
 		if err != nil || task == "" {
@@ -197,6 +231,9 @@ func acpBg(as *acpSession, rest string) (string, string) {
 				return renderBgShow(j), ""
 			}
 		}
+		if info, ok := local.BackgroundShell(id); ok {
+			return renderBgShowShell(info), ""
+		}
 		return fmt.Sprintf("background agent %s not found", id), ""
 	case parts[0] == "stop":
 		id := strings.TrimSpace(strings.TrimPrefix(arg, "stop"))
@@ -206,9 +243,14 @@ func acpBg(as *acpSession, rest string) (string, string) {
 		if as.mgr.Cancel(id) {
 			return fmt.Sprintf("background agent %s — cancelling", id), ""
 		}
+		if _, ok := local.KillBackgroundShell(id); ok {
+			// Not a job — a background-shell row (ADR-0064): /bg stop
+			// doubles as the UI's kill_bash here too.
+			return fmt.Sprintf("background shell %s — killing", id), ""
+		}
 		return fmt.Sprintf("background agent %s not found or already finished", id), ""
 	}
-	return "usage: /bg [list | show <id> | start [--agent <name>] <task> | stop <id>]", ""
+	return "usage: /bg [list | show <id> | start [--agent <name>] <task> | stop <id>] (ids: background agents and shells)", ""
 }
 
 func acpTasks(as *acpSession, _ string) (string, string) { return execTasks(as.taskStore), "" }

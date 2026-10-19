@@ -26,7 +26,7 @@ Permissions: `run_in_background` rides the existing `bash` permission gate (the 
 
 ## Consequences
 
-- TUI/ACP panel wiring for background shells (live buffer attach, `/bg` integration — the review's "wired into the existing background-job panel and ADR-0047 live buffer") is **not** in this change: shells are model-owned state with no human command surface yet. Follow-up issue if wanted.
+- ~~TUI/ACP panel wiring for background shells~~ **landed**: shells are rows in the one merged background panel with click-to-attach live views and `/bg list|show|stop`, plus ACP tool-call rows — see [ADR-0064](0064-background-shell-surface.md).
 - A crash of milk (not a clean exit) skips the exit kill; the 1-hour lifetime cap is the backstop for orphans.
 - The registry is process-global, so a shell started by a background job's fork is visible to the parent agent's `bash_output` — deliberate: shells are workspace-scoped (session cwd), and IDs are namespaced (`s1`, `s2`, …) per process.
 

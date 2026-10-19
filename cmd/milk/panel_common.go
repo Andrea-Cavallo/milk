@@ -27,7 +27,7 @@ func (m *model) sidePanelLines(region panelRegion) (lines []string, inner int) {
 		if m.agents.backgroundMgr != nil {
 			jobs = m.agents.backgroundMgr.Jobs()
 		}
-		return buildBackgroundPanelLines(jobs, backgroundPanelInner), backgroundPanelInner
+		return buildBackgroundPanelLines(jobs, local.BackgroundShells(), backgroundPanelInner), backgroundPanelInner
 	case regionWorkflow:
 		return buildWorkflowPanelLines(m.workflowState, workflowPanelInner), workflowPanelInner
 	}
@@ -119,7 +119,8 @@ func (m *model) autoOpenPanel(region panelRegion) {
 //     they don't keep the content "live".
 //   - tasks: every session + global task is done, or there are none
 //     (blocked/in-progress/pending count as active).
-//   - background: no job is still running — an empty list (all spawned
+//   - background: no job and no background shell is still running (ADR-0064
+//     merged both into the one panel) — an empty list (all spawned
 //     jobs finished and drained) is finalized too.
 //   - workflow: no run in flight and the loaded state is nil, nameless
 //     (panel shows "no active workflow"), or already at Role "done".
@@ -149,6 +150,11 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 		}
 		return true
 	case regionBackground:
+		for _, s := range local.BackgroundShells() {
+			if s.Running {
+				return false
+			}
+		}
 		if m.agents.backgroundMgr == nil {
 			return true
 		}
@@ -181,7 +187,8 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 //     content either;
 //   - the content-finalization events the TUI observes: task-store
 //     mutations (taskStoreChangedMsg), the last background job finishing
-//     (backgroundJobDoneMsg), a workflow ending or being cleared
+//     (backgroundJobDoneMsg), the last background shell exiting
+//     (backgroundShellDoneMsg), a workflow ending or being cleared
 //     (workflow.WorkflowDoneMsg, /workflow clear), and /forget emptying
 //     the percept store (resolveForget).
 //
@@ -211,11 +218,11 @@ func panelSubName(region panelRegion) string {
 }
 
 // panelDisplayName returns the human-readable panel name used in
-// notifications and confirmations ("background agents panel", ...).
+// notifications and confirmations ("background panel", ...).
 func panelDisplayName(region panelRegion) string {
 	switch region {
 	case regionBackground:
-		return "background agents"
+		return "background"
 	case regionMemory, regionTasks, regionWorkflow:
 		return panelSubName(region)
 	}

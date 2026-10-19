@@ -88,7 +88,10 @@ type acpSession struct {
 	workflowRunning atomic.Bool
 	cliPC           permContext    // for CLI-agent roles inside workflows
 	mgr             *local.Manager // background jobs; nil without an inference-server agent
-	da              *dispatchAgents
+	// removeShellListener unregisters the background-shell lifecycle
+	// hooks (ADR-0064) set up in setupShells; called from close().
+	removeShellListener func()
+	da                  *dispatchAgents
 
 	// localAgent / escLocalAgent are the wired local-provider agents behind
 	// the runners (nil when that role isn't local), kept for /bg start.
@@ -199,6 +202,7 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 	as.loop = loop.New(cfg.LoopDetectionCfg())
 	as.cliPC = permContext{cwd: cwd, toolFutures: map[string]chan string{}}
 	as.setupTasks()
+	as.setupShells()
 	if err := as.buildRunners(cfg); err != nil {
 		return nil, err
 	}
@@ -318,6 +322,12 @@ func (as *acpSession) close() {
 	as.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	// Unregister the background-shell lifecycle hooks (ADR-0064) so a
+	// closed session stops receiving shell events.
+	if as.removeShellListener != nil {
+		as.removeShellListener()
+		as.removeShellListener = nil
 	}
 	// Best-effort persist: the file is saved at every turn end already, so
 	// this only flushes whatever changed since. Nothing useful to do with

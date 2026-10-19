@@ -315,6 +315,10 @@ func (m model) handleBgCmd(arg string) (tea.Model, tea.Cmd) {
 		}
 		if mgr.Cancel(id) {
 			m.appendTranscript(fmt.Sprintf("%s background agent %s — cancelling\n", milkTag(), id))
+		} else if _, ok := local.KillBackgroundShell(id); ok {
+			// Not a job — one of the background-shell rows (ADR-0064):
+			// /bg stop doubles as the UI's kill_bash.
+			m.appendTranscript(fmt.Sprintf("%s background shell %s — killing\n", milkTag(), id))
 		} else {
 			m.appendTranscript(fmt.Sprintf("%s background agent %s not found or already finished\n", milkTag(), id))
 		}
@@ -331,40 +335,57 @@ func (m model) handleBgCmd(arg string) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if info, ok := local.BackgroundShell(id); ok {
+			m.appendTranscript(renderBgShowShell(info))
+			return m, nil
+		}
 		m.appendTranscript(fmt.Sprintf("%s background agent %s not found\n", milkTag(), id))
 		return m, nil
 	default:
-		m.appendTranscript(milkTag() + " usage: /bg [list | show <id> | start [--agent <name>] <task> | stop <id>]\n")
+		m.appendTranscript(milkTag() + " usage: /bg [list | show <id> | start [--agent <name>] <task> | stop <id>] (ids: background agents and shells)\n")
 		return m, nil
 	}
 }
 
-// handleBgList renders the background-agents table into the transcript.
+// handleBgList renders the background-agents + background-shells table into
+// the transcript.
 func (m model) handleBgList(mgr *local.Manager) model {
-	m.appendTranscript(renderBgList(mgr.Jobs()))
+	m.appendTranscript(renderBgList(mgr.Jobs(), local.BackgroundShells()))
 	return m
 }
 
-// renderBgList formats the background-agents table (trailing newline included).
-func renderBgList(jobs []local.Job) string {
+// renderBgList formats the background-agents + background-shells table
+// (trailing newline included) — one merged /bg surface for both kinds of
+// background work (ADR-0064).
+func renderBgList(jobs []local.Job, shells []local.ShellInfo) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s background agents:\n", milkTag())
 	if len(jobs) == 0 {
 		fmt.Fprintf(&sb, "  (none)\n")
-		return sb.String()
+	} else {
+		for _, j := range jobs {
+			elapsed := ""
+			if !j.EndedAt.IsZero() {
+				elapsed = j.EndedAt.Sub(j.StartedAt).Round(time.Second).String()
+			} else {
+				elapsed = time.Since(j.StartedAt).Round(time.Second).String() + "…"
+			}
+			status := string(j.Status)
+			if j.TimedOut {
+				status = "timed-out"
+			}
+			fmt.Fprintf(&sb, "  %-8s  %-10s  %8s  %s\n", j.ID, status, elapsed, j.Label)
+		}
 	}
-	for _, j := range jobs {
-		elapsed := ""
-		if !j.EndedAt.IsZero() {
-			elapsed = j.EndedAt.Sub(j.StartedAt).Round(time.Second).String()
-		} else {
-			elapsed = time.Since(j.StartedAt).Round(time.Second).String() + "…"
+	if len(shells) > 0 {
+		fmt.Fprintf(&sb, "%s background shells:\n", milkTag())
+		for _, s := range shells {
+			elapsed := elapsedShort(s.StartedAt, s.FinishedAt)
+			if s.Running {
+				elapsed += "…"
+			}
+			fmt.Fprintf(&sb, "  %-8s  %-10s  %8s  %s\n", s.ID, s.StatusLabel(), elapsed, s.Command)
 		}
-		status := string(j.Status)
-		if j.TimedOut {
-			status = "timed-out"
-		}
-		fmt.Fprintf(&sb, "  %-8s  %-10s  %8s  %s\n", j.ID, status, elapsed, j.Label)
 	}
 	return sb.String()
 }
@@ -1649,9 +1670,9 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		}
 		m.syncLayout()
 		if m.panelBackground {
-			m.notify("background agents panel: on", "/panel background")
+			m.notify("background panel: on", "/panel background")
 		} else {
-			m.notify("background agents panel: off", "/panel background")
+			m.notify("background panel: off", "/panel background")
 		}
 		return m, nil
 	default:

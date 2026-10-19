@@ -3,6 +3,7 @@ package local
 import (
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,8 @@ const (
 
 type bgShell struct {
 	id      string
+	command string // the sh -c command line — kept for panel rows and ACP titles (ADR-0064)
+	dir     string
 	cmd     *exec.Cmd
 	out     *livebuf.Buffer
 	done    chan struct{}
@@ -44,6 +47,58 @@ type bgShell struct {
 	finished   bool
 	finishedAt time.Time
 	killed     bool
+}
+
+// ShellInfo is an exported snapshot of one background shell's state (ADR-0063
+// lifecycle, ADR-0064 surface): the UI layer's read model for the background
+// panel rows, /bg listing and ACP tool-call rows. Values are copies — the
+// live output buffer is reached separately via ShellLive.
+type ShellInfo struct {
+	ID         string
+	Command    string
+	Dir        string
+	Running    bool // started and not yet finished (may also be Killed — "stopping")
+	Killed     bool // kill_bash (or the 1h auto-kill, or process exit) was requested
+	Finished   bool
+	ExitCode   int
+	Err        error
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+
+// StatusLabel is the compact state word for UI rows and attach headers:
+// "running", "stopping", "exited N", "killed", or the exec error's text.
+func (i ShellInfo) StatusLabel() string {
+	switch {
+	case i.Running && i.Killed:
+		return "stopping"
+	case i.Running:
+		return "running"
+	case i.Err != nil:
+		return i.Err.Error()
+	case i.Killed:
+		return fmt.Sprintf("killed (exit %d)", i.ExitCode)
+	default:
+		return fmt.Sprintf("exited %d", i.ExitCode)
+	}
+}
+
+// info snapshots the shell's state under its lock.
+func (s *bgShell) info() ShellInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ShellInfo{
+		ID:         s.id,
+		Command:    s.command,
+		Dir:        s.dir,
+		Running:    !s.finished,
+		Killed:     s.killed,
+		Finished:   s.finished,
+		ExitCode:   s.exitCode,
+		Err:        s.exitErr,
+		StartedAt:  s.started,
+		FinishedAt: s.finishedAt,
+	}
 }
 
 // statusLine renders the shell's state prefix for bash_output results.
@@ -77,12 +132,127 @@ func (s *bgShell) finishState() (finished bool, at time.Time) {
 }
 
 type shellRegistry struct {
-	mu     sync.Mutex
-	shells map[string]*bgShell
-	nextID int
+	mu         sync.Mutex
+	shells     map[string]*bgShell
+	nextID     int
+	listeners  map[int]*shellListener
+	nextListen int
 }
 
-var bgShells = &shellRegistry{shells: map[string]*bgShell{}}
+// shellListener is one registration from AddShellListener; pointers so the
+// registry can nil-check a removed listener under the lock without copying.
+type shellListener struct {
+	onStart  func(ShellInfo)
+	onFinish func(ShellInfo)
+}
+
+var bgShells = &shellRegistry{shells: map[string]*bgShell{}, listeners: map[int]*shellListener{}}
+
+// AddShellListener registers lifecycle callbacks for every background shell
+// (ADR-0064) and returns a remove func. The shell registry is process-global
+// (shells are visible to every agent — that is the tool contract), so unlike
+// Manager.SetOnStart this fans out to multiple listeners: one per TUI and one
+// per ACP session. Callbacks fire synchronously on the lifecycle event's own
+// goroutine (start: the tool dispatch that started the shell; finish: the
+// shell's Wait goroutine) in registration order — keep them quick and never
+// call back into the registry's start/stop paths.
+func AddShellListener(onStart, onFinish func(ShellInfo)) (remove func()) {
+	bgShells.mu.Lock()
+	bgShells.nextListen++
+	id := bgShells.nextListen
+	bgShells.listeners[id] = &shellListener{onStart: onStart, onFinish: onFinish}
+	bgShells.mu.Unlock()
+	return func() {
+		bgShells.mu.Lock()
+		delete(bgShells.listeners, id)
+		bgShells.mu.Unlock()
+	}
+}
+
+// fireStartLocked / fireFinish call the registered listeners outside the
+// registry lock. fireStart snapshots under r.mu; fireFinish takes no lock.
+func (r *shellRegistry) fire(info ShellInfo, start bool) {
+	r.mu.Lock()
+	ls := make([]*shellListener, 0, len(r.listeners))
+	for _, l := range r.listeners {
+		ls = append(ls, l)
+	}
+	r.mu.Unlock()
+	for _, l := range ls {
+		if start {
+			if l.onStart != nil {
+				l.onStart(info)
+			}
+		} else if l.onFinish != nil {
+			l.onFinish(info)
+		}
+	}
+}
+
+// BackgroundShells snapshots every tracked shell, oldest-started first,
+// reaping finished shells past their retention window first (ADR-0063).
+func BackgroundShells() []ShellInfo {
+	return bgShells.list()
+}
+
+func (r *shellRegistry) list() []ShellInfo {
+	r.mu.Lock()
+	r.reapLocked()
+	all := make([]ShellInfo, 0, len(r.shells))
+	for _, s := range r.shells {
+		all = append(all, s.info())
+	}
+	r.mu.Unlock()
+	sort.Slice(all, func(i, j int) bool { return all[i].StartedAt.Before(all[j].StartedAt) })
+	return all
+}
+
+// BackgroundShell looks up one shell's state snapshot by ID (the /bg show
+// path); ok is false when the shell is unknown or has been reaped.
+func BackgroundShell(id string) (ShellInfo, bool) {
+	s, ok := bgShells.get(id)
+	if !ok {
+		return ShellInfo{}, false
+	}
+	return s.info(), true
+}
+
+// ShellLive returns the shell's live output buffer for attach/stream views
+// (ADR-0047/0064). The buffer stays valid (and keeps accumulating) after the
+// shell exits, until the shell is reaped.
+func ShellLive(id string) (*livebuf.Buffer, bool) {
+	s, ok := bgShells.get(id)
+	if !ok {
+		return nil, false
+	}
+	return s.out, true
+}
+
+// KillBackgroundShell stops a background shell from the UI surface (/bg stop,
+// issue #252's follow-up): the same action as the kill_bash tool. Returns the
+// shell's post-kill state snapshot and whether the shell exists at all — a
+// shell that already exited is "found" but unchanged (its output stays
+// readable).
+func KillBackgroundShell(id string) (ShellInfo, bool) {
+	s, ok := bgShells.get(id)
+	if !ok {
+		return ShellInfo{}, false
+	}
+	s.kill()
+	return s.info(), true
+}
+
+// StartBackgroundShell starts a background shell running `sh -c command` in
+// dir (empty = the process cwd) — the exported entry behind the bash tool's
+// run_in_background (ADR-0063), also used by the UI layers' tests. Returns
+// the shell's initial state snapshot.
+func StartBackgroundShell(command, dir string) (ShellInfo, error) {
+	s, err := bgShells.start(command, dir)
+	if err != nil {
+		return ShellInfo{}, err
+	}
+	return s.info(), nil
+}
 
 // StopBackgroundShells kills every tracked background shell. Called from the
 // milk process exit path so no shell outlives the session (ADR-0063).
@@ -121,6 +291,8 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 	r.nextID++
 	s := &bgShell{
 		id:      fmt.Sprintf("s%d", r.nextID),
+		command: command,
+		dir:     dir,
 		out:     livebuf.New(bgShellOutputBufferByte),
 		done:    make(chan struct{}),
 		started: time.Now(),
@@ -142,6 +314,11 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 		return nil, err
 	}
 
+	// Fire shell-started before the Wait goroutine exists, so listeners
+	// always see started→finished in order even for instantly-exiting
+	// commands (ADR-0064).
+	r.fire(s.info(), true)
+
 	go func() {
 		err := s.cmd.Wait()
 		s.mu.Lock()
@@ -156,6 +333,7 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 		}
 		s.mu.Unlock()
 		close(s.done)
+		r.fire(s.info(), false) // ADR-0064: shell-finished lifecycle event
 	}()
 
 	// Auto-kill after the hard lifetime cap.
@@ -217,10 +395,8 @@ func runBashOutput(args map[string]any) (string, bool) {
 // runKillBash implements the kill_bash tool.
 func runKillBash(args map[string]any) (string, bool) {
 	id, _ := args["shell_id"].(string)
-	s, ok := bgShells.get(id)
-	if !ok {
+	if _, ok := KillBackgroundShell(id); !ok {
 		return toolResult{Error: fmt.Sprintf("no background shell %q", id)}.String(), false
 	}
-	s.kill()
 	return toolResult{Output: fmt.Sprintf("killed background shell %s", id)}.String(), false
 }
