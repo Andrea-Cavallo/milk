@@ -2616,7 +2616,7 @@ func SideEffectingTool(name string) bool { return toolNeedsPermission(name) }
 // Read-only and internal tools are always permitted; side-effecting tools require a grant.
 func toolNeedsPermission(name string) bool {
 	switch name {
-	case "bash", "write_file", "edit_file", "delete_file", "move_file", "web_fetch", "http_get", "http_request":
+	case "bash", "write_file", "edit_file", "multiedit", "delete_file", "move_file", "web_fetch", "http_get", "http_request":
 		return true
 	}
 	return false
@@ -2958,7 +2958,7 @@ func isParallelSafeTool(name string) bool {
 // result instead of running against the wrong world.
 func isCancellingTool(name string) bool {
 	switch name {
-	case "bash", "write_file", "edit_file", "delete_file", "move_file":
+	case "bash", "write_file", "edit_file", "multiedit", "delete_file", "move_file":
 		return true
 	}
 	return false
@@ -3550,7 +3550,7 @@ func resetExecutedKeysAfterMutation(executedKeys map[string]bool, toolCalls []to
 	mutated := false
 	for _, tc := range toolCalls {
 		switch tc.Function.Name {
-		case "edit_file", "write_file", "delete_file", "move_file":
+		case "edit_file", "multiedit", "write_file", "delete_file", "move_file":
 			mutated = true
 		}
 	}
@@ -3576,7 +3576,7 @@ func invalidateReadsForEditedFiles(executedKeys map[string]bool, toolCalls []too
 	editedPaths := map[string]bool{}
 	for _, tc := range toolCalls {
 		switch tc.Function.Name {
-		case "edit_file", "write_file":
+		case "edit_file", "multiedit", "write_file":
 			var args struct {
 				Path string `json:"path"`
 			}

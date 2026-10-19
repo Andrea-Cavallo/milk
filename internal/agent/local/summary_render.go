@@ -76,7 +76,7 @@ func touchedFiles(calls []namedArgs, limit int) []touchedFile {
 			action = "read"
 		case "write_file":
 			action = "written"
-		case "edit_file":
+		case "edit_file", "multiedit":
 			action = "edited"
 		default:
 			continue

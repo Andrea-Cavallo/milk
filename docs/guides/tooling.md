@@ -18,6 +18,7 @@ The primary agent (HTTP or Bedrock backends) has these tools available with no c
 | `read_file(path, offset, limit)` | path + optional range (`offset` is a 1-based line number matching the output numbering) | content |
 | `write_file(path, content)` | — | ok — creates parent directories; expands `~`; writes atomically (temp file + rename) |
 | `edit_file(path, old_string, new_string, replace_all)` | — | ok — exact-string replacement first; on a miss falls back to a whitespace/indentation/escape-tolerant match (uniqueness still required, reported as `fuzzy match: <strategy>`), and on total failure returns the closest matching block as a hint that is **never** applied silently. Writes atomically (temp file + rename) and preserves CRLF |
+| `multiedit(path, edits)` | `[{old_string, new_string, replace_all?}]` applied in order | ok — all-or-nothing batch: every edit is validated in memory (each sees the previous edit's result, exactly `edit_file`'s matching rules and hints) and the file is written once at the end; any failing edit writes nothing and names itself plus its closest-match block. One round trip instead of a burst of `edit_file` calls |
 | `delete_file(path)` | — | ok — permission-gated |
 | `move_file(source, destination)` | — | ok — permission-gated; creates destination parent directories |
 | `list_dir(path)` | — | entries (names, types, sizes) |

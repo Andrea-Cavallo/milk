@@ -292,6 +292,33 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 		{
 			"type": "function",
 			"function": map[string]any{
+				"name":        "multiedit",
+				"description": "Apply several edits to one file in a single call, all-or-nothing: each edit is an old_string→new_string replacement with exactly edit_file's matching rules (exact first, whitespace/indentation-tolerant fallback reported as 'fuzzy match', uniqueness required unless replace_all), applied in order so each edit sees the previous edit's result. If any edit fails to match, nothing is written at all — the error names the failing edit and its closest matching block (never applied silently). Prefer this over repeated edit_file calls when one file needs several changes: one round trip instead of many.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string", "description": "Absolute or relative file path"},
+						"edits": map[string]any{
+							"type":        "array",
+							"description": "Edits to apply in order.",
+							"items": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"old_string":  map[string]any{"type": "string", "description": "Text to replace (must be unique unless replace_all is true)"},
+									"new_string":  map[string]any{"type": "string", "description": "Replacement string"},
+									"replace_all": map[string]any{"type": "boolean", "description": "Replace all occurrences instead of requiring uniqueness (default false)"},
+								},
+								"required": []string{"old_string", "new_string"},
+							},
+						},
+					},
+					"required": []string{"path", "edits"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
 				"name":        "open_file",
 				"description": "Open a file for the user to view. In the TUI this uses the same editor list as /config open: $EDITOR, $VISUAL, nano, vim, vi — or config_editors if set; over ACP the file is handed to the platform opener instead. Refused where no opener is wired (single-prompt mode, background jobs).",
 				"parameters": map[string]any{
@@ -789,6 +816,8 @@ func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Sess
 		return runWriteFile(args, cwd)
 	case "edit_file":
 		return runEditFile(args, cwd)
+	case "multiedit":
+		return runMultiEdit(args, cwd)
 	case "delete_file":
 		return runDeleteFile(args, cwd)
 	case "move_file":
@@ -1630,6 +1659,77 @@ func runEditFile(args map[string]any, cwd string) (string, bool) {
 	return toolResult{Output: "edited " + path + fuzzy}.String(), false
 }
 
+// runMultiEdit applies a batch of edits to one file, all-or-nothing (issue
+// #251): every edit is validated and applied in memory — in order, each
+// seeing the previous edit's result, with exactly applyEdit's per-edit
+// matching rules — and the file is written once at the end. A failing edit
+// discards the whole batch (nothing is written) and reports itself plus the
+// usual closest-match hint. One round trip replaces a burst of edit_file
+// calls; false-positive risk is not compounded because each edit still
+// requires a unique match (or an explicit replace_all).
+func runMultiEdit(args map[string]any, cwd string) (string, bool) {
+	path, _ := args["path"].(string)
+	path = resolvePath(path, cwd)
+	rawEdits, _ := args["edits"].([]any)
+	if len(rawEdits) == 0 {
+		return toolResult{Error: "edits must not be empty"}.String(), false
+	}
+	type editSpec struct {
+		oldStr, newStr string
+		replaceAll     bool
+	}
+	edits := make([]editSpec, 0, len(rawEdits))
+	for i, raw := range rawEdits {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return toolResult{Error: fmt.Sprintf("edits[%d] must be an object with old_string and new_string", i)}.String(), false
+		}
+		oldStr, _ := m["old_string"].(string)
+		newStr, _ := m["new_string"].(string)
+		replaceAll, _ := m["replace_all"].(bool)
+		if oldStr == "" {
+			return toolResult{Error: fmt.Sprintf("edits[%d]: old_string must not be empty", i)}.String(), false
+		}
+		edits = append(edits, editSpec{oldStr, newStr, replaceAll})
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return toolResult{Error: err.Error()}.String(), false
+	}
+	content := string(data)
+	strategies := make([]string, len(edits))
+	counts := make([]int, len(edits))
+	for i, e := range edits {
+		var strategy string
+		var err error
+		label := fmt.Sprintf("%s (multiedit edit %d/%d)", path, i+1, len(edits))
+		content, counts[i], strategy, err = applyEdit(content, e.oldStr, e.newStr, label, e.replaceAll)
+		if err != nil {
+			return toolResult{Error: fmt.Sprintf("edit %d of %d not applied — no changes were written to %s.\n%v", i+1, len(edits), path, err)}.String(), false
+		}
+		strategies[i] = strategy
+	}
+	if err := writeFileAtomic(path, []byte(content), 0o644); err != nil {
+		return toolResult{Error: err.Error()}.String(), false
+	}
+
+	var notes []string
+	for i := range edits {
+		if strategies[i] != "exact" {
+			notes = append(notes, fmt.Sprintf("edit %d fuzzy match: %s", i+1, strategies[i]))
+		}
+		if counts[i] > 1 {
+			notes = append(notes, fmt.Sprintf("edit %d: %d replacements", i+1, counts[i]))
+		}
+	}
+	out := fmt.Sprintf("edited %s (%d edits)", path, len(edits))
+	if len(notes) > 0 {
+		out += " — " + strings.Join(notes, "; ")
+	}
+	return toolResult{Output: out}.String(), false
+}
+
 func runListDir(args map[string]any, cwd string) (string, bool) {
 	path, _ := args["path"].(string)
 	if path == "" {
@@ -1874,7 +1974,7 @@ const postEditOutputMaxBytes = 4000
 // the model learns about compile/format problems without a separate build
 // call (toolset-review G2). Never runs for a failed edit.
 func (a *Agent) postEditCheck(name, result, cwd string) string {
-	if a.postEditCommand == "" || (name != "edit_file" && name != "write_file") {
+	if a.postEditCommand == "" || (name != "edit_file" && name != "multiedit" && name != "write_file") {
 		return result
 	}
 	var r toolResult
