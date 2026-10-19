@@ -171,12 +171,12 @@ func (m *model) syncAttachedContent() {
 		lines = applyPanelSelectionHighlight(lines, m.attachSelAnchorLine, m.attachSelAnchorCol, m.attachSelEndLine, m.attachSelEndCol)
 	}
 	content := strings.Join(lines, "\n")
-	// Thinking-surface rows (the /think view) get their full-row surface here
-	// — after the selection step, so the shared click/copy coordinate space
-	// (attachContentLines) stays free of the render-time pad — and before the
-	// panel tint below, whose wrap leaves the surface run in charge of the
-	// row's cells.
-	content = tintThinkSurface(content, vw)
+	// Full-row surfaces (the /think view's thinking rows, and any diff rows
+	// in the content — issue #273) get their pad here — after the selection
+	// step, so the shared click/copy coordinate space (attachContentLines)
+	// stays free of the render-time pad — and before the panel tint below,
+	// whose wrap leaves the row's own background in charge of the pad cells.
+	content = tintFullRows(content, vw)
 	// Tint every row of the attach view with the same subtle background used
 	// to set an alternating side panel apart from the main transcript —
 	// applied unconditionally here (not alternating with anything) so the
