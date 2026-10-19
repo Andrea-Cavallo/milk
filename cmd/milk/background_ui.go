@@ -61,6 +61,30 @@ func renderBackgroundJobDoneBlock(j *local.Job) string {
 	return b.String()
 }
 
+// renderBgShowShell prints one background shell's state and current output —
+// the shell counterpart of renderBgShow (ADR-0064), the manual "what is it
+// doing" path for a shell row (/bg show <shell-id>, TUI and ACP alike). The
+// output is the live buffer's snapshot, capped like a job result; it keeps
+// accumulating after exit until the shell is reaped (ADR-0063).
+func renderBgShowShell(s local.ShellInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s background shell %s (%q) — %s", milkTag(), s.ID, s.Command, s.StatusLabel())
+	if s.Dir != "" {
+		fmt.Fprintf(&b, " dir=%s", s.Dir)
+	}
+	b.WriteString("\n")
+	out := ""
+	if buf, ok := local.ShellLive(s.ID); ok {
+		out = buf.Snapshot()
+	}
+	if strings.TrimSpace(out) == "" {
+		fmt.Fprintf(&b, "%s (no output)\n", milkTag())
+	} else {
+		fmt.Fprintf(&b, "%s\n", textbudget.SummarizeLong(out, backgroundJobResultMaxChars))
+	}
+	return b.String()
+}
+
 // renderBgShow prints one job's full, uncapped result — the target the
 // truncation hint in renderBackgroundJobDoneBlock points at, and the manual
 // "take its output" path for any older job (/bg show <id>, TUI and ACP alike).

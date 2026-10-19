@@ -360,3 +360,47 @@ func ToolCallContentReplace(toolCallID ToolCallID, buf *livebuf.Buffer, cursor *
 
 // JobToolCallID is the child tool-call ID for a background job.
 func JobToolCallID(jobID string) ToolCallID { return ToolCallID("job:" + jobID) }
+
+// ShellToolCallID is the tool-call ID for a background shell (ADR-0064).
+func ShellToolCallID(shellID string) ToolCallID { return ToolCallID("shell:" + shellID) }
+
+// ToolCallStatusForShell maps a background shell's snapshot (ADR-0063/0064)
+// onto ToolCallStatus: killed shells that actually exited report cancelled,
+// a non-zero exit or exec error reports failed.
+func ToolCallStatusForShell(s local.ShellInfo) ToolCallStatus {
+	switch {
+	case !s.Finished:
+		return ToolCallInProgress
+	case s.Killed:
+		return ToolCallCancelled
+	case s.Err != nil || s.ExitCode != 0:
+		return ToolCallFailed
+	default:
+		return ToolCallCompleted
+	}
+}
+
+// BackgroundShellCall maps a background shell onto one tool-call row (status
+// and, once finished, exit code or error) — the ACP face of the shell rows the
+// TUI's background panel shows (ADR-0064). Live output streams into the row
+// separately via ToolCallContentPoll over ShellToolCallID, exactly like a
+// background job's Job.Live.
+func BackgroundShellCall(info local.ShellInfo) ToolCallUpdate {
+	u := ToolCallUpdate{
+		SessionUpdate: "tool_call_update",
+		ToolCallID:    ShellToolCallID(info.ID),
+		Name:          "background_shell",
+		Title:         "background shell: " + info.Command,
+		Kind:          ToolKindOther,
+		Status:        ToolCallStatusForShell(info),
+		RawInput:      map[string]any{"command": info.Command, "dir": info.Dir},
+		Meta:          map[string]any{"milk/shell_id": info.ID},
+	}
+	switch {
+	case info.Err != nil:
+		u.RawOutput = map[string]any{"error": info.Err.Error()}
+	case info.Finished:
+		u.RawOutput = map[string]any{"exit_code": info.ExitCode, "killed": info.Killed}
+	}
+	return u
+}

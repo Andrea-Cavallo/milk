@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/livebuf"
 	"github.com/scoutme/milk/internal/obs"
 )
@@ -20,11 +21,15 @@ type attachKind int
 const (
 	attachBackground attachKind = iota
 	attachWorkflow
+	attachShell
 )
 
 func (k attachKind) String() string {
-	if k == attachWorkflow {
+	switch k {
+	case attachWorkflow:
 		return "workflow"
+	case attachShell:
+		return "shell"
 	}
 	return "background"
 }
@@ -317,24 +322,51 @@ func (m *model) handleAttachMouse(ev tea.MouseEvent) (tea.Model, tea.Cmd) {
 // trigger state from colliding with the memory panel's own IDs, since both
 // share the same m.lastPanelClickID field.
 func (m *model) handleBackgroundPanelClick(lineIdx int) tea.Cmd {
-	if m.agents.backgroundMgr == nil {
+	var jobs []local.Job
+	if m.agents.backgroundMgr != nil {
+		jobs = m.agents.backgroundMgr.Jobs()
+	}
+	shells := local.BackgroundShells()
+	// The row→target mapping comes from backgroundPanelLayout — the same
+	// layout the renderer draws, recomputed here rather than cached, so a
+	// job or shell that started or finished between the last render and
+	// this click can't shift the mapping out of sync (ADR-0064: the panel
+	// merges jobs and shells).
+	rows := backgroundPanelLayout(jobs, shells, backgroundPanelInner)
+	if lineIdx < 0 || lineIdx >= len(rows) {
 		return nil
 	}
-	jobs := m.agents.backgroundMgr.Jobs()
-	// buildBackgroundPanelLines: line 0 is the title, line 1 is blank, and
-	// line 2+i is job i in the same order Jobs() returns them — recomputed
-	// here rather than cached, so a job that started or finished between
-	// the last render and this click can't shift the mapping out of sync.
-	jobIdx := lineIdx - 2
-	if jobIdx < 0 || jobIdx >= len(jobs) {
+	row := rows[lineIdx]
+	var key string
+	var live *livebuf.Buffer
+	var label string
+	switch row.kind {
+	case bgRowJob:
+		if row.jobIdx >= len(jobs) {
+			return nil
+		}
+		j := jobs[row.jobIdx]
+		key, label, live = "bg:"+j.ID, fmt.Sprintf("%s (%s)", j.Label, j.Status), j.Live
+	case bgRowShell:
+		if row.shellIdx >= len(shells) {
+			return nil
+		}
+		s := shells[row.shellIdx]
+		buf, ok := local.ShellLive(s.ID)
+		if !ok {
+			return nil
+		}
+		key, label, live = "bgsh:"+s.ID, fmt.Sprintf("%s (%s)", s.Command, s.StatusLabel()), buf
+	default:
 		return nil
 	}
-	job := jobs[jobIdx]
-	key := "bg:" + job.ID
 	now := time.Now()
 	if key == m.lastPanelClickID && now.Sub(m.lastPanelClickTime) <= 400*time.Millisecond {
 		m.lastPanelClickID = ""
-		return m.startAttach(attachBackground, job.ID, fmt.Sprintf("%s (%s)", job.Label, job.Status), job.Live)
+		if row.kind == bgRowShell {
+			return m.startAttach(attachShell, shells[row.shellIdx].ID, label, live)
+		}
+		return m.startAttach(attachBackground, jobs[row.jobIdx].ID, label, live)
 	}
 	m.lastPanelClickID = key
 	m.lastPanelClickTime = now

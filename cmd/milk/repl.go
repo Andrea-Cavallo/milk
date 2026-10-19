@@ -293,6 +293,19 @@ type backgroundJobStartedMsg struct{}
 // happens, without waiting for the user's next input.
 type backgroundJobDoneMsg struct{ job *local.Job }
 
+// backgroundShellStartedMsg is sent when a background shell is started via
+// bash(run_in_background) — from local.AddShellListener, off the tool dispatch
+// goroutine that ran the tool (ADR-0064). Used to auto-open the background
+// panel so the new shell row is visible without pressing F3 first.
+type backgroundShellStartedMsg struct{ info local.ShellInfo }
+
+// backgroundShellDoneMsg is sent when a background shell exits (ADR-0064).
+// Unlike backgroundJobDoneMsg it writes no transcript block: a shell's
+// output is live-buffer material, read through the attach view or
+// bash_output, not turn output the model reported. Toast + panel
+// finalization only.
+type backgroundShellDoneMsg struct{ info local.ShellInfo }
+
 // backgroundBatchDoneMsg is sent exactly once when the last currently-
 // outstanding spawn_background_agent job finishes (Manager.SetOnBatchDone —
 // ActiveCount reaches 0), i.e. once per wave rather than once per job. This
@@ -2837,6 +2850,20 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetManualOverrideIfFinalized(regionBackground)
 		return m, nil
 
+	case backgroundShellStartedMsg:
+		m.autoOpenPanel(regionBackground)
+		m.syncLayout()
+		return m, nil
+
+	case backgroundShellDoneMsg:
+		m.notify(fmt.Sprintf("background shell %s %s", msg.info.ID, msg.info.StatusLabel()), "/bg list")
+		// The last running shell (or job) exiting finalizes the background
+		// panel's content — re-arm auto-open so the next one opens it again
+		// (no-op while other background work is still live; ADR-0059).
+		m.resetManualOverrideIfFinalized(regionBackground)
+		m.syncLayout()
+		return m, nil
+
 	case backgroundBatchDoneMsg:
 		return m.maybeAutoFollowupBackgroundJobs(true)
 
@@ -4624,6 +4651,13 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 			p.Send(backgroundBatchDoneMsg{})
 		})
 	}
+	// Background shells (ADR-0063/0064) are process-global — surfaced here
+	// the same way so a shell's start/end reaches the TUI regardless of
+	// which agent's tool loop started it.
+	local.AddShellListener(
+		func(info local.ShellInfo) { p.Send(backgroundShellStartedMsg{info: info}) },
+		func(info local.ShellInfo) { p.Send(backgroundShellDoneMsg{info: info}) },
+	)
 
 	// Wire task store redraw: when tasks change, send a tick to trigger View()
 	// and (unless the user has manually closed it) auto-open the tasks panel.

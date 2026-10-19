@@ -452,10 +452,10 @@ func TestF3TogglesBackgroundPanel(t *testing.T) {
 	if !m2.panelBackground {
 		t.Fatal("expected F3 to open the background panel")
 	}
-	if !toastMentions(m2, "background agents panel: on") {
+	if !toastMentions(m2, "background panel: on") {
 		t.Errorf("expected a panel-toggle toast, got %#v", m2.toastVisible)
 	}
-	if strings.Contains(m2.transcript.String(), "background agents panel: on") {
+	if strings.Contains(m2.transcript.String(), "background panel: on") {
 		t.Errorf("panel confirmation must not be appended to the transcript (#162), got %q", m2.transcript.String())
 	}
 

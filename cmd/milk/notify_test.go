@@ -592,7 +592,7 @@ func TestAutoOpenPanel_ToastsOnlyOnTransition(t *testing.T) {
 	m := layoutTestModel(t, 120, 40)
 
 	m.autoOpenPanel(regionBackground)
-	if !toastMentions(m, "background agents panel opened") {
+	if !toastMentions(m, "background panel opened") {
 		t.Errorf("expected an auto-open toast, got %#v", m.toastVisible)
 	}
 	firstCount := len(m.toastHistory)

@@ -81,6 +81,8 @@ Long-running processes (dev servers, watchers, REPLs) go through `bash` with `ru
 - `bash` also takes `workdir` for a per-command working-directory override (default: the session cwd).
 - Permissions: `run_in_background` rides the normal `bash` permission ask; `bash_output` is read-only; `kill_bash` can only stop shells this agent started.
 
+Shell rows are first-class in the background surfaces ([ADR-0064](../adr/0064-background-shell-surface.md)): the `background` panel (F3 / `/panel background`) lists them under `shells (n)` next to background agents, double-clicking a row attaches the live output view, and `/bg` handles both kinds of IDs — `/bg list` shows both tables, `/bg show <id>` prints a shell's state and current output, `/bg stop <id>` doubles as `kill_bash`. Over ACP each shell is one tool-call row (`background shell: <command>`) with live output streamed into it, `completed`/`failed`/`cancelled` at exit.
+
 
 ## Post-edit check
 

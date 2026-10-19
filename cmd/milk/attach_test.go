@@ -44,15 +44,16 @@ func TestHandleBackgroundPanelClick_DoubleClickAttaches(t *testing.T) {
 	m.agents.backgroundMgr = mgr
 	job := spawnJobWithLiveContent(t, mgr, "investigate X", "distinctive job output")
 
-	// buildBackgroundPanelLines: line 0 title, line 1 blank, line 2 = the only job.
-	if cmd := m.handleBackgroundPanelClick(2); cmd != nil {
+	// backgroundPanelLayout: line 0 title, line 1 blank, line 2 the "agents
+	// (1)" section header, line 3 the only job.
+	if cmd := m.handleBackgroundPanelClick(3); cmd != nil {
 		t.Fatalf("first click should only arm, not return a command")
 	}
 	if m.attached != nil {
 		t.Fatalf("expected no attach after a single click, got %+v", m.attached)
 	}
 
-	cmd := m.handleBackgroundPanelClick(2)
+	cmd := m.handleBackgroundPanelClick(3)
 	if m.attached == nil {
 		t.Fatal("expected attach after second click within 400ms")
 	}
