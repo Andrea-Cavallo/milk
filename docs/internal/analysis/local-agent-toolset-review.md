@@ -22,7 +22,7 @@ Update this table as work lands; the rest of the document is the original analys
 | 2. Fuzzy `edit_file` | `feat/edit-file-fuzzy` | **done** | chain: escape-normalized → trimmed-boundary → line-trimmed → whitespace-normalized → indentation-flexible; closest-match hint never applied; CRLF preserved; atomic writes |
 | 3. Search and shell | `feat/search-shell-tools` | **done** | rg-first grep (+`ignore_case`/`context`/`include`/`max_results`, truncation marker), `find_files` with `**`/`.gitignore`/cap/mtime order, `bash` `workdir` + `run_in_background` + `bash_output` + `kill_bash` (ADR-0063). Exit criterion "live dev-server test" approximated by the background-shell lifecycle test; TUI panel wiring left as a follow-up (ADR-0063) |
 | 4. Post-edit check, `web_fetch` | `feat/post-edit-check-web-fetch` | **done** | `post_edit_command` per agent; `web_fetch` (HTTPS upgrade, HTML→Markdown, formats, body budget + spill) folding `http_get` (kept as dispatch alias); web search documented as an MCP route |
-| 5. Optional extras | per-item issues | not started | `multiedit`/`apply_patch`, `ask_user` (over the ADR-0052 ask layer), image reads in `read_file`, sub-agent `status`/`wait`/`send`, skills/notebooks/scheduling/LSP |
+| 5. Optional extras | per-item issues | **partly done** | landed 2026-10-19: `ask_user` (issue #249 / PR #255), sub-agent `status`/`wait`/`send` (issue #250 / PR #257), `multiedit` (issue #251 / PR #259). Remaining — issue #252, on demand: `apply_patch`, image reads in `read_file`, skills/notebooks/scheduling/LSP |
 
 ## 1. Verdict
 
@@ -107,13 +107,13 @@ The schema says "0-based" while the output is numbered from 1. A model that sees
 
 **G5. Weak web access.** `http_get` returns raw bytes capped at 8 KB by default, with no HTML-to-markdown and no truncation hint. It duplicates `http_request`. There is no web search; an MCP server is the likely route.
 
-**G6. No `multiedit` / `apply_patch`.** Multi-hunk changes cost one round trip each.
+**G6. No `multiedit` / `apply_patch`.** Multi-hunk changes cost one round trip each. *Fixed 2026-10-19: `multiedit` (issue #251) batches several edits to one file all-or-nothing over `edit_file`'s fuzzy chain; `apply_patch` stays parked in issue #252.*
 
-**G7. No structured `ask_user` tool.** The model can end its turn with a question, but cannot present options or block mid-turn the way Claude Code's `AskUserQuestion` and the `question` tools of opencode and MiMo do.
+**G7. No structured `ask_user` tool.** The model can end its turn with a question, but cannot present options or block mid-turn the way Claude Code's `AskUserQuestion` and the `question` tools of opencode and MiMo do. *Fixed 2026-10-19: `ask_user` (issue #249) over the ADR-0052 ask layer — TUI free-text prompts, ACP form dialogs (form-capable clients), Telegram free-text replies, timed "no answer" for unattended asks.*
 
 **G8. `read_file` cannot return images or PDFs.** `/attach` only covers user-supplied files, so a vision-capable model cannot view a screenshot it produced.
 
-**G9 (low). Not present:** skills tool, `.ipynb` cell editing, cron/scheduling, LSP navigation, sub-agent status/wait/send (milk has spawn/cancel only).
+**G9 (low). Not present:** skills tool, `.ipynb` cell editing, cron/scheduling, LSP navigation (parked in issue #252). Sub-agent `status`/`wait`/`send` — *landed 2026-10-19 (issue #250): `status_background_agent`/`wait_background_agent`/`send_background_agent` complete the spawn/cancel pair.*
 
 **Not a gap:** read-before-edit enforcement. None of the references enforces it in code, only in the tool description.
 
@@ -147,6 +147,9 @@ Each phase is a separate branch (`fix/...` or `feat/...`), conventional commits,
 - Exit criteria: live fetch of a docs page; post-edit output visible in the transcript.
 
 ### Phase 5: nice to have (separate issues, no commitment)
+
+*Status 2026-10-19: three of five landed — `multiedit` (#251 / PR #259), `ask_user` (#249 / PR #255), sub-agent `status`/`wait`/`send` (#250 / PR #257). The rest is issue #252 (parked, on demand).*
+
 - `multiedit` (atomic, one file) and possibly `apply_patch` for models that handle patch syntax well.
 - `ask_user` tool, implemented over the ADR-0052 ask layer so it works in the TUI, ACP and Telegram.
 - Image support in `read_file` for vision-capable agents.
