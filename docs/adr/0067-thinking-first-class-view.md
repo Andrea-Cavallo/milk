@@ -216,10 +216,13 @@ a render bug the model had introduced:
   next arrive folded. (Reading the status from the *previous block's row*
   would have been self-defeating in combination with the turn-boundary tidy
   below, which folds that row.)
-- **A new turn collapses the previous turns' blocks** (`dispatchAgent` runs
-  `collapseThinkBlocksBefore`). Display-only: the tidy deliberately does not
-  touch `thinkFoldOpen`, so watching carries into the new turn while the old
-  turns tidy up.
+- **A new turn collapses the previous turns' blocks** — while the session's
+  fold status is folded (`dispatchAgent` runs `collapseThinkBlocksBefore`,
+  which no-ops when `thinkFoldOpen` is set). `/think expand` means "expand
+  all" and thereby defines the current default: a tidy that folded the very
+  blocks it just expanded would contradict it, so in that mode the tidy does
+  not run at all. Display-only either way: the tidy deliberately does not
+  touch `thinkFoldOpen`.
 - **The thinking surface.** Fold containers render on their own background
   (`ansiThinkBg`, 256-color dark grey) at every fold state — the thinking
   region reads as a different surface from the standard transcript. Header
