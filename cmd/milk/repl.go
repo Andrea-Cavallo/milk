@@ -717,17 +717,19 @@ type model struct {
 	ready  bool
 
 	// transcript accumulator (pointer — strings.Builder must not be copied by value).
-	// Always contains the full content including thinking (dim-wrapped).
+	// Holds the regular (non-reasoning) content. Reasoning lives in thinkBlocks
+	// (ADR-0067) and is spliced in as fold containers at render time by
+	// transcriptDisplay — there is no second buffer variant to keep in lockstep.
 	transcript *strings.Builder
-	// transcriptNoThink mirrors transcript but replaces thinking blocks with a
-	// "[thinking…]" placeholder. Both are maintained in parallel so toggling is
-	// instantaneous — no rebuild required.
-	transcriptNoThink *strings.Builder
-	// thinkingActiveInTurn is true while thinking tokens are arriving for the
-	// current turn. The placeholder is flushed to transcriptNoThink when the
-	// first regular content chunk or turn-end arrives.
-	thinkingActiveInTurn bool
-	// showThinking controls whether thinking content is visible in the viewport.
+	// thinkBlocks are this session's reasoning blocks (see thinkblocks.go).
+	// Rendered at their anchor offsets as collapsible containers.
+	thinkBlocks []thinkBlock
+	// thinkBlocksTurnStart is the thinkBlocks index where the current turn's
+	// blocks begin — reasoningPromotedMsg drops from here when the streamed
+	// reasoning is promoted to the turn's answer.
+	thinkBlocksTurnStart int
+	// showThinking controls whether reasoning is inspectable in the viewport
+	// (fold containers vs one-line placeholders) — /think on|off, Ctrl+T.
 	showThinking bool
 
 	// showTips toggles the idle tip line below the input (ADR-0061, /tips).
@@ -1201,7 +1203,6 @@ func newModel(ctx context.Context, st *interactiveState, rtr *router.Router, age
 		agents:              agents,
 		ta:                  ta,
 		transcript:          &strings.Builder{},
-		transcriptNoThink:   &strings.Builder{},
 		currentTurnThinking: &strings.Builder{},
 		searchQuery:         &strings.Builder{},
 		showThinking:        st.cfg.ShowReasoningDefault(),
@@ -1564,6 +1565,7 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	if m.st != nil && m.st.cwd != "" {
 		indexFor(m.st.cwd).invalidate()
 	}
+	m.closeOpenThinkBlock()
 	m.busy = false
 	m.activeToolUse = ""
 	m.cancelTurn = nil
@@ -1870,6 +1872,13 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			setMouseDragMode(false)
 			if m.selAnchorLine >= 0 {
 				if contentLine == m.selAnchorLine && ev.X == m.selAnchorCol {
+					// A click without drag on a thinking fold header toggles
+					// that block (ADR-0067) — the same arm/act rhythm as panel
+					// clicks, and only claimed on exact header lines, so drag
+					// selection over reasoning text is untouched.
+					if idx := m.thinkBlockAtLine(contentLine); idx >= 0 {
+						m.toggleThinkBlock(idx)
+					}
 					m.clearSelection()
 					m.setViewportContent()
 					return m, nil
@@ -2424,6 +2433,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reasoningPromotedMsg:
 		m.currentTurnThinking.Reset()
+		// The streamed reasoning became the turn's answer (it is re-streamed
+		// through the content path) — drop this turn's blocks so it isn't
+		// rendered twice.
+		m.dropThinkBlocksFrom(m.thinkBlocksTurnStart)
 		return m, nil
 
 	case agentDoneMsg:
@@ -3727,7 +3740,8 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 	m.turnFirstOutputAt = time.Time{}
 	m.currentTurnInputChars = 0
 	m.currentTurnThinking.Reset()
-	m.thinkingActiveInTurn = false
+	m.closeOpenThinkBlock()
+	m.thinkBlocksTurnStart = len(m.thinkBlocks)
 	m.loopInterrupt = false
 	m.loopInterruptLabel = ""
 	m.loopWarning = ""

@@ -20,10 +20,9 @@ func enterKey() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEnter} }
 
 func newPermTestModel() model {
 	return model{
-		st:                &interactiveState{cfg: config.Config{}},
-		transcript:        &strings.Builder{},
-		transcriptNoThink: &strings.Builder{},
-		ta:                textarea.New(),
+		st:         &interactiveState{cfg: config.Config{}},
+		transcript: &strings.Builder{},
+		ta:         textarea.New(),
 	}
 }
 

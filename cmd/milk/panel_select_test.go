@@ -28,7 +28,6 @@ func dragTestModel() *model {
 		attachSelEndLine:    -1,
 		st:                  &interactiveState{},
 		transcript:          &strings.Builder{},
-		transcriptNoThink:   &strings.Builder{},
 	}
 }
 
@@ -317,7 +316,6 @@ func workflowSelModel() *model {
 		panelSelEndLine:    -1,
 		st:                 &interactiveState{},
 		transcript:         &strings.Builder{},
-		transcriptNoThink:  &strings.Builder{},
 		selAnchorLine:      -1,
 		selEndLine:         -1,
 	}

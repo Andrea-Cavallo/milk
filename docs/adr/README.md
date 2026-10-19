@@ -65,3 +65,4 @@
 * [64. Background shells in the TUI and ACP: one merged background surface](0064-background-shell-surface.md)
 * [65. Confirmation-aware routing: "proceed/go ahead" routes on the confirmed content](0065-confirmation-aware-routing.md)
 * [66. Project tree and git graph panels](0066-project-tree-and-git-graph-panels.md)
+* [67. Thinking as a first-class view: out-of-band think blocks with fold containers](0067-thinking-first-class-view.md)

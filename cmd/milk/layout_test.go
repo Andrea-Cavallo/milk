@@ -16,8 +16,7 @@ import (
 func layoutTestModel(t *testing.T, width, height int) model {
 	t.Helper()
 	m := model{
-		transcript:        &strings.Builder{},
-		transcriptNoThink: &strings.Builder{},
+		transcript: &strings.Builder{},
 	}
 	m.st = &interactiveState{sess: &session.Session{}}
 	m.ta = textarea.New()

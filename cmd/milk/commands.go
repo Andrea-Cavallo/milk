@@ -50,7 +50,7 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 		return m.handleColorizeCmd(strings.TrimSpace(rest)), nil
 	}
 	if cmd == cmdThink {
-		return m.handleThinkCmd(strings.TrimSpace(rest)), nil
+		return m.handleThinkCmd(strings.TrimSpace(rest))
 	}
 	if cmd == cmdTips {
 		return m.handleTipsCmd(strings.TrimSpace(rest))
@@ -481,42 +481,50 @@ func (m model) handleColorizeCmd(arg string) model {
 	return m
 }
 
-// handleThinkCmd handles `/think [on|off]`.
-// With no arg: shows the current reasoning visibility. With on/off: toggles it.
-// The toggle is retroactive — switching between transcript variants is instantaneous
-// because both are maintained in parallel during streaming.
+// handleThinkCmd handles `/think [on|off|expand|collapse]`.
+// With no arg: shows the current reasoning visibility. With on/off: toggles it
+// retroactively — blocks render as fold containers when on (collapsed by
+// default once complete, ADR-0067), as one-line placeholders when off.
+// expand/collapse pins every block's fold state open/closed.
 //
 // State *changes* are turn-unrelated informational events → notification
 // toasts (issue #162); the bare query response stays in the transcript like
 // every other explicit query answer.
-func (m model) handleThinkCmd(arg string) model {
+func (m model) handleThinkCmd(arg string) (model, tea.Cmd) {
 	switch arg {
 	case "on":
 		if m.showThinking {
 			m.notify("reasoning visibility: already on", "/think off")
-			return m
+			return m, nil
 		}
 		m.showThinking = true
-		m.colorizeForce = true // switch transcript variant — invalidate cache
-		m.colorizeTransLen = 0
-		m.notify("reasoning visibility: on", "/think off")
+		m.applyThinkVisibility() // streaming block opens live; completed stay folded
+		m.notify("reasoning visibility: on — thinking blocks as folds (click a ▸ header to expand)", "/think off")
 	case "off":
 		if !m.showThinking {
 			m.notify("reasoning visibility: already off", "/think on")
-			return m
+			return m, nil
 		}
 		m.showThinking = false
-		m.colorizeForce = true // switch transcript variant — invalidate cache
-		m.colorizeTransLen = 0
+		m.applyThinkVisibility()
 		m.notify("reasoning visibility: off — thinking blocks hidden ([thinking…])", "/think on")
+	case "expand":
+		m.showThinking = true
+		m.setAllThinkBlocks(true)
+		m.notify("reasoning: all blocks expanded", "/think collapse")
+	case "collapse":
+		m.setAllThinkBlocks(false)
+		m.notify("reasoning: all blocks folded", "/think expand")
+	case "view":
+		return m.startThinkView()
 	default:
 		state := "off"
 		if m.showThinking {
 			state = "on"
 		}
-		m.appendTranscript(fmt.Sprintf("%s reasoning visibility: %s  (use /think on|off)\n", milkTag(), bold(state)))
+		m.appendTranscript(fmt.Sprintf("%s reasoning visibility: %s, %d thinking block(s)  (use /think on|off|expand|collapse|view)\n", milkTag(), bold(state), len(m.thinkBlocks)))
 	}
-	return m
+	return m, nil
 }
 
 // handleTipsCmd handles `/tips …` — the idle tip line below the input
@@ -649,13 +657,12 @@ func (m model) handleTipsBrowse(arg string) (model, tea.Cmd) {
 
 // toggleThinking flips reasoning visibility and posts a notification toast.
 // Works at any time including while the agent is responding, since it only
-// mutates showThinking and the colorize cache — no input submission needed.
+// mutates showThinking and per-block fold state — no input submission needed.
 func (m model) toggleThinking() model {
 	m.showThinking = !m.showThinking
-	m.colorizeForce = true
-	m.colorizeTransLen = 0
+	m.applyThinkVisibility()
 	if m.showThinking {
-		m.notify("reasoning visibility: on", "/think off")
+		m.notify("reasoning visibility: on — thinking blocks as folds", "/think off")
 	} else {
 		m.notify("reasoning visibility: off", "/think on")
 	}

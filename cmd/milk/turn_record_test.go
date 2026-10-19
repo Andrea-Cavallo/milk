@@ -232,7 +232,7 @@ func TestWorkflowThinkChunk_StaysOutOfMainTranscript(t *testing.T) {
 		newM, _ := m.Update(workflowThinkChunkMsg{text: "pondering"})
 		nm := newM.(model)
 
-		if nm.transcript.Len() != 0 || nm.transcriptNoThink.Len() != 0 || nm.currentTurnThinking.Len() != 0 {
+		if nm.transcript.Len() != 0 || len(nm.thinkBlocks) != 0 || nm.currentTurnThinking.Len() != 0 {
 			t.Errorf("showThinking=%v: workflow reasoning leaked into the main transcript", show)
 		}
 		if live := nm.workflowState.LiveBuffer().Snapshot(); show != strings.Contains(live, "pondering") {

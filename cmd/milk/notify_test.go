@@ -567,7 +567,7 @@ func TestView_ToastOverlayPreservesPanelHeader(t *testing.T) {
 func TestHandleThink_TogglesToastNotTranscript(t *testing.T) {
 	m := layoutTestModel(t, 120, 40)
 
-	m2 := m.handleThinkCmd("on")
+	m2, _ := m.handleThinkCmd("on")
 	if !toastMentions(m2, "reasoning visibility: on") {
 		t.Errorf("expected a visibility toast, got %#v", m2.toastVisible)
 	}
@@ -576,7 +576,7 @@ func TestHandleThink_TogglesToastNotTranscript(t *testing.T) {
 	}
 
 	// Bare query: explicit answer → transcript, no toast.
-	m3 := m2.handleThinkCmd("")
+	m3, _ := m2.handleThinkCmd("")
 	if !strings.Contains(m3.transcript.String(), "reasoning visibility") {
 		t.Errorf("bare /think must answer in the transcript, got %q", m3.transcript.String())
 	}

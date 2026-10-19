@@ -217,7 +217,7 @@ New backends are appended to `agents` in `~/.milk/config.json` immediately; `/ag
 
 Persisted to config immediately, effective on next render.
 
-**/think** controls reasoning/thinking token visibility: `/think` (show current), `/think on` (show inline), `/think off` (show `[thinking…]` placeholder). Retroactive — both transcript variants are maintained in parallel during streaming, so toggling is instant. Default via `show_reasoning` in config (default `true`). Applies to both primary-model `<think>` blocks and Claude extended thinking.
+**/think** controls reasoning/thinking visibility (issue #208, [ADR-0067](../adr/0067-thinking-first-class-view.md)): `/think` (show current), `/think on` (reasoning inspectable as collapsible blocks — folded by default when complete, the streaming block visible live), `/think off` (show the `[thinking… Ctrl+T to show]` placeholder instead), `/think expand` / `/think collapse` (pin every block open/closed), `/think view` (swap the main area to a thinking-only stream; Esc returns). Click a block's `▸ thinking · N lines` header in the transcript to expand/collapse just that block; **Ctrl+T** toggles visibility globally. Retroactive — blocks are recorded out of band from the transcript, so toggling is instant. Default via `show_reasoning` in config (default `true`). Applies to both primary-model `<think>` blocks and Claude extended thinking; loop detection consumes reasoning regardless of visibility.
 
 **/need** sets the current session goal (`/need <one-sentence goal>`); the primary agent calls this automatically when the user states a new objective. Shown in the memory panel and injected into escalation context.
 
@@ -315,7 +315,7 @@ See [/colorize](#interactive-mode) above for the four modes and their behavior.
 
 ### `show_reasoning` field
 
-Default visibility of thinking/reasoning tokens; see [/think](#interactive-mode) above.
+Default visibility of thinking/reasoning blocks; see [/think](#interactive-mode) above.
 
 ### `copy_on_select` field
 

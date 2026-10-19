@@ -75,10 +75,9 @@ func TestHandleInitWizardKey_CommitRebuildsRunners(t *testing.T) {
 func newRebuildTestModel(t *testing.T, cfg config.Config) model {
 	t.Helper()
 	return model{
-		ctx:               context.Background(),
-		st:                &interactiveState{cfg: cfg, cwd: t.TempDir()},
-		transcript:        &strings.Builder{},
-		transcriptNoThink: &strings.Builder{},
+		ctx:        context.Background(),
+		st:         &interactiveState{cfg: cfg, cwd: t.TempDir()},
+		transcript: &strings.Builder{},
 	}
 }
 

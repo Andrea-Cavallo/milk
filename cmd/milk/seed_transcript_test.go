@@ -24,20 +24,19 @@ func seededModel(t *testing.T, hist []session.Turn) model {
 
 func TestSeedTranscript_FreshSessionStaysEmpty(t *testing.T) {
 	m := seededModel(t, nil)
-	if m.transcript.Len() != 0 || m.transcriptNoThink.Len() != 0 {
+	if m.transcript.Len() != 0 || len(m.thinkBlocks) != 0 {
 		t.Errorf("fresh session must keep the welcome screen, got %q", m.transcript.String())
 	}
 }
 
-func TestSeedTranscript_ResumedHistoryShownInBothVariants(t *testing.T) {
+func TestSeedTranscript_ResumedHistoryShown(t *testing.T) {
 	m := seededModel(t, []session.Turn{
 		{Role: session.RoleUser, Content: "fix the bug"},
 		{Role: session.RoleAssistant, Agent: session.AgentLocal, AgentName: "mimo-local", Content: "done", Thinking: "secret"},
 		{Role: session.RoleToolResult, Content: "tool output"},
 		{Role: session.RoleAssistant, Agent: session.AgentEscalation, AgentName: "claude", Content: "reviewed"},
 	})
-	for name, b := range map[string]*strings.Builder{"full": m.transcript, "nothink": m.transcriptNoThink} {
-		got := b.String()
+	for name, got := range map[string]string{"raw": m.transcript.String(), "display": m.transcriptDisplay()} {
 		for _, want := range []string{"resumed session", "/export", "fix the bug", "mimo-local:", "done", "claude:", "reviewed"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s transcript missing %q:\n%s", name, want, got)

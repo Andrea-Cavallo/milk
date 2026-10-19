@@ -135,7 +135,7 @@ func TestTUIHost_RequestPermission_WithdrawnOnCancel(t *testing.T) {
 func TestHandlePermDismiss_ClearsPendingAndPromotesQueue(t *testing.T) {
 	pendingResp := make(chan string, 1)
 	queuedResp := make(chan string, 1)
-	m := model{st: &interactiveState{}, transcript: &strings.Builder{}, transcriptNoThink: &strings.Builder{}, ta: textarea.New()}
+	m := model{st: &interactiveState{}, transcript: &strings.Builder{}, ta: textarea.New()}
 	m.pendingPerm = &permRequestMsg{prompt: "first", respCh: pendingResp}
 	m.permQueue = []permRequestMsg{{prompt: "second", respCh: queuedResp}}
 
@@ -152,7 +152,7 @@ func TestHandlePermDismiss_ClearsPendingAndPromotesQueue(t *testing.T) {
 func TestHandlePermDismiss_QueuedPromptDropped(t *testing.T) {
 	pendingResp := make(chan string, 1)
 	queuedResp := make(chan string, 1)
-	m := model{st: &interactiveState{}, transcript: &strings.Builder{}, transcriptNoThink: &strings.Builder{}, ta: textarea.New()}
+	m := model{st: &interactiveState{}, transcript: &strings.Builder{}, ta: textarea.New()}
 	m.pendingPerm = &permRequestMsg{prompt: "first", respCh: pendingResp}
 	m.permQueue = []permRequestMsg{{prompt: "second", respCh: queuedResp}}
 

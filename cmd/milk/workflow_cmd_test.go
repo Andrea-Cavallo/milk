@@ -76,8 +76,7 @@ func TestParseWorkflowFlags_Empty(t *testing.T) {
 // It has the transcript builders initialised but no TUI state.
 func testModel() model {
 	return model{
-		transcript:        &strings.Builder{},
-		transcriptNoThink: &strings.Builder{},
+		transcript: &strings.Builder{},
 	}
 }
 

@@ -170,9 +170,10 @@ var commandRegistry = []cmdSpec{
   /colorize fenced       highlight fenced code blocks only
   /colorize balanced     fenced blocks + inline markdown (default)
   /colorize full         full glamour markdown render (experimental)`},
-	{name: cmdThink, hosts: hostBoth, desc: "show or hide model reasoning in this session", hint: "[on|off]", help: `  /think                 show current reasoning visibility
-  /think on              show thinking/reasoning tokens inline
-  /think off             hide thinking tokens ([thinking…] placeholder)`},
+	{name: cmdThink, hosts: hostBoth, desc: "show or hide model reasoning in this session", hint: "[on|off|expand|collapse]", help: `  /think                 show current reasoning visibility
+  /think on              show reasoning as collapsible blocks (folded when done)
+  /think off             hide reasoning ([thinking…] placeholder)
+  /think expand          expand every thinking block\n  /think collapse        fold every thinking block\n  /think view            swap the main area to a thinking-only stream`},
 	{name: cmdTips, hosts: hostTUI, desc: "show, hide or browse the idle tips under the input", hint: "[on|off|next|prev|pick [<n>|<text>]|search <query>]", help: `  /tips                  show tip line state and the current tip's position
   /tips on               show the idle tip line under the input
   /tips off              hide the idle tip line
@@ -328,6 +329,7 @@ var helpBlocks = []helpBlock{
   Agent control
     Ctrl+C   interrupt current agent turn (or copy if selection is active)
     Ctrl+T   toggle thinking/reasoning visibility (works during streaming)
+             reasoning renders as foldable blocks — click a ▸ header to expand
 
   Notifications
     Ctrl+G                      dismiss all open notification toasts
