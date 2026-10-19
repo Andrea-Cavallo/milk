@@ -196,7 +196,7 @@ func ToolKindFor(name string) ToolKind {
 	switch name {
 	case "read_file", "open_file":
 		return ToolKindRead
-	case "edit_file", "write_file":
+	case "edit_file", "multiedit", "write_file":
 		return ToolKindEdit
 	case "delete_file":
 		return ToolKindDelete

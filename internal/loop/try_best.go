@@ -121,7 +121,7 @@ func (m *TryBestMonitor) RecordToolCall(toolName, argsJSON, result string, exitO
 	}
 
 	switch toolName {
-	case "edit_file", "write_file":
+	case "edit_file", "multiedit", "write_file":
 		return m.recordEdit(toolName, argsJSON, result, exitOK)
 	case "bash":
 		return m.recordBash(argsJSON, result, exitOK)
@@ -270,7 +270,8 @@ func extractFilePath(toolName, argsJSON string) string {
 }
 
 // normaliseDiff produces a comparable string from edit/write tool arguments.
-// For edit_file: the new_text field. For write_file: the content field.
+// For edit_file: the new_text field. For write_file: the content field. For
+// multiedit: every edit's new_string, joined.
 func normaliseDiff(toolName, argsJSON string) string {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -284,6 +285,17 @@ func normaliseDiff(toolName, argsJSON string) string {
 		} else if t, ok := args["new_string"].(string); ok {
 			text = t
 		}
+	case "multiedit":
+		edits, _ := args["edits"].([]any)
+		var parts []string
+		for _, raw := range edits {
+			if m, ok := raw.(map[string]any); ok {
+				if t, ok := m["new_string"].(string); ok {
+					parts = append(parts, t)
+				}
+			}
+		}
+		text = strings.Join(parts, "\n")
 	case "write_file":
 		if t, ok := args["content"].(string); ok {
 			text = t
