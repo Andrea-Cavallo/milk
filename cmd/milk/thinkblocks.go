@@ -40,7 +40,9 @@ type thinkBlock struct {
 	// buf holds the block's reasoning text — kept out of the main transcript
 	// buffer so the render stack (colorize cache, wrapping, selection) keeps
 	// working on one plain string and no ANSI escape bookkeeping is needed.
-	buf strings.Builder
+	// A pointer: blocks live in a slice and are copied by value (append,
+	// growth, model copies), which strings.Builder panics on once written.
+	buf *strings.Builder
 	// anchor is the byte offset in model.transcript this block renders after.
 	// The block text itself never lands in the transcript, so anchors only
 	// shift on retractStreamed surgery (handled there).
@@ -56,9 +58,17 @@ type thinkBlock struct {
 	userSet bool
 }
 
+// text returns the block's reasoning text (empty for a block with no buffer).
+func (b thinkBlock) text() string {
+	if b.buf == nil {
+		return ""
+	}
+	return b.buf.String()
+}
+
 // thinkLines reports the block's rendered line count (for the fold header).
 func (b *thinkBlock) thinkLines() int {
-	s := b.buf.String()
+	s := b.text()
 	if s == "" {
 		return 0
 	}
@@ -114,7 +124,7 @@ func (m *model) renderThinkBlock(b *thinkBlock) string {
 	sb.WriteString(thinkHeader(b, !b.closed))
 	sb.WriteString("\n")
 	if b.expanded {
-		if body := b.buf.String(); body != "" {
+		if body := b.text(); body != "" {
 			sb.WriteString(dim(body))
 			if !strings.HasSuffix(body, "\n") {
 				sb.WriteString("\n")
@@ -308,7 +318,7 @@ func (m model) startThinkView() (model, tea.Cmd) {
 		}
 		sb.WriteString(thinkHeader(b, !b.closed))
 		sb.WriteString("\n")
-		if body := b.buf.String(); body != "" {
+		if body := b.text(); body != "" {
 			sb.WriteString(body)
 			if !strings.HasSuffix(body, "\n") {
 				sb.WriteString("\n")

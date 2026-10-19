@@ -119,6 +119,7 @@ func (m *model) appendThinkingStreamed(text string) {
 		}
 	}
 	b := thinkBlock{
+		buf:      &strings.Builder{},
 		anchor:   m.transcript.Len(),
 		expanded: m.showThinking, // the streaming block is watched live when visible
 	}

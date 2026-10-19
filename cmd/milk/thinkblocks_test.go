@@ -36,6 +36,27 @@ func TestThinkBlocks_StreamIntoBlockThenFoldOnClose(t *testing.T) {
 	}
 }
 
+// Blocks are copied by value (append, slice growth); a value-embedded
+// strings.Builder panicked on the second write after such a copy.
+func TestThinkBlocks_MultiChunkAndSliceGrowth(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.showThinking = true
+	for run := 0; run < 5; run++ {
+		m.appendThinkingStreamed("a")
+		m.appendThinkingStreamed("b")
+		m.appendThinkingStreamed("c\n")
+		m.appendTranscript("answer\n")
+	}
+	if len(m.thinkBlocks) != 5 {
+		t.Fatalf("blocks = %d, want 5", len(m.thinkBlocks))
+	}
+	for i, b := range m.thinkBlocks {
+		if got := b.text(); got != "abc\n" {
+			t.Errorf("block %d buf = %q", i, got)
+		}
+	}
+}
+
 func TestThinkBlocks_PlaceholderWhenHidden(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.showThinking = false
