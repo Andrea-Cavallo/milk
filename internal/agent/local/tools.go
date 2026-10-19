@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -366,13 +367,14 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 		{
 			"type": "function",
 			"function": map[string]any{
-				"name":        "http_get",
-				"description": "Fetch the body of a URL via HTTP GET. Useful for checking APIs or downloading text content.",
+				"name":        "web_fetch",
+				"description": "Fetch a web page or API response. HTML is converted to Markdown by default (format: auto|markdown|text|html|raw). Upgrades http:// to https:// for non-local hosts. For web *search*, use an MCP search server instead.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"url":       map[string]any{"type": "string", "description": "URL to fetch"},
-						"max_bytes": map[string]any{"type": "integer", "description": "Maximum response bytes to return (default 8192)"},
+						"format":    map[string]any{"type": "string", "enum": []string{"auto", "markdown", "text", "html", "raw"}, "description": "Output format: 'auto' (default) converts HTML to Markdown and leaves other content raw; 'text' strips markup without Markdown syntax"},
+						"max_bytes": map[string]any{"type": "integer", "description": "Maximum body bytes to return (default 262144, max 5242880); oversized bodies spill to a file like other tool output"},
 					},
 					"required": []string{"url"},
 				},
@@ -718,8 +720,10 @@ func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Sess
 		return runHTTPRequest(ctx, args)
 	case "list_dir":
 		return runListDir(args, cwd)
-	case "http_get":
-		return runHTTPGet(ctx, args)
+	case "web_fetch":
+		return runWebFetch(ctx, args)
+	case "http_get": // deprecated alias of web_fetch (kept for stale tool lists)
+		return runWebFetch(ctx, args)
 	case "get_session_context":
 		return runGetSessionContext(sess, args), false
 	case "record_memory":
@@ -1036,8 +1040,14 @@ func intArg(args map[string]any, key string) int {
 	if !ok {
 		return 0
 	}
-	if n, ok := v.(float64); ok {
+	switch n := v.(type) {
+	case float64:
 		return int(n)
+	case int:
+		return n
+	case string:
+		i, _ := strconv.Atoi(n)
+		return i
 	}
 	return 0
 }
@@ -1667,34 +1677,176 @@ func dispatchGetContextStats(sess *session.Session, _ string) string {
 	return toolResult{Output: out}.String()
 }
 
-func runHTTPGet(ctx context.Context, args map[string]any) (string, bool) {
+// web_fetch (toolset-review G5): the reading half of the old http_get, with
+// HTTPS upgrade, HTML→Markdown and a body budget. http_get remains as a
+// deprecated alias dispatching here.
+const (
+	webFetchDefaultMaxBytes = 262144
+	webFetchHardMaxBytes    = 5 << 20
+)
+
+// upgradeHTTPS returns the https:// variant of a plain-http:// URL and
+// whether an upgrade should be attempted — never for local hosts, where TLS
+// is usually absent and the redirect dance just burns a request.
+func upgradeHTTPS(rawURL string) (string, bool) {
+	if !strings.HasPrefix(rawURL, "http://") {
+		return rawURL, false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL, false
+	}
+	h := strings.ToLower(u.Hostname())
+	if h == "localhost" || h == "::1" || h == "0.0.0.0" ||
+		strings.HasPrefix(h, "127.") || h == "[::1]" {
+		return rawURL, false
+	}
+	return "https://" + strings.TrimPrefix(rawURL, "http://"), true
+}
+
+// isHTMLContent sniffs whether a body is HTML (by Content-Type, falling back
+// to the first bytes).
+func isHTMLContent(contentType, body string) bool {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "text/html") {
+		return true
+	}
+	if ct != "" && !strings.Contains(ct, "text/") {
+		return false
+	}
+	head := strings.ToLower(body)
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	return strings.Contains(head, "<html") || strings.Contains(head, "<!doctype html")
+}
+
+func runWebFetch(ctx context.Context, args map[string]any) (string, bool) {
 	url, _ := args["url"].(string)
-	maxBytes := 8192
-	if v, ok := args["max_bytes"]; ok {
-		switch n := v.(type) {
-		case float64:
-			maxBytes = int(n)
-		case string:
-			maxBytes, _ = strconv.Atoi(n)
+	format, _ := args["format"].(string)
+	maxBytes := webFetchDefaultMaxBytes
+	if v := intArg(args, "max_bytes"); v > 0 {
+		maxBytes = min(v, webFetchHardMaxBytes)
+	}
+
+	fetch := func(u string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "milk-web-fetch/1.0")
+		req.Header.Set("Accept", "text/html, text/plain, text/markdown, application/json;q=0.9, */*;q=0.5")
+		return http.DefaultClient.Do(req)
+	}
+
+	// HTTPS upgrade for non-local plain-http URLs, with a plain-HTTP fallback
+	// when the upgrade fails (old docs servers, TLS-less hosts).
+	target := url
+	upgraded, tryUpgrade := upgradeHTTPS(url)
+	resp, err := fetch(target)
+	if tryUpgrade {
+		if err != nil || resp.StatusCode >= 400 {
+			if resp != nil {
+				resp.Body.Close() //nolint:errcheck
+			}
+			target = upgraded
+			resp, err = fetch(target)
+		}
+	}
+	if err != nil {
+		return toolResult{Error: err.Error()}.String(), false
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
+	if err != nil {
+		return toolResult{Error: err.Error()}.String(), false
+	}
+	truncated := len(body) > maxBytes
+	if truncated {
+		body = body[:maxBytes]
+	}
+
+	text := string(body)
+	ct := resp.Header.Get("Content-Type")
+	htmlish := isHTMLContent(ct, text)
+	switch strings.ToLower(format) {
+	case "html", "raw":
+		// keep bytes as-is
+	case "text":
+		if htmlish {
+			text = htmlToMarkdown(text) // same cleanup pass, no markdown syntax
+			text = strings.ReplaceAll(text, "`", "")
+			text = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`).ReplaceAllString(text, "$1")
+		}
+	default: // "auto", "markdown", "md", ""
+		if htmlish {
+			text = htmlToMarkdown(text)
+		}
+	}
+	if truncated {
+		text += fmt.Sprintf("\n[truncated at max_bytes=%d — raise max_bytes or fetch a narrower URL]", maxBytes)
+	}
+	return toolResult{Output: text, ExitCode: resp.StatusCode}.String(), false
+}
+
+const postEditOutputMaxBytes = 4000
+
+// postEditCheck runs the configured post-edit command after a successful
+// edit_file/write_file and appends its (capped) output to the tool result —
+// the model learns about compile/format problems without a separate build
+// call (toolset-review G2). Never runs for a failed edit.
+func (a *Agent) postEditCheck(name, result, cwd string) string {
+	if a.postEditCommand == "" || (name != "edit_file" && name != "write_file") {
+		return result
+	}
+	var r toolResult
+	if json.Unmarshal([]byte(result), &r) != nil || r.Error != "" {
+		return result
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", a.postEditCommand)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	code := 0
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			code = exit.ExitCode()
+		} else {
+			code = -1
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return toolResult{Error: err.Error()}.String(), false
+	out := stdout.String()
+	if s := stderr.String(); s != "" {
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		out += s
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return toolResult{Error: err.Error()}.String(), false
-	}
-	defer resp.Body.Close()
+	out = truncateHeadAndTail(out, postEditOutputMaxBytes)
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)))
-	if err != nil {
-		return toolResult{Error: err.Error()}.String(), false
+	summary := "\n[post-edit check: " + a.postEditCommand
+	if code == 0 {
+		summary += " — ok"
+	} else {
+		summary += fmt.Sprintf(" — exit %d", code)
 	}
-	return toolResult{
-		Output:   string(body),
-		ExitCode: resp.StatusCode,
-	}.String(), false
+	summary += "]"
+	if out != "" {
+		summary += "\n" + out
+	}
+	r.Output += summary
+	b, err := json.Marshal(r)
+	if err != nil {
+		return result
+	}
+	return string(b)
 }

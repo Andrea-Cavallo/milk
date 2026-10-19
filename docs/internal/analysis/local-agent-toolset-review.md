@@ -18,11 +18,11 @@ Update this table as work lands; the rest of the document is the original analys
 
 | Phase | Branch (planned) | Status | Notes |
 |---|---|---|---|
-| 1. Correctness fixes (B1-B5) | `fix/local-tools-correctness` | not started | B1/B2 need reproduction first (section 4.1) |
-| 2. Fuzzy `edit_file` | `feat/edit-file-fuzzy` | not started | |
-| 3. Search and shell | `feat/search-shell-tools` | not started | ADR needed for background shell |
-| 4. Post-edit check, `web_fetch` | `feat/post-edit-check-web-fetch` | not started | |
-| 5. Optional extras | per-item issues | not started | |
+| 1. Correctness fixes (B1-B5) | `fix/local-tools-correctness` | **done** | B1: barrier dispatch (ADR-0062), cancel-on-failure for write/bash. B2: session-cwd threading + `bash` `cmd.Dir`. B3: `grep -E`. B4: 1-based `offset`. B5: dead refs removed + tool-set contract tests. ACP-launcher cwd question (B2 verify) superseded: relative paths no longer depend on process cwd |
+| 2. Fuzzy `edit_file` | `feat/edit-file-fuzzy` | **done** | chain: escape-normalized → trimmed-boundary → line-trimmed → whitespace-normalized → indentation-flexible; closest-match hint never applied; CRLF preserved; atomic writes |
+| 3. Search and shell | `feat/search-shell-tools` | **done** | rg-first grep (+`ignore_case`/`context`/`include`/`max_results`, truncation marker), `find_files` with `**`/`.gitignore`/cap/mtime order, `bash` `workdir` + `run_in_background` + `bash_output` + `kill_bash` (ADR-0063). Exit criterion "live dev-server test" approximated by the background-shell lifecycle test; TUI panel wiring left as a follow-up (ADR-0063) |
+| 4. Post-edit check, `web_fetch` | `feat/post-edit-check-web-fetch` | **done** | `post_edit_command` per agent; `web_fetch` (HTTPS upgrade, HTML→Markdown, formats, body budget + spill) folding `http_get` (kept as dispatch alias); web search documented as an MCP route |
+| 5. Optional extras | per-item issues | not started | `multiedit`/`apply_patch`, `ask_user` (over the ADR-0052 ask layer), image reads in `read_file`, sub-agent `status`/`wait`/`send`, skills/notebooks/scheduling/LSP |
 
 ## 1. Verdict
 

@@ -631,7 +631,7 @@ func TestSchemas_EmptyLimitsReturnsFullSet(t *testing.T) {
 	all := schemas(nil, "", nil, nil, nil, nil)
 	names := schemaNames(all)
 	// All well-known base tools must be present.
-	for _, want := range []string{"bash", "read_file", "write_file", "http_get", "http_request", "list_dir", "escalate"} {
+	for _, want := range []string{"bash", "read_file", "write_file", "web_fetch", "http_request", "list_dir", "escalate"} {
 		if !containsName(names, want) {
 			t.Errorf("expected tool %q in full set, not found", want)
 		}

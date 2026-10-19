@@ -21,7 +21,7 @@ The primary agent (HTTP or Bedrock backends) has these tools available with no c
 | `delete_file(path)` | — | ok — permission-gated |
 | `move_file(source, destination)` | — | ok — permission-gated; creates destination parent directories |
 | `list_dir(path)` | — | entries (names, types, sizes) |
-| `http_get(url, max_bytes)` | — | body — bounded GET |
+| `web_fetch(url, format?, max_bytes?)` | `url` + optional `format` (`auto`\|`markdown`\|`text`\|`html`\|`raw`) | page body — HTML converted to Markdown by default, `http://` upgraded to `https://` for non-local hosts, body capped at 256 KB (5 MB max) with a truncation marker; oversized bodies spill to a file like other tool output. Web **search** is not built in — use an MCP search server |
 | `http_request(method, url, headers, body, max_bytes)` | — | body, status — permission-gated |
 | `get_session_context()` | — | full shared session history (both agents), so the primary model can see prior escalation turns |
 | `get_context_stats()` | — | current history turn counts and total character size, so the agent can self-regulate before hitting context limits |
@@ -65,6 +65,19 @@ Long-running processes (dev servers, watchers, REPLs) go through `bash` with `ru
 - `bash` also takes `workdir` for a per-command working-directory override (default: the session cwd).
 - Permissions: `run_in_background` rides the normal `bash` permission ask; `bash_output` is read-only; `kill_bash` can only stop shells this agent started.
 
+
+## Post-edit check
+
+Per-agent opt-in formatter/compiler feedback right in the edit result: set `post_edit_command` on an agent entry (for example `"gofmt -l ."`, `"go vet ./..."`, `"tsc --noEmit"`) and milk runs it — in the session working directory, 60 s cap, output truncated to 4 KB — after every **successful** `edit_file`/`write_file`, appending its output and exit code to the tool result as a `[post-edit check: …]` block. Failed edits skip it. Nothing is configured by default.
+
+```json
+{
+  "name": "local",
+  "url": "http://localhost:8080",
+  "model": "qwen2.5-coder",
+  "post_edit_command": "go vet ./..."
+}
+```
 
 ## Agent-as-Tool
 

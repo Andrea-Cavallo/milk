@@ -590,6 +590,16 @@ Permission grants normally apply to a whole tool at once — once `bash` is gran
 
 ---
 
+### Post-edit check (`post_edit_command`)
+
+Set `post_edit_command` on an agent entry to get formatter/compiler feedback appended to every successful `edit_file`/`write_file` tool result — the model sees `gofmt`/`go vet`/`tsc` output without spending a separate `bash` call (and without leaving a broken file for the next turn to discover). The command runs via `sh -c` in the session working directory with a 60 s cap; its combined stdout/stderr is truncated to 4 KB and appended as a `[post-edit check: <cmd> — ok|exit N]` block. Failed edits never trigger it. Default: disabled (empty).
+
+```json
+{ "name": "local",
+  "url": "http://localhost:8080",
+  "post_edit_command": "go vet ./..." }
+```
+
 ### Custom agent behaviour (`prompt` / `prompt_file`)
 
 Any agent entry can carry a custom system prompt, **prepended** to milk's default on every turn.
@@ -703,6 +713,7 @@ Common to all inference-server providers (everything except `claude-cli`):
 | `disable_project_instructions` | bool | See [Project instructions](#project-instructions-disable_project_instructions) |
 | `disable_compaction` | bool | See [Context compaction](#context-compaction-disable_compaction) |
 | `bash_allowed_patterns` | array of string | See [Bash command pre-approval](#bash-command-pre-approval-bash_allowed_patterns) |
+| `post_edit_command` | string | See [Post-edit check](#post-edit-check-post_edit_command) |
 | `prompt` / `prompt_file` | string | See [Custom agent behaviour](#custom-agent-behaviour-prompt-prompt_file) |
 | `mcp_servers` | array of string | See [docs/guides/tooling.md](tooling.md#mcp-servers) |
 | `tools` | array of AgentToolEntry | Per-agent overrides of the global `agent_tools` list — see [docs/guides/tooling.md](tooling.md#agent-as-tool) |
@@ -799,7 +810,7 @@ All fields optional; omitted → global value applies.
 | `max_payload_bytes` | — | 900 KB, or ~4 bytes × window above that | Max HTTP request body; past it, history is trimmed per request (a safety net for reverse proxies — the token trigger above is the primary mechanism). |
 | `included_tools` | — | (all) | Whitelist of built-in tools for this agent |
 | `excluded_tools` | — | (none) | Built-in tools to remove for this agent (applied after `included_tools`) |
-| `tool_timeout_secs` | — | 120 | See [docs/guides/tooling.md — Concurrent tool dispatch](tooling.md#concurrent-tool-dispatch) |
+| `tool_timeout_secs` | — | 120 | See [docs/guides/tooling.md — Tool batch dispatch](tooling.md#tool-batch-dispatch-barrier-model) |
 
 > **Large context window agents**: set `context_window_tokens` and let milk auto-derive `message_budget_chars`/`max_tool_iterations`; `limits` overrides remain available for exact values. Both `milk config init` and the TUI's `/agent add` prompt for it, proposing a models.dev catalog match as the default when the model name is recognized.
 
