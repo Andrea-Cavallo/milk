@@ -683,6 +683,17 @@ type model struct {
 	// Advanced by tipsTickMsg while the user is idle; frozen while a turn
 	// runs or a prompt is pending.
 	tipIdx int
+	// tipPinned marks a manual tip browse (Alt+Up/Down, /tips
+	// next|prev|pick): the rotation's entry then outranks contextual hints
+	// (tips.go currentTip) until the next automatic advance clears the flag,
+	// so stepping through tips never looks like a no-op while an urgent
+	// hint is up.
+	tipPinned bool
+	// tipsGen tags the idle-rotation tick in flight (tipsTickMsg.gen): a
+	// manual browse restarts the cycling timer (restartTipsTick), so a tick
+	// scheduled before the restart carries an older gen and is dropped
+	// instead of cutting the browse short (the toastGen pattern).
+	tipsGen int
 	// currentTurnThinking accumulates thinking text for the current in-progress
 	// turn so it can be stored in session.Turn.Thinking when the turn completes.
 	currentTurnThinking *strings.Builder
@@ -1952,7 +1963,7 @@ func (m model) Init() tea.Cmd {
 		cmds = append(cmds, memoryPollTick())
 	}
 	// Idle tip rotation (ADR-0061) — armed unconditionally, cheap at 20s.
-	cmds = append(cmds, tipsTick())
+	cmds = append(cmds, tipsTick(m.tipsGen))
 	if m.credRefreshInit != nil {
 		cmds = append(cmds, m.credRefreshInit)
 	}
@@ -2043,6 +2054,12 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Same effect as /panel <name>; having three-plus panels
 		// (memory/tasks/background, plus workflow) competing for space
 		// makes a quick toggle worth more than typing the command out.
+		//
+		// Alt+Up / Alt+Down: step through the idle tips (same as /tips
+		// prev|next) — global for the same reason, and one of the few
+		// things still live while a turn streams. bubbles' textarea binds
+		// neither key (word motion is alt+left/right and ctrl+left/right),
+		// so the browse never costs an editing key.
 		switch msg.String() {
 		case "f1":
 			return m.handlePanelCmd("memory")
@@ -2052,6 +2069,14 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePanelCmd("background")
 		case "f4":
 			return m.handlePanelCmd("workflow")
+		case "alt+up":
+			cmd := m.tipSeek(-1) // also restarts the cycling timer
+			m.tipBrowseEcho()
+			return m, cmd
+		case "alt+down":
+			cmd := m.tipSeek(1) // also restarts the cycling timer
+			m.tipBrowseEcho()
+			return m, cmd
 		}
 		// Ctrl+G: dismiss all open notification toasts (issue #162) — global
 		// like F1-F4 so it works in any mode (busy, prompt, attached…);
@@ -2551,14 +2576,22 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tipsTickMsg:
+		// A tick scheduled before a manual browse restarted the cycling
+		// timer (restartTipsTick) carries an older gen — dropped without
+		// advancing or re-arming; the restarted tick is already scheduled.
+		if msg.gen != m.tipsGen {
+			return m, nil
+		}
 		// The rotation freezes while a turn runs or a prompt is pending —
 		// the tip line's row stays reserved (no layout jump) but the user's
 		// attention is elsewhere, so the tip only advances while they are
-		// actually idle (ADR-0061).
+		// actually idle (ADR-0061). An advance also ends the manual-browse
+		// pin (tipPinned), restoring contextual-hint precedence.
 		if !m.busy && !m.hasPendingPrompt() {
 			m.tipIdx++
+			m.tipPinned = false
 		}
-		return m, tipsTick()
+		return m, tipsTick(m.tipsGen)
 
 	case copyFeedbackClearMsg:
 		m.copyFeedback = ""

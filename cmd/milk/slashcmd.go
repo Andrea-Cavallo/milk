@@ -115,7 +115,7 @@ var commandRegistry = []cmdSpec{
                          auto-stages it as an attachment; requires xclip (X11)
                          or wl-paste (Wayland); also fires on empty paste event`},
 	{name: cmdLearn, hosts: hostBoth, desc: "store a persistent memory", hint: "<fact>", help: `  /learn <fact>          store a persistent memory`},
-	{name: cmdOtel, hosts: hostTUI, desc: "show or manage OTel observability files", help: `  /otel                  show OTel file sizes and record counts
+	{name: cmdOtel, hosts: hostTUI, desc: "show or manage OTel observability files", hint: "[on|off|trim|debug enable|disable]", help: `  /otel                  show OTel file sizes and record counts
   /otel on               enable OTel for this session
   /otel off              disable OTel for this session
   /otel trim             archive current OTel files and start fresh
@@ -123,7 +123,7 @@ var commandRegistry = []cmdSpec{
   /otel debug disable    disable debug logging (restores defaults)`},
 	{name: cmdMetrics, hosts: hostBoth, desc: "show recent metric values", help: `  /metrics               show latest metric values`},
 	{name: cmdUsage, hosts: hostBoth, desc: "show token usage by model and role", help: `  /usage                 token usage report for this session and all-time totals`},
-	{name: cmdMemory, hosts: hostBoth, desc: "list stored percepts (session and global)", hint: "[global|session|<pattern>]", help: `  /memory                list all percepts (session + global)
+	{name: cmdMemory, hosts: hostBoth, desc: "list stored percepts (session and global)", hint: "[global|session|<pattern>|show <pat|#id>|stale|archive|restore <id>]", help: `  /memory                list all percepts (session + global)
   /memory global         list only global percepts
   /memory session        list only session percepts
   /memory <pat>          list percepts whose content matches <pat>
@@ -135,10 +135,10 @@ var commandRegistry = []cmdSpec{
   /export json           print session transcript as JSON
   /export <path>         write session transcript to file
   /export session <id>   export another session (id or unambiguous prefix)`},
-	{name: cmdHistory, hosts: hostTUI, desc: "show or set the input history navigation mode", help: `  /history               show current history navigation mode
+	{name: cmdHistory, hosts: hostTUI, desc: "show or set the input history navigation mode", hint: "[global|session]", help: `  /history               show current history navigation mode
   /history global        navigate global input history
   /history session       navigate session input history (default)`},
-	{name: cmdPanel, hosts: hostTUI, desc: "toggle a side panel (memory, tasks, background, workflow)", help: `  /panel memory          toggle the memory panel (right side) — also F1
+	{name: cmdPanel, hosts: hostTUI, desc: "toggle a side panel (memory, tasks, background, workflow)", hint: "memory|tasks|background|workflow", help: `  /panel memory          toggle the memory panel (right side) — also F1
   /panel tasks           toggle the tasks panel (right side) — also F2
   /panel background      toggle the background-agents panel (right side) — also F3
   /panel workflow        toggle the workflow panel (right side) — also F4`},
@@ -146,10 +146,10 @@ var commandRegistry = []cmdSpec{
 	{name: cmdSkipPerms, hosts: hostBoth, desc: "approve every tool call without asking, or go back to asking", hint: "[on|off]", help: `  /skip-permissions      show current skip-permissions state
   /skip-permissions on   all agents auto-approve tool uses (no prompts)
   /skip-permissions off  agents prompt before running side-effecting tools`},
-	{name: cmdPermissions, hosts: hostBoth, desc: "show the permission timed-answer policy, or override it for this session", hint: "[default allow|deny [safety] | timeout <seconds> [safety]]", help: `  /permissions                      show the timed-answer policy + pending asks
+	{name: cmdPermissions, hosts: hostBoth, desc: "show the permission timed-answer policy, or override it for this session", hint: "[default allow|deny [safety] | timeout <secs> [safety]]", help: `  /permissions                      show the timed-answer policy + pending asks
   /permissions default allow|deny [safety]  session override of the timed default
   /permissions timeout <secs> [safety]      session override of the ask deadline`},
-	{name: cmdAgent, hosts: hostBoth, desc: "list configured agents", hint: "[list]", help: `  /agent                 show active primary and escalation agents
+	{name: cmdAgent, hosts: hostBoth, desc: "list configured agents", hint: "[list|add|remove <name>|switch <name>|tool <sub>]", help: `  /agent                 show active primary and escalation agents
   /agent list            list all configured agents (* = active)
   /agent add             add a new agent interactively
   /agent add name=… url=… model=… [provider=…] [api_key=…] [aws_region=…] [run_cmd=…]
@@ -160,7 +160,7 @@ var commandRegistry = []cmdSpec{
   /agent tool disable <tool> [for <agent>|global]  disable a tool-agent entry
   /agent tool add <tool> description=<desc> [for <agent>|global]  add a new tool-agent entry
   /agent tool remove <tool> [for <agent>|global]  remove a tool-agent entry`},
-	{name: cmdColorize, hosts: hostTUI, desc: "show or set the markdown colorization mode", help: `  /colorize              show current colorization mode
+	{name: cmdColorize, hosts: hostTUI, desc: "show or set the markdown colorization mode", hint: "[off|fenced|balanced|full]", help: `  /colorize              show current colorization mode
   /colorize off          no colorization
   /colorize fenced       highlight fenced code blocks only
   /colorize balanced     fenced blocks + inline markdown (default)
@@ -168,19 +168,26 @@ var commandRegistry = []cmdSpec{
 	{name: cmdThink, hosts: hostBoth, desc: "show or hide model reasoning in this session", hint: "[on|off]", help: `  /think                 show current reasoning visibility
   /think on              show thinking/reasoning tokens inline
   /think off             hide thinking tokens ([thinking…] placeholder)`},
-	{name: cmdTips, hosts: hostTUI, args: argsOptOnOff, desc: "show or hide the idle tip line under the input", hint: "[on|off]", help: `  /tips                  show current tip line visibility
+	{name: cmdTips, hosts: hostTUI, desc: "show, hide or browse the idle tips under the input", hint: "[on|off|next|prev|pick [<n>|<text>]|search <query>]", help: `  /tips                  show tip line state and the current tip's position
   /tips on               show the idle tip line under the input
-  /tips off              hide the idle tip line`},
+  /tips off              hide the idle tip line
+  /tips next             show the next tip (Alt+Down)
+  /tips prev             show the previous tip (Alt+Up)
+  /tips pick             list every tip with its number
+  /tips pick <n>         show tip number <n>
+  /tips pick <text>      show the tip whose text matches <text>
+  /tips search <query>   list the tips matching <query>`},
 	{name: cmdSetup, hosts: hostBoth, desc: "configure Telegram remote oversight (status, enable, disable, or the setup wizard)", hint: "telegram [on|off|status]", help: `  /setup telegram        configure Telegram remote oversight interactively
   /setup telegram on     enable Telegram (credentials must already be configured)
-  /setup telegram off    disable Telegram (credentials are preserved)`},
+  /setup telegram off    disable Telegram (credentials are preserved)
+  /setup telegram status show current Telegram oversight status`},
 	{name: cmdConfig, hosts: hostBoth, desc: "print the config, run the setup wizard, or open the config file", hint: "[show|init|open]", help: `  /config                print the current config (merged global + local overrides)
   /config show           print the merged config tagged [global]/[local]/[default]
   /config init           run the setup wizard (configure primary + escalation agents)
   /config open           open config in $EDITOR / system default editor`},
 	{name: cmdInit, hosts: hostBoth, desc: "run the setup wizard (alias for /config init)", help: `  /init                  alias for /config init — run the setup wizard`},
 	{name: cmdOpen, hosts: hostTUI, desc: "open any file in $EDITOR (agent can also call the open_file tool)", hint: "<file>", help: `  /open <file>           open any file in $EDITOR (agent can also call the open_file tool)`},
-	{name: cmdMCP, hosts: hostTUI, desc: "list and manage MCP servers", help: `  /mcp                   list configured MCP servers and their status
+	{name: cmdMCP, hosts: hostTUI, desc: "list and manage MCP servers", hint: "[list|add|remove <name>|enable <name>|disable <name>|tools [<name>]|reconnect [<name>]|assign|unassign|auth <name>]", help: `  /mcp                   list configured MCP servers and their status
   /mcp list [<agent>]    list MCP servers for an agent (default: primary)
   /mcp add                add a new MCP server interactively
   /mcp add name=… url=… [transport=http] [auth=…] [api_key=…] [timeout=…]
@@ -196,8 +203,11 @@ var commandRegistry = []cmdSpec{
 	// No help lines: /update predates the registry and is executable but
 	// undocumented in the TUI help text (pre-existing gap; see the
 	// known-undocumented pin in slashcmd_test.go).
-	{name: cmdUpdate, hosts: hostBoth, desc: "check for milk updates, install one, or skip a release", hint: "check|status|install|skip"},
-	{name: cmdWorkflow, hosts: hostBoth, desc: "run a workflow, or resume, inspect or clear the saved one", hint: "<name> <task> [--<role> <agent>] | resume | status | clear", help: `  /workflow                                          list available workflows
+	{name: cmdUpdate, hosts: hostBoth, desc: "check for milk updates, install one, or skip a release", hint: "check|status|install|skip", help: `  /update [check]        check the GitHub releases API for a newer milk
+  /update status         show the update state and the available release
+  /update install        download and apply the pending update (then restart)
+  /update skip           stop offering the pending release (never announced again)`},
+	{name: cmdWorkflow, hosts: hostBoth, desc: "run a workflow, or resume, inspect or clear the saved one", hint: "<name> <task> [--<role> <agent>] | resume | status | cancel | reconfigure | clear", help: `  /workflow                                          list available workflows
   /workflow <name> [<task>] [--<role> <agent> ...]   start a registered workflow, e.g. dev (designer→generator→evaluator),
                                                       pair (adds a user checkpoint before each verdict), swarm (concurrent
                                                       items + a final pass) — or a custom one from the workflows dir under milk's state root
@@ -206,7 +216,7 @@ var commandRegistry = []cmdSpec{
   /workflow resume                                   resume workflow from last checkpoint
   /workflow reconfigure                              reassign agent roles for current workflow (preserves state)
   /workflow clear                                    delete saved workflow state for this session`},
-	{name: cmdServer, hosts: hostTUI, desc: "show or manage the local inference server", help: `  /server status [<agent>]          show server status (reachable + PID)
+	{name: cmdServer, hosts: hostTUI, desc: "show or manage the local inference server", hint: "[status [<agent>]|start for <agent>|stop [<agent>]]", help: `  /server status [<agent>]          show server status (reachable + PID)
   /server start for <agent>         start the inference server manually
   /server stop [<agent>]            stop the server tracked for an agent`},
 	{name: cmdReload, hosts: hostTUI, desc: "re-parse config.json immediately (same as the auto-watcher)", help: `  /reload                re-parse config.json immediately (same as the auto-watcher) — agent changes rebuild the runners for the next turn`},
@@ -215,15 +225,15 @@ var commandRegistry = []cmdSpec{
 	{name: cmdAttach, hosts: hostTUI, desc: "stage a file or image for the next agent turn", hint: "<path>", help: `  /attach <path>         stage a file or image for the next agent turn
                          text files → quoted block in message body
                          images (png/jpg/gif/webp) → multipart vision payload`},
-	{name: cmdBash, hosts: hostTUI, desc: "manage the direct-bash auto-allow list", help: `  /bash list             list the auto-allow prefixes (no confirmation prompt)
+	{name: cmdBash, hosts: hostTUI, desc: "manage the direct-bash auto-allow list", hint: "[list|allow <prefix>|deny <prefix>]", help: `  /bash list             list the auto-allow prefixes (no confirmation prompt)
   /bash allow <prefix>   add a prefix to the auto-allow list and save config
   /bash deny <prefix>    remove a prefix from the auto-allow list and save config`},
-	{name: cmdBg, hosts: hostBoth, desc: "list, start or stop background agents", hint: "[list|start <task>|stop <id>]", help: `  /bg                    list background agents (ID, status, label, elapsed)
+	{name: cmdBg, hosts: hostBoth, desc: "list, start or stop background agents", hint: "[list|show <id>|start <task>|stop <id>]", help: `  /bg                    list background agents (ID, status, label, elapsed)
   /bg list               same as bare /bg
   /bg show <id>          print one job's full result
   /bg start <task>       spawn a background agent to research <task>
   /bg stop <id>          terminate a running background agent`},
-	{name: cmdNotifications, hosts: hostTUI, desc: "show or clear the notification history", help: `  /notifications               show last 20 notifications (timestamps + hints)
+	{name: cmdNotifications, hosts: hostTUI, desc: "show or clear the notification history", hint: "[list [<count>]|clear]", help: `  /notifications               show last 20 notifications (timestamps + hints)
   /notifications list          show the full notification history, unfiltered
   /notifications list <count>  show the last <count> notifications
   /notifications clear         clear notification history`},
@@ -292,7 +302,7 @@ var helpBlocks = []helpBlock{
 	{header: "── Server ────────────────────────────────────────────────────────────────", names: []string{cmdServer}},
 	{header: "── Setup ─────────────────────────────────────────────────────────────────", names: []string{cmdConfig, cmdInit, cmdReload, cmdOpen, cmdSetup}},
 	{header: "── Attachments ──────────────────────────────────────────────────────────", names: []string{cmdAttach, cmdPaste}},
-	{header: "── General ──────────────────────────────────────────────────────────────", names: []string{"/help", "/exit"}},
+	{header: "── General ──────────────────────────────────────────────────────────────", names: []string{"/help", cmdUpdate, "/exit"}},
 	{header: "── Multi-value parameters ───────────────────────────────────────────────", note: `  The server and agent name parameters of /mcp assign|unassign (both
   sides of "for") and the "for <agent>|global" scope of
   /agent tool enable|disable|add|remove accept comma separated lists,
@@ -332,15 +342,29 @@ var helpBlocks = []helpBlock{
     Ctrl+N / Shift+Alt+Enter / Alt+Enter   insert newline
     Paste                                  multi-line paste sent as one block
 
+  Input editing
+    Ctrl+Z / Ctrl+Y                 undo / redo the input edit history
+    Alt+Left / Alt+Right (Alt+B/F)  move the cursor one word back / forward
+
   Panels
     F1 / F2 / F3 / F4   show/hide the memory / tasks / background-agents / workflow
                         panel — same as /panel <name>, works in any mode
+
+  Tips
+    Alt+Up / Alt+Down   show the previous / next idle tip (same as /tips prev|next)
 
   Memory panel
     Double-click entry   print memory entry details to transcript
 
   @ prefix
-    @path   reference a file path (Tab-completes)`},
+    @path   reference a file path (Tab-completes)
+
+  Shell input
+    !command   run the command directly in a shell pane — no agent and no
+               confirmation, even while a turn runs (Claude Code style).
+               Shell-looking input without the "!" runs directly only with
+               direct bash enabled: auto-allowed prefixes (/bash) run at
+               once, anything else asks Y/n first`},
 }
 
 // buildInteractiveHelp assembles the TUI help text from the registry: each

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -440,16 +441,16 @@ func (m model) handleThinkCmd(arg string) model {
 	return m
 }
 
-// handleTipsCmd handles `/tips [on|off]` — the idle tip line below the
-// input (ADR-0061). With no arg: shows the current visibility. With on/off:
-// toggles it and persists the default to config (show_tips), the same
-// saveLocalOrGlobal pattern /colorize uses. Turning the line on/off reflows
-// the layout by one row via syncLayout, since hintRegion reserves the row
-// while enabled.
+// handleTipsCmd handles `/tips …` — the idle tip line below the input
+// (ADR-0061): visibility (on/off, persisted like /colorize) and tip
+// browsing (next, prev, pick, search). With no arg: shows the current
+// visibility and where in the rotation the shown tip sits. The toggle
+// reflows the layout by one row via syncLayout, since hintRegion reserves
+// the row while enabled.
 //
 // State *changes* are turn-unrelated informational events → notification
-// toasts (issue #162); the bare query response stays in the transcript like
-// every other explicit query answer.
+// toasts (issue #162); query and browse output stays in the transcript
+// like every other explicit query answer.
 func (m model) handleTipsCmd(arg string) (tea.Model, tea.Cmd) {
 	switch arg {
 	case "on", "off":
@@ -473,16 +474,99 @@ func (m model) handleTipsCmd(arg string) (tea.Model, tea.Cmd) {
 		} else {
 			m.notify("tip line: "+arg, "/tips "+other)
 		}
-	default:
+	case "":
 		state := "off"
 		if m.showTips {
 			state = "on"
 		}
-		m.appendTranscript(fmt.Sprintf("%s tip line: %s  (use /tips on|off)\n", milkTag(), bold(state)))
+		where := ""
+		if pos, total := m.tipPos(); total > 0 {
+			where = fmt.Sprintf(" (tip %d/%d)", pos, total)
+		}
+		m.appendTranscript(fmt.Sprintf("%s tip line: %s%s  (use /tips on|off — browse: /tips next|prev|pick|search <query>)\n", milkTag(), bold(state), where))
 		return m, nil
+	default:
+		mm, cmd := m.handleTipsBrowse(arg)
+		return mm, cmd
 	}
 	m.syncLayout()
 	return m, nil
+}
+
+// handleTipsBrowse runs the tip-browsing half of /tips: next/prev step the
+// rotation (the same tipSeek the Alt+Up/Down shortcuts use), pick lists
+// every tip or jumps to one (by number, or by text when it matches exactly
+// one tip), search lists the tips matching a query. A pick always echoes
+// the chosen tip to the transcript — deliberate selections are meant to be
+// read at full width — while next/prev only echo when the tip line is
+// hidden (tipBrowseEcho). The returned command restarts the cycling timer
+// for a successful move (and is nil otherwise): a browse resets the
+// rotation countdown instead of being cut short by the old schedule.
+func (m model) handleTipsBrowse(arg string) (model, tea.Cmd) {
+	list := buildTipList()
+	var tick tea.Cmd
+	usage := func() {
+		m.appendTranscript(milkTag() + " usage: /tips [on|off|next|prev|pick [<n>|<text>]|search <query>]\n")
+	}
+	switch {
+	case arg == "next" || arg == "prev":
+		if len(list) == 0 {
+			usage()
+			return m, nil
+		}
+		if arg == "next" {
+			tick = m.tipSeek(1)
+		} else {
+			tick = m.tipSeek(-1)
+		}
+		m.tipBrowseEcho()
+	case arg == "pick":
+		if len(list) == 0 {
+			usage()
+			return m, nil
+		}
+		pos, total := m.tipPos()
+		m.appendTranscript(fmt.Sprintf("%s %d tips — * = showing now (tip %d/%d); /tips pick <n> shows one\n", milkTag(), total, pos, total))
+		for i, tip := range list {
+			m.appendTranscript(tipListEntry(i, tip, i == pos-1))
+		}
+	case strings.HasPrefix(arg, "search "), strings.HasPrefix(arg, "pick "):
+		verb, q := arg[:strings.IndexByte(arg, ' ')], strings.TrimSpace(arg[strings.IndexByte(arg, ' '):])
+		if q == "" {
+			usage()
+			return m, nil
+		}
+		if verb == "pick" {
+			if n, err := strconv.Atoi(q); err == nil {
+				ok, cmd := m.tipPick(n)
+				if !ok {
+					_, total := m.tipPos()
+					m.appendTranscript(fmt.Sprintf("%s no tip %d — tip numbers run 1–%d (/tips pick lists them)\n", milkTag(), n, total))
+					return m, nil
+				}
+				m.tipEcho()
+				return m, cmd
+			}
+		}
+		hits := searchTips(q)
+		if len(hits) == 0 {
+			m.appendTranscript(fmt.Sprintf("%s no tips match %q — /tips pick lists all %d\n", milkTag(), q, len(list)))
+			return m, nil
+		}
+		if verb == "pick" && len(hits) == 1 {
+			_, cmd := m.tipPick(hits[0] + 1)
+			m.tipEcho()
+			return m, cmd
+		}
+		m.appendTranscript(tipMatchHeader(len(hits), q))
+		pos, _ := m.tipPos()
+		for _, i := range hits {
+			m.appendTranscript(tipListEntry(i, list[i], i == pos-1))
+		}
+	default:
+		usage()
+	}
+	return m, tick
 }
 
 // toggleThinking flips reasoning visibility and posts a notification toast.
@@ -1244,7 +1328,7 @@ func (m model) handleOpenFileMsg(msg openFileMsg) (tea.Model, tea.Cmd) {
 	})
 }
 
-// handleUpdateCmd handles /update [check|install|skip].
+// handleUpdateCmd handles /update [check|status|install|skip].
 func (m model) handleUpdateCmd(sub string) (tea.Model, tea.Cmd) {
 	switch sub {
 	case "check", "":
@@ -1266,6 +1350,26 @@ func (m model) handleUpdateCmd(sub string) (tea.Model, tea.Cmd) {
 			}
 			return updateAvailableMsg{release: rel, checkedAt: cfg.UpdateLastCheck}
 		}
+
+	case "status":
+		// Renders from what is already known — no network round trip
+		// (the acp_update.go updateStatusText parity). Install state
+		// first (most action-relevant), then the pending release, then
+		// the skip note.
+		if m.updateInstalling {
+			m.appendTranscript(milkTag() + " update install in progress\n")
+			return m, nil
+		}
+		if m.pendingUpdate != nil {
+			m.appendTranscript(fmt.Sprintf("%s %s available — /update install (or /update skip)\n", milkTag(), m.pendingUpdate.Tag))
+			return m, nil
+		}
+		if skip := m.st.cfg.UpdateSkippedVersion; skip != "" {
+			m.appendTranscript(fmt.Sprintf("%s %s skipped — it will not be announced again\n", milkTag(), skip))
+			return m, nil
+		}
+		m.appendTranscript(milkTag() + " no update information yet — /update check\n")
+		return m, nil
 
 	case "install":
 		if m.updateInstalling {
@@ -1301,7 +1405,7 @@ func (m model) handleUpdateCmd(sub string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
-		m.appendTranscript(milkTag() + " usage: /update [check|install|skip]\n")
+		m.appendTranscript(milkTag() + " usage: /update [check|status|install|skip]\n")
 		return m, nil
 	}
 }
