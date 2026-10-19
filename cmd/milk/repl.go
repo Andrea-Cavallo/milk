@@ -3516,7 +3516,7 @@ func (m model) spawnUserBackgroundAgent(task, spec string) (tea.Model, tea.Cmd) 
 	// Update deadlocks because the event loop goroutine is the only reader
 	// of that channel and it is blocked waiting for Update to return.
 	return m, func() tea.Msg {
-		job := mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, cwd, task, m.mem))
+		job := mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, mgr, cwd, task, m.mem))
 		return backgroundSpawnedMsg{jobID: job.ID, label: label, model: modelName}
 	}
 }

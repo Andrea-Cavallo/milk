@@ -190,7 +190,7 @@ func TestRunBackgroundTask_MemoryToolsWired(t *testing.T) {
 			}
 			agent := New(srv.URL, "test-model")
 			var out strings.Builder
-			if _, _, err := agent.RunBackgroundTask(context.Background(), "job_test", "/tmp", "investigate", "", &out, mem); err != nil {
+			if _, _, err := agent.RunBackgroundTask(context.Background(), "job_test", nil, "/tmp", "investigate", "", &out, mem); err != nil {
 				t.Fatalf("RunBackgroundTask returned error: %v", err)
 			}
 

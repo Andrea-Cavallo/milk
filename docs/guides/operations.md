@@ -209,7 +209,7 @@ Two guards keep an agent that lost its context from re-planning the same work: t
 
 ## Background sub-agents
 
-`spawn_background_agent` (ADR-0043 — see [docs/guides/tooling.md](tooling.md#spawn_background_agent-forking-yourself-for-background-research) for the tool itself) forks an inference-server-backed agent to research a self-contained question asynchronously, one job per call, tracked for the life of the session by a per-session job manager.
+`spawn_background_agent` (ADR-0043 — see [docs/guides/tooling.md](tooling.md#spawn_background_agent-forking-yourself-for-background-research) for the tool itself) forks an inference-server-backed agent to research a self-contained question asynchronously, one job per call, tracked for the life of the session by a per-session job manager. The model-facing lifecycle tools (`status_background_agent`, `wait_background_agent`, `send_background_agent` — issue #250) let the spawning agent check on jobs, block on a result when genuinely dependent on it, and deliver follow-up input to a running job; the human side is `/bg`, `/bg show`, and `/bg stop`.
 
 | Field | Default | Meaning |
 |---|---|---|

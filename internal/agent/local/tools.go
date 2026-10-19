@@ -664,6 +664,68 @@ func cancelBackgroundAgentSchema() map[string]any {
 	}
 }
 
+// statusBackgroundAgentSchema is the schema for status_background_agent
+// (issue #250) — checking on jobs spawned via spawn_background_agent.
+// Gated identically to spawnBackgroundAgentSchema (only appended when
+// a.backgroundManager is set, never in a background job's own tool list).
+func statusBackgroundAgentSchema() map[string]any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "status_background_agent",
+			"description": "Check on background agent job(s) you spawned via spawn_background_agent. With job_id: that job's state, task and result (the result is complete once finished). Without: every job as a one-line summary. Cheap, but you do not need to poll — you are notified when jobs complete; use this when you want facts now.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id": map[string]any{"type": "string", "description": "Optional. The job ID returned by spawn_background_agent; omit to list all jobs."},
+				},
+				"required": []string{},
+			},
+		},
+	}
+}
+
+// waitBackgroundAgentSchema is the schema for wait_background_agent (issue
+// #250) — blocking on a job's result. Gated like spawnBackgroundAgentSchema.
+func waitBackgroundAgentSchema() map[string]any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "wait_background_agent",
+			"description": "Block until a background agent job finishes and return its result. Use only when your current work genuinely depends on the answer and you have nothing else to do meanwhile — normally you are notified on completion and should keep working. If the job is still running after timeout_secs (default 60), you get a 'still running' note instead: do not immediately wait again.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id":       map[string]any{"type": "string", "description": "The job ID returned by spawn_background_agent."},
+					"timeout_secs": map[string]any{"type": "number", "description": "Optional. How long to wait (default 60, max 600) before returning a 'still running' note."},
+				},
+				"required": []string{"job_id"},
+			},
+		},
+	}
+}
+
+// sendBackgroundAgentSchema is the schema for send_background_agent (issue
+// #250) — follow-up input to a running job. Gated like
+// spawnBackgroundAgentSchema.
+func sendBackgroundAgentSchema() map[string]any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "send_background_agent",
+			"description": "Deliver follow-up input to a *running* background agent job — a correction, a new constraint, or a piece of context it lacks (e.g. which test is failing). The input reaches the job as an extra user message at its next step. Fails for finished jobs (spawn a new job instead) and does not interrupt the job's current step.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id":  map[string]any{"type": "string", "description": "The job ID returned by spawn_background_agent."},
+					"message": map[string]any{"type": "string", "description": "The follow-up input for the job. Self-contained: the job sees this plus its original task, not your conversation."},
+				},
+				"required": []string{"job_id", "message"},
+			},
+		},
+	}
+}
+
 func currentNeedSchema() map[string]any {
 	return map[string]any{
 		"type": "function",

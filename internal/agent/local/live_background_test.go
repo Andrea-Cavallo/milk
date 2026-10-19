@@ -88,7 +88,7 @@ func TestLiveBackgroundObservability(t *testing.T) {
 
 	job := mgr.Spawn("live-e2e", "reply with the word OK", "primary", model,
 		func(jobCtx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
-			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, tmp,
+			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, nil, tmp,
 				"Reply with exactly the word: OK. Do not use any tools.", "", out, nil)
 		})
 
@@ -133,7 +133,7 @@ func TestLiveBackgroundObservability(t *testing.T) {
 	mgr2.SetOnDone(func(j *Job) { done2 <- j })
 	mgr2.Spawn("live-timeout", "reply verbosely", "primary", model,
 		func(jobCtx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
-			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, tmp,
+			return ag.runBackgroundTaskWithRetry(jobCtx, jobID, nil, tmp,
 				"Write a very long, detailed essay about the history of computing. Do not use any tools.", "", out, nil)
 		})
 	tj := waitDone(t, done2, 2*time.Minute)

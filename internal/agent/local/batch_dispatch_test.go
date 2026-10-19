@@ -290,9 +290,12 @@ func TestToolSetContract_NoDeadDispatchCases(t *testing.T) {
 // dispatchedOutsideDispatchTool are handled directly in dispatchOneTool
 // (signals to the host layer), so dispatchTool must not know them.
 var dispatchedOutsideDispatchTool = map[string]bool{
-	"ask_user":       true,
-	"open_file":      true,
-	"start_workflow": true,
+	"ask_user":                true,
+	"open_file":               true,
+	"start_workflow":          true,
+	"status_background_agent": true,
+	"wait_background_agent":   true,
+	"send_background_agent":   true,
 }
 
 // isUnknownToolResult reports whether a dispatchTool result is the
