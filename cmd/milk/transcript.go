@@ -150,7 +150,7 @@ func (m *model) wrappedTranscript() string {
 		return raw
 	}
 	if m.colorizeMode == ColorizeOff {
-		return m.applySelectionHighlight(tintThinkSurface(ansi.Wrap(expandTabsForWrap(raw), vw, ""), vw))
+		return m.applySelectionHighlight(tintFullRows(ansi.Wrap(expandTabsForWrap(raw), vw, ""), vw))
 	}
 
 	txLen := len(raw)
@@ -192,9 +192,9 @@ func (m *model) wrappedTranscript() string {
 			if !strings.HasSuffix(base, ansiReset) {
 				base += ansiReset
 			}
-			return m.applySelectionHighlight(tintThinkSurface(base+newText, vw))
+			return m.applySelectionHighlight(tintFullRows(base+newText, vw))
 		}
-		return m.applySelectionHighlight(tintThinkSurface(m.colorizeCached, vw))
+		return m.applySelectionHighlight(tintFullRows(m.colorizeCached, vw))
 	}
 
 	// Full re-colorize with per-turn caching: colorize on the raw (unwrapped)
@@ -261,25 +261,25 @@ func (m *model) wrappedTranscript() string {
 
 	wrapped := ansi.Wrap(expandTabsForWrap(colorized.String()), vw, "")
 
-	// Update cache. The cache stores the untinted wrap: the thinking
-	// surface's full-row pad (tintThinkSurface) is width-dependent and is
-	// applied to the returned render instead — the cached bytes never
-	// change with the viewport width again after their own re-wrap, so
-	// the seam between the cached prefix and the fresh suffix can't pick
+	// Update cache. The cache stores the untinted wrap: the full-row pads
+	// (tintFullRows — thinking surface and diff backgrounds) are width-
+	// dependent and are applied to the returned render instead — the cached
+	// bytes never change with the viewport width again after their own re-wrap,
+	// so the seam between the cached prefix and the fresh suffix can't pick
 	// up stale padding.
 	m.colorizeCached = wrapped
 	m.colorizeTransLen = effLen
 	m.colorizeVPWidth = vw
 
 	if effLen == txLen {
-		return m.applySelectionHighlight(tintThinkSurface(wrapped, vw))
+		return m.applySelectionHighlight(tintFullRows(wrapped, vw))
 	}
 	newText := ansi.Wrap(expandTabsForWrap(raw[effLen:]), vw, "")
 	base := wrapped
 	if !strings.HasSuffix(base, ansiReset) {
 		base += ansiReset
 	}
-	return m.applySelectionHighlight(tintThinkSurface(base+newText, vw))
+	return m.applySelectionHighlight(tintFullRows(base+newText, vw))
 }
 
 // danglingEscapeStart returns the byte offset of an incomplete trailing ANSI
@@ -312,8 +312,8 @@ func (m *model) transcriptPlainLines() []string {
 	wrapped := m.wrappedTranscript()
 	lines := strings.Split(wrapped, "\n")
 	for i, l := range lines {
-		// Trailing spaces on thinking-surface rows are the render-time
-		// full-row pad (tintThinkSurface), not content — trim them so the
+		// Trailing spaces on full-row surfaces (thinking, diff) are the
+		// render-time pad (tintFullRows), not content — trim them so the
 		// plain coordinate space stays clean for hit-testing and copy.
 		lines[i] = strings.TrimRight(ansi.Strip(l), " ")
 	}
