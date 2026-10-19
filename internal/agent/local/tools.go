@@ -1201,7 +1201,7 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 	if bg, _ := args["run_in_background"].(bool); bg {
 		s, err := bgShells.start(command, dir)
 		if err != nil {
-			return toolResult{Error: err.Error()}.String(), false
+			return toolResult{Error: err.Error(), ExitCode: -1}.String(), false
 		}
 		return toolResult{Output: fmt.Sprintf(
 			"started background shell %s — read its output with bash_output(shell_id: %q), stop it with kill_bash(shell_id: %q)",
@@ -1232,7 +1232,11 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return toolResult{Error: err.Error()}.String(), false
+		// Launch failures, wait errors that are not an exit status, and
+		// timeouts all report ExitCode -1: the exit code is the single
+		// failure signal for bash (issue #271) — a result with Error set but
+		// exit 0 is stderr output on a SUCCESSFUL run and fails nothing.
+		return toolResult{Error: err.Error(), ExitCode: -1}.String(), false
 	}
 
 	done := make(chan error, 1)
@@ -1243,9 +1247,9 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 		code := 0
 		if err != nil {
 			if exit, ok := err.(*exec.ExitError); ok {
-				code = exit.ExitCode()
+				code = exit.ExitCode() // -1 when a signal killed the process
 			} else {
-				return toolResult{Error: err.Error()}.String(), false
+				return toolResult{Error: err.Error(), ExitCode: -1}.String(), false
 			}
 		}
 		return toolResult{
@@ -1256,7 +1260,7 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 	case <-ctx.Done():
 		killProcGroup(cmd)
 		<-done
-		return toolResult{Error: fmt.Sprintf("bash: command timed out after %s", timeout)}.String(), false
+		return toolResult{Error: fmt.Sprintf("bash: command timed out after %s", timeout), ExitCode: -1}.String(), false
 	}
 }
 

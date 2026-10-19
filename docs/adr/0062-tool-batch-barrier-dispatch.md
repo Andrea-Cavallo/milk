@@ -31,3 +31,9 @@ Kept from the old behavior: results are appended in original call order regardle
 - Regression tests: `internal/agent/local/batch_dispatch_test.go` (write-then-bash ordering, two edits on one file, cancel-on-failure, read-run concurrency via FIFOs), `oob_tools_test.go` (barrier serialization, timeout ⇒ skip).
 
 Implementation: `dispatchBatch` / `isParallelSafeTool` / `isCancellingTool` / `toolCallFailed` in [`internal/agent/local/local.go`](../../internal/agent/local/local.go).
+
+## Update (2026-10-19, issue #271): stderr alone is not a bash failure
+
+The Decision above says a bash call fails on `isToolError` *or* a non-zero exit code. In the implementation `bash` returns stderr in `toolResult.Error`, so `isToolError` was true for **any** stderr output, including a successful (exit 0) command that merely warned (`grep` "binary file matches", compiler or `git` notices). Such a call cancelled the rest of the batch and told the model the command had failed.
+
+Corrected rule: for `bash`, a call failed when its exit code is non-zero, or it could not be launched, timed out, or was killed (those results carry `Error` with no command output). stderr on an exit-0 run is informational and cancels nothing. `write_file`, `edit_file`, `multiedit`, `delete_file` and `move_file` keep `isToolError`, since their `Error` field is a genuine failure.

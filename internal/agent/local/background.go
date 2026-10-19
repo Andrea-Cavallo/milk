@@ -112,6 +112,11 @@ type Manager struct {
 	// heartbeatInterval is how often a running job's LastAliveAt is bumped
 	// and persisted (see defaultHeartbeatInterval and startHeartbeat).
 	heartbeatInterval time.Duration
+	// softMinTimeout is the shortest job timeout that earns a soft-deadline
+	// wrap-up message (see softDeadlineMinTimeout). A field rather than a
+	// bare const only so tests can exercise the soft deadline without
+	// waiting out the real two-minute floor.
+	softMinTimeout time.Duration
 }
 
 // defaultJobTimeout bounds how long a single job may run once it starts
@@ -142,6 +147,59 @@ const defaultJobTimeout = 20 * time.Minute
 // minute of the kill" rather than only "was started once".
 const defaultHeartbeatInterval = 30 * time.Second
 
+// Soft-deadline constants (ADR-0068, issue #271): a job is told to wrap up
+// at softDeadlineNumerator/Denominator of its execution timeout so a
+// would-be hard timeout turns into a partial result instead of a bare
+// failure. Jobs with a timeout under softDeadlineMinTimeout skip the
+// wrap-up entirely — nagging to wrap up with seconds left is noise.
+const (
+	softDeadlineNumerator   = 8
+	softDeadlineDenominator = 10
+	softDeadlineMinTimeout  = 2 * time.Minute
+)
+
+// softDeadlineDelay returns how long after a job starts executing its
+// wrap-up message should fire (80% of the timeout — ADR-0068), or ok=false
+// when the job is shorter than minTimeout (a wrap-up nag with seconds left is
+// noise). minTimeout < 0 selects softDeadlineMinTimeout.
+func softDeadlineDelay(timeout, minTimeout time.Duration) (delay time.Duration, ok bool) {
+	if minTimeout < 0 {
+		minTimeout = softDeadlineMinTimeout
+	}
+	if timeout < minTimeout {
+		return 0, false
+	}
+	return timeout * softDeadlineNumerator / softDeadlineDenominator, true
+}
+
+// wrapUpMessage is the soft-deadline nudge sent to a job at 80% of its
+// timeout (ADR-0068): how much time is left, a stop-exploring instruction,
+// and the structured-result convention for an incomplete answer.
+func wrapUpMessage(remaining time.Duration) string {
+	mins := int((remaining + time.Minute - 1) / time.Minute)
+	if mins < 1 {
+		mins = 1
+	}
+	return fmt.Sprintf(
+		"[milk] time check: about %d minute(s) left before this job's deadline — stop exploring and write your final answer now from what you have. If the task is not fully done, return what you have with <result status=\"partial\" files_touched=\"…\"/> on its own line instead of continuing.",
+		mins)
+}
+
+// sendWrapUp delivers the soft-deadline wrap-up message to a running job,
+// best-effort like every inbox delivery (ADR-0068): a job that finished or
+// is not consuming input simply never sees it, anything else is worth a WARN
+// so a stalled inbox shows up in milk.log.
+func (m *Manager) sendWrapUp(id string, remaining time.Duration) {
+	switch err := m.Send(id, wrapUpMessage(remaining)); {
+	case err == nil:
+		obs.Event("background.soft_deadline", "job", id, "remaining", remaining.String())
+	case errors.Is(err, ErrJobFinished), errors.Is(err, ErrJobInboxFull):
+		// Ended first or not consuming input — nothing to do.
+	default:
+		obs.EventWarn("background.soft_deadline_failed", "job", id, "err", err)
+	}
+}
+
 // NewManager returns a Manager allowing at most maxConcurrent jobs to
 // actually execute (queue past that) at once, running jobs under baseCtx —
 // which should outlive individual turns (see the Manager doc comment).
@@ -157,6 +215,7 @@ func NewManager(baseCtx context.Context, maxConcurrent int) *Manager {
 		cancels:           make(map[string]context.CancelFunc),
 		jobTimeout:        defaultJobTimeout,
 		heartbeatInterval: defaultHeartbeatInterval,
+		softMinTimeout:    softDeadlineMinTimeout,
 	}
 }
 
@@ -227,6 +286,15 @@ func (m *Manager) SetHeartbeatInterval(d time.Duration) {
 	m.mu.Unlock()
 }
 
+// SetSoftDeadlineMin overrides the shortest job timeout that earns a
+// soft-deadline wrap-up message (see softDeadlineMinTimeout). Intended for
+// tests: 0 disables the floor entirely, production uses the default.
+func (m *Manager) SetSoftDeadlineMin(d time.Duration) {
+	m.mu.Lock()
+	m.softMinTimeout = d
+	m.mu.Unlock()
+}
+
 // Spawn launches run in a goroutine and returns immediately with a Job
 // handle in JobRunning status. run does not start executing until a
 // concurrency slot is free — Spawn itself never blocks the caller waiting
@@ -284,9 +352,27 @@ func (m *Manager) Spawn(label, task, role, model string, run JobRun) *Job {
 
 		execCtx, execCancel := context.WithTimeout(jobCtx, timeout)
 		defer execCancel()
+		// Soft deadline (ADR-0068, issue #271): tell the job to wrap up at
+		// 80% of its execution timeout so a would-be hard timeout turns into
+		// a partial result instead of a bare failure. Delivered through the
+		// job's own inbox (the tool loop injects it as a user message at its
+		// next iteration), sent at most once, and stopped when the job body
+		// returns — a job that finishes first never sees it.
+		var softTimer *time.Timer
+		m.mu.Lock()
+		softMin := m.softMinTimeout
+		m.mu.Unlock()
+		if delay, ok := softDeadlineDelay(timeout, softMin); ok {
+			softTimer = time.AfterFunc(delay, func() {
+				m.sendWrapUp(job.ID, timeout-delay)
+			})
+		}
 		hbDone := m.startHeartbeat(job)
 		result, tokens, err := safeJobRun(execCtx, job.ID, job.Live.Writer(), run)
 		close(hbDone)
+		if softTimer != nil {
+			softTimer.Stop()
+		}
 		// The job's own execution deadline firing (as opposed to the
 		// manager's baseCtx ending — i.e. milk shutting down) is this job
 		// timing out. Say so explicitly in the error so the transcript,
