@@ -415,8 +415,13 @@ type Agent struct {
 	// prefixes pre-approved without a grant/ask, checked in checkPermission
 	// before the PermStore/permAsk flow (permissions.go's matchesBashPattern).
 	bashAllowedPatterns []string
-	onOpenFile          func(path string) error // opens a file in the editor; nil = deny (non-TUI)
-	client              *http.Client
+	// postEditCommand is AgentConfig.PostEditCommand: an optional shell
+	// command run after every successful edit_file/write_file, with its
+	// output appended to the tool result (the post-edit feedback of
+	// toolset-review G2). Empty = disabled.
+	postEditCommand string
+	onOpenFile      func(path string) error // opens a file in the editor; nil = deny (non-TUI)
+	client          *http.Client
 	// backgroundClient is a separate *http.Client — its own connection pool,
 	// its own auth-wrapper state (token cache, sigv4 credentials) — used for
 	// spawn_background_agent jobs instead of client. Background jobs run
@@ -863,6 +868,15 @@ func (a *Agent) WithEscalateAfterRecoveries(n int) *Agent {
 	return &copy
 }
 
+// WithPostEditCommand sets the shell command run after every successful
+// edit_file/write_file, with its output appended to the tool result
+// (AgentConfig.PostEditCommand; toolset-review G2). Pass "" to disable.
+func (a *Agent) WithPostEditCommand(cmd string) *Agent {
+	copy := *a
+	copy.postEditCommand = cmd
+	return &copy
+}
+
 // SystemOverheadChars returns an estimate of the character overhead that Run
 // will add as system messages on top of the history slice: the role system
 // prompt and the memory instruction block (when re-injection is due). Callers
@@ -944,6 +958,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 			systemPromptTier:           ac.SystemPromptTier,
 			disableProjectInstructions: ac.DisableProjectInstructions,
 			bashAllowedPatterns:        ac.BashAllowedPatterns,
+			postEditCommand:            ac.PostEditCommand,
 			promptCaching:              ac.PromptCaching,
 			supportsVision:             ac.Vision,
 			maxPayloadBytes:            config.DefaultMaxPayloadBytes,
@@ -972,6 +987,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 		systemPromptTier:           ac.SystemPromptTier,
 		disableProjectInstructions: ac.DisableProjectInstructions,
 		bashAllowedPatterns:        ac.BashAllowedPatterns,
+		postEditCommand:            ac.PostEditCommand,
 		supportsVision:             ac.Vision,
 		maxPayloadBytes:            config.DefaultMaxPayloadBytes,
 		payloadCompactionThreshold: config.DefaultPayloadTrimCompactionThreshold,
@@ -2446,6 +2462,7 @@ func (a *Agent) cloneForBackground() *Agent {
 		limits:          a.limits,
 		maxPayloadBytes: a.maxPayloadBytes,
 		promptCaching:   a.promptCaching,
+		postEditCommand: a.postEditCommand,
 		// Resolve the memory-visibility consumer now: a background job is a
 		// fork of the spawning agent and sees the same percepts it does
 		// (issue #172).
@@ -2462,7 +2479,7 @@ func SideEffectingTool(name string) bool { return toolNeedsPermission(name) }
 // Read-only and internal tools are always permitted; side-effecting tools require a grant.
 func toolNeedsPermission(name string) bool {
 	switch name {
-	case "bash", "write_file", "edit_file", "delete_file", "move_file", "http_get", "http_request":
+	case "bash", "write_file", "edit_file", "delete_file", "move_file", "web_fetch", "http_get", "http_request":
 		return true
 	}
 	return false
@@ -3071,6 +3088,14 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 	if toolCtx.Err() != nil && result == "" {
 		result = toolResult{Error: fmt.Sprintf("tool %q timed out after %s", tc.Function.Name, a.toolTimeout)}.String()
 	}
+
+	// Post-edit check (toolset-review G2): run the configured command after a
+	// successful edit_file/write_file and append its output to the result.
+	postEditCWD := ""
+	if sess != nil {
+		postEditCWD = sess.CWD
+	}
+	result = a.postEditCheck(tc.Function.Name, result, postEditCWD)
 
 	toolElapsed := time.Since(toolStart)
 	agentRole := agentRoleForMetrics(a.escalationName)

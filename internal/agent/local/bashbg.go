@@ -203,6 +203,9 @@ func runBashOutput(args map[string]any) (string, bool) {
 	out := s.out.Snapshot()
 	if n := intArg(args, "tail_lines"); n > 0 {
 		lines := strings.Split(out, "\n")
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1] // trailing newline is not a line
+		}
 		if len(lines) > n {
 			omitted := len(lines) - n
 			out = fmt.Sprintf("… (%d earlier lines omitted)\n", omitted) + strings.Join(lines[len(lines)-n:], "\n")

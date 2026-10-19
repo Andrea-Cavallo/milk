@@ -208,7 +208,7 @@ func ToolKindFor(name string) ToolKind {
 		return ToolKindExecute
 	case "think", "think_tool":
 		return ToolKindThink
-	case "http_get", "http_request":
+	case "web_fetch", "http_get", "http_request":
 		return ToolKindFetch
 	case "spawn_background_agent", "start_workflow":
 		return ToolKindOther

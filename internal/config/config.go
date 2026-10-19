@@ -617,6 +617,14 @@ type AgentConfig struct {
 	// grant already allows.
 	BashAllowedPatterns []string `json:"bash_allowed_patterns,omitempty"`
 
+	// PostEditCommand is an optional shell command run after every successful
+	// edit_file/write_file made through milk's own tool loop, with its output
+	// appended to the tool result so the model sees formatter/compiler
+	// feedback immediately (e.g. "gofmt -l .", "go vet ./...", "tsc
+	// --noEmit"). Run in the session working directory with a 60s cap,
+	// output truncated to 4 KB. Empty (the default) disables the check.
+	PostEditCommand string `json:"post_edit_command,omitempty"`
+
 	// ContextWindowTokens is the context window size of this agent's model in
 	// tokens. When set and no explicit limits.message_budget_chars or
 	// limits.max_tool_iterations override is configured, milk auto-derives
