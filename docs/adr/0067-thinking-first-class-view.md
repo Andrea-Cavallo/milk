@@ -39,28 +39,29 @@ render stack into fully-typed content parts.
   styling is applied per line at render time by `colorize()`/`dim()`, which
   already closes the reset before every newline.
 - `transcriptDisplay()` splices each block in at its anchor as a **fold
-  container**: a one-line header (`▸ thinking · N lines · Ctrl+T` folded,
+  container**: a one-line header (`▸ thinking · N lines` folded,
   `▾ thinking · N lines` expanded, `· streaming` while open) plus the dim
   body only when expanded. Everything downstream (colorize + wrap +
   selection) runs on the display string exactly like it ran on the old
   `activeTranscript()` variant. `transcriptNoThink` and `activeTranscript()`
   are gone; `thinkingActiveInTurn` is replaced by "an open block exists".
 
-Display rules:
+Display rules (as amended by the 2026-10-19 Update below):
 
-- `/think off` — every block renders one placeholder line
-  `[thinking… Ctrl+T to show]`; bodies never render.
-- `/think on` — blocks render as fold containers, **collapsed by default once
-  complete** (the issue's requirement: long reasoning must not flood the
-  transcript even when the setting is on). The block that is still streaming
-  stays open so reasoning can be watched live — `/think on` keeps meaning
-  "show me it thinking" — and folds when it closes unless the user pinned it
-  open. Toggling is retroactive (`applyThinkVisibility`).
+- Every block always renders its header row — there is no hidden mode and no
+  placeholder line. The header is information-only: glyph, line count, fold
+  state (`· streaming` while open), never a key hint.
+- Blocks are **collapsed by default once complete** (the issue's requirement:
+  long reasoning must not flood the transcript). The block that is still
+  streaming stays open so reasoning can be watched live and folds when it
+  closes unless the user pinned it open.
 - **Click a fold header** to expand/collapse that block (mouse release
   without drag, hit-tested against header lines in the selection coordinate
   space) — the same arm/act rhythm as panel clicks; drag selection over
-  reasoning text is untouched. `/think expand` / `/think collapse` pin all
-  blocks; `userSet` pins survive later auto-folds.
+  reasoning text is untouched. **Ctrl+T** toggles the most recent block (the
+  streaming one, if any) — the keyboard form of clicking its header. `/think
+  expand` / `/think collapse` pin all blocks; `userSet` pins survive later
+  auto-folds.
 - `/think view` swaps the main area to a **thinking-only stream** (issue
   #208's "dedicated thinking view"): every block's header plus full body in
   order, over the static preview attach view (ADR-0047).
@@ -68,8 +69,10 @@ Display rules:
 Consumption/display separation is preserved: loop detection
 (`FeedReasoningChunk`), the session turn record (`currentTurnThinking`) and
 the ACP `agent_thought_chunk` stream all consume reasoning from their own
-accumulators regardless of what the renderer shows. The ACP `think` option is
-unchanged; `/think expand|collapse|view` are TUI-only.
+accumulators regardless of what the renderer shows. The ACP `think` option
+(config `show_reasoning`) is unchanged and remains the data-plane relay
+toggle for `agent_thought_chunk` updates; `/think expand|collapse|view` are
+TUI-only, and TUI fold state is independent of the relay toggle.
 
 Two by-products of the model:
 
@@ -132,3 +135,36 @@ Two by-products of the model:
 - Nice-to-haves not covered: per-block copy, search including/excluding
   reasoning, persisted expand state across sessions (state is per-session,
   per-block, in-memory).
+
+## Update (2026-10-19): information-only headers, Ctrl+T toggles the last block, hidden mode and `/think on|off` removed
+
+A review of the shipped fold model (user decision, same day) tightened the
+TUI surface. The Decision above is amended in place; this records what
+changed and why:
+
+- **Headers are information-only.** `▸ thinking · N lines` is status — how
+  much reasoning happened. The `· Ctrl+T` suffix was keybinding tutorial: it
+  teaches once and then costs a line forever. Key hints live in `/help` and
+  the idle tips line, which already advertise Ctrl+T. A header shows a
+  count, not a tutorial.
+- **Ctrl+T toggles the most recent block** (the streaming one if open, else
+  the last completed block) instead of flipping global visibility. The
+  global toggle was a sledgehammer over per-block state that already exists:
+  it flipped everything retroactively, including blocks the user had already
+  arranged. A local action is predictable — the block that just landed opens
+  (or closes) — and useful in both directions (expand when folded, fold when
+  the stream is flooding).
+- **The TUI hidden mode is gone** (`showThinking=false`, the
+  `[thinking… Ctrl+T to show]` placeholder). Its only justification over
+  folded-headers-always was "not even one row" — too thin for a second axis:
+  reasoning runs are ~1–3 header rows *per turn*, and the folded header
+  already says the one thing the placeholder said (there was reasoning),
+  with more precision (how many lines) and more access (click to expand).
+  Every block always renders its header row.
+- **`/think on|off` removed outright** — no deprecation aliases. Bare
+  `/think` is a status line (block count + fold state); `/think
+  expand|collapse|view` remain. The data plane is untouched: the ACP `think`
+  session option and the `show_reasoning` config key keep their wire
+  contract as the thought-relay toggle (`agent_thought_chunk` updates, ACP
+  history replay), loop detection keeps consuming reasoning regardless, and
+  TUI fold state is independent of all of it.

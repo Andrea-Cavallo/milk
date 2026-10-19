@@ -217,7 +217,7 @@ New backends are appended to `agents` in `~/.milk/config.json` immediately; `/ag
 
 Persisted to config immediately, effective on next render.
 
-**/think** controls reasoning/thinking visibility (issue #208, [ADR-0067](../adr/0067-thinking-first-class-view.md)): `/think` (show current), `/think on` (reasoning inspectable as collapsible blocks — folded by default when complete, the streaming block visible live), `/think off` (show the `[thinking… Ctrl+T to show]` placeholder instead), `/think expand` / `/think collapse` (pin every block open/closed), `/think view` (swap the main area to a thinking-only stream; Esc returns). Click a block's `▸ thinking · N lines` header in the transcript to expand/collapse just that block; **Ctrl+T** toggles visibility globally. Retroactive — blocks are recorded out of band from the transcript, so toggling is instant. Default via `show_reasoning` in config (default `true`). Applies to both primary-model `<think>` blocks and Claude extended thinking; loop detection consumes reasoning regardless of visibility.
+**/think** manages reasoning/thinking blocks (issue #208, [ADR-0067](../adr/0067-thinking-first-class-view.md)): `/think` (status: block count and fold state), `/think expand` / `/think collapse` (pin every block open/closed), `/think view` (swap the main area to a thinking-only stream; Esc returns). Every reasoning run renders as a fold container whose header is information-only — `▸ thinking · N lines` folded, `▾ thinking · N lines · streaming` while open — collapsed by default once complete, with the still-streaming block open live. Click a header to expand/collapse just that block; **Ctrl+T** toggles the most recent block (the streaming one, if any). There is no hidden mode: headers always render. `/think on|off` were removed with the fold model (a `/think on|off` typed in the TUI answers with a pointer to the fold commands). Applies to both primary-model `<think>` blocks and Claude extended thinking; loop detection consumes reasoning regardless of fold state. Over ACP, `/think on|off` keeps its data-plane meaning — relay or withhold `agent_thought_chunk` thought updates — the same state as the `think` session config option, seeded from `show_reasoning`; TUI fold state is independent of it.
 
 **/need** sets the current session goal (`/need <one-sentence goal>`); the primary agent calls this automatically when the user states a new objective. Shown in the memory panel and injected into escalation context.
 
@@ -315,7 +315,7 @@ See [/colorize](#interactive-mode) above for the four modes and their behavior.
 
 ### `show_reasoning` field
 
-Default visibility of thinking/reasoning blocks; see [/think](#interactive-mode) above.
+The default for the ACP `think` session option: whether thinking/reasoning tokens relay to ACP clients as `agent_thought_chunk` updates (and are replayed in ACP history). The TUI always renders reasoning as foldable blocks — its fold state is independent of this field. See [/think](#interactive-mode) above.
 
 ### `copy_on_select` field
 
