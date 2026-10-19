@@ -1796,7 +1796,14 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	// msgs and userMsgIdx change during the loop (compaction, appends); the
 	// deferred capture reads their final values.
 	defer func() { a.turnTrail = TrailFromMessages(msgs, userMsgIdx) }()
+	// Duplicate-detector memory (issue #256), both scoped to "since the last
+	// state change" (resetExecutedKeysAfterStateChange clears them whenever a
+	// batch may have changed the world): executedKeys tracks state-capable
+	// calls exactly — one identical repeat is evidence — while readOnlyCounts
+	// counts read-only call occurrences, evidence only past
+	// readOnlyRepeatLimit.
 	executedKeys := map[string]bool{}
+	readOnlyCounts := map[string]int{}
 	var lastReasoningText string // track across iterations for the max-iter fallback
 	var streak streakState       // reasoning/tool-call loop detection
 	var textLoop textLoopTracker // output-text loop detection
@@ -2084,25 +2091,41 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		// call with identical arguments is unambiguous evidence of a stuck
 		// loop in any calling context — unlike the reasoning-based detectors
 		// below, it has no legitimate cross-pass false-positive case.
-		// Read-only tools (read_file, list_dir, grep) are excluded from
-		// duplicate detection — re-reading is always legitimate (read-edit-verify,
-		// cross-referencing, context refresh). Only write/mutate tools are tracked.
-		allSeen := true
-		hasWriteTool := false
+		//
+		// Evidence standard (issue #256): a repeat only counts while nothing
+		// could have changed in between. Read-only calls (isReadOnlyTool) are
+		// never evidence in a mixed batch — re-reading is always legitimate
+		// (read-edit-verify, cross-referencing, context refresh) — and a pure
+		// read-only batch is evidence only after readOnlyRepeatLimit identical
+		// executions with no state change in between (see
+		// resetExecutedKeysAfterStateChange: file edits AND any bash call reset
+		// the memory, since state changes made through bash — git checkout,
+		// gh pr merge, … — used to make legitimate re-checks look like loops).
+		hasTracked := false
+		unseen := false
 		for _, tc := range toolCalls {
-			switch tc.Function.Name {
-			case "read_file", "list_dir", "grep", "current_need":
+			if isReadOnlyTool(tc.Function.Name) {
 				continue
 			}
-			hasWriteTool = true
-			key := tc.Function.Name + "\x00" + tc.Function.Arguments
-			if !executedKeys[key] {
-				allSeen = false
-				break
+			hasTracked = true
+			if !executedKeys[tc.Function.Name+"\x00"+tc.Function.Arguments] {
+				unseen = true
 			}
 		}
-		if !hasWriteTool {
-			allSeen = false // pure read batches are never duplicates
+		var allSeen bool
+		if hasTracked {
+			allSeen = !unseen // mixed batch: read-only members never block the match
+		} else {
+			// Pure read-only batch: cheap and legitimate to repeat, so only a
+			// literal repeat of every call readOnlyRepeatLimit times over (with
+			// no state change in between) is evidence of a loop.
+			allSeen = true
+			for _, tc := range toolCalls {
+				if readOnlyCounts[tc.Function.Name+"\x00"+tc.Function.Arguments] < readOnlyRepeatLimit {
+					allSeen = false
+					break
+				}
+			}
 		}
 		if allSeen {
 			duplicateRecoveryCount++
@@ -2122,14 +2145,15 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		}
 		duplicateRecoveryCount = 0
 		for _, tc := range toolCalls {
-			// Skip read-only tools — re-reading files is always legitimate
-			// (read-edit-verify pattern, cross-referencing, etc.). Only
-			// track write/mutate tools for duplicate detection.
-			switch tc.Function.Name {
-			case "read_file", "list_dir", "grep", "current_need":
+			// State-capable calls are tracked exactly (one identical repeat
+			// is evidence); read-only calls only accumulate occurrence counts
+			// for the pure-read threshold above (issue #256).
+			key := tc.Function.Name + "\x00" + tc.Function.Arguments
+			if isReadOnlyTool(tc.Function.Name) {
+				readOnlyCounts[key]++
 				continue
 			}
-			executedKeys[tc.Function.Name+"\x00"+tc.Function.Arguments] = true
+			executedKeys[key] = true
 		}
 
 		if a.onResponseSegment != nil && resp != "" {
@@ -2142,11 +2166,11 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 			return msgs, toolErr
 		}
 
-		// Invalidate read_file entries for files that were just edited/written.
-		// This prevents re-reads after edits from being flagged as duplicates
-		// (the read-edit-verify pattern is legitimate and expected).
-		invalidateReadsForEditedFiles(executedKeys, toolCalls)
-		resetExecutedKeysAfterMutation(executedKeys, toolCalls)
+		// Forget earlier calls once the batch may have changed the world
+		// (file writes, or any bash call — its effects are opaque), so a
+		// verification command re-run after an edit/commit/merge is never a
+		// "repeat" (issue #256).
+		resetExecutedKeysAfterStateChange(executedKeys, readOnlyCounts, toolCalls)
 
 		// Loop streak detection: reasoning models (mimo-v2.5, DeepSeek) can
 		// get stuck producing near-identical reasoning that drives
@@ -2938,18 +2962,36 @@ Action streak detected: %s. You are stuck in a non-progressing loop. Stop and tr
 	return msgs, nil
 }
 
-// isParallelSafeTool reports whether a tool call is pure-read and therefore
-// safe to run concurrently with other reads in the same batch (ADR-0062).
-// Anything not listed here — writes, shell, network, orchestration, memory
-// writes, MCP tools — is a barrier executed alone, in order.
-func isParallelSafeTool(name string) bool {
+// isReadOnlyTool reports whether a tool call cannot change any state the
+// loop detectors care about — the single read/write classification the
+// duplicate-tool-call detector and the ADR-0062 barrier model share (issue
+// #256: the detector's old four-name exemption list flagged legitimate
+// re-checks of get_session_context/find_files/bash_output as loops). A tool
+// absent from this list is state-capable and may be loop evidence.
+func isReadOnlyTool(name string) bool {
 	switch name {
 	case "read_file", "list_dir", "grep", "find_files", "bash_output",
-		"get_memory", "list_memory", "get_session_context", "get_context_stats",
-		"get_metrics", "search_signals", "list_tasks", "milk_config_help":
+		"web_fetch", "open_file", "get_memory", "list_memory",
+		"get_session_context", "get_context_stats", "get_metrics",
+		"search_signals", "list_tasks", "status_background_agent",
+		"wait_background_agent", "milk_config_help", "current_need":
 		return true
 	}
 	return false
+}
+
+// isParallelSafeTool reports whether a tool call is pure-read and therefore
+// safe to run concurrently with other reads in the same batch (ADR-0062):
+// the read-only set minus network, GUI and blocking reads. Anything else —
+// writes, shell, orchestration, memory writes, MCP tools — is a barrier
+// executed alone, in order.
+func isParallelSafeTool(name string) bool {
+	switch name {
+	case "web_fetch", "open_file", "current_need",
+		"status_background_agent", "wait_background_agent":
+		return false
+	}
+	return isReadOnlyTool(name)
 }
 
 // isCancellingTool reports whether a failed call aborts the rest of the batch
@@ -3539,18 +3581,26 @@ func summarizeToolTrailWithHeader(msgs []Message, resp, header string) string {
 	return b.String()
 }
 
-// resetExecutedKeysAfterMutation forgets every earlier call once a batch has
-// changed files, keeping only that batch's own keys. A repeat is evidence of a
-// stuck loop only while nothing changed in between: a verification command
-// (go build, go test, git diff, cat) re-run after an edit is the normal
-// edit-verify cycle, and flagging it used to trigger loop recovery mid-turn.
-// The batch's own keys stay so that re-issuing the same edit immediately is
-// still caught.
-func resetExecutedKeysAfterMutation(executedKeys map[string]bool, toolCalls []toolCall) {
+// resetExecutedKeysAfterStateChange forgets every earlier call once a batch
+// may have changed the world, keeping only that batch's own tracked keys. A
+// repeat is evidence of a stuck loop only while nothing changed in between:
+// a verification command (go build, go test, git diff, cat) re-run after an
+// edit is the normal edit-verify cycle, and flagging it used to trigger loop
+// recovery mid-turn.
+//
+// State changes through bash count the same as file edits (issue #256): the
+// command's effects are opaque, so any bash call may have changed the world
+// (git checkout, gh pr merge, git pull, …) and a legitimate re-check batch
+// repeated across it must not read as a loop. The safe direction: an
+// unclassifiable bash resets the memory, so a genuine bash-only loop is
+// caught by the doom-loop gate (3 identical consecutive batches) and the
+// try-best tracker instead. The batch's own keys stay so that re-issuing the
+// same call immediately is still caught.
+func resetExecutedKeysAfterStateChange(executedKeys map[string]bool, readOnlyCounts map[string]int, toolCalls []toolCall) {
 	mutated := false
 	for _, tc := range toolCalls {
 		switch tc.Function.Name {
-		case "edit_file", "multiedit", "write_file", "delete_file", "move_file":
+		case "edit_file", "multiedit", "write_file", "delete_file", "move_file", "bash":
 			mutated = true
 		}
 	}
@@ -3558,40 +3608,12 @@ func resetExecutedKeysAfterMutation(executedKeys map[string]bool, toolCalls []to
 		return
 	}
 	clear(executedKeys)
+	clear(readOnlyCounts)
 	for _, tc := range toolCalls {
-		switch tc.Function.Name {
-		case "read_file", "list_dir", "grep", "current_need":
+		if isReadOnlyTool(tc.Function.Name) {
 			continue
 		}
 		executedKeys[tc.Function.Name+"\x00"+tc.Function.Arguments] = true
-	}
-}
-
-// invalidateReadsForEditedFiles clears executedKeys entries for read_file
-// calls on paths that were just edited or written. This prevents re-reads
-// after edits from being flagged as duplicate tool calls — the
-// read-edit-verify pattern is legitimate and expected in coding workflows.
-func invalidateReadsForEditedFiles(executedKeys map[string]bool, toolCalls []toolCall) {
-	// Collect paths that were edited/written in this batch.
-	editedPaths := map[string]bool{}
-	for _, tc := range toolCalls {
-		switch tc.Function.Name {
-		case "edit_file", "multiedit", "write_file":
-			var args struct {
-				Path string `json:"path"`
-			}
-			if json.Unmarshal([]byte(tc.Function.Arguments), &args) == nil && args.Path != "" {
-				editedPaths[args.Path] = true
-			}
-		}
-	}
-	if len(editedPaths) == 0 {
-		return
-	}
-	// Clear read_file entries for any path that was just edited.
-	for path := range editedPaths {
-		readKey := "read_file\x00" + `{"path":"` + path + `"}`
-		delete(executedKeys, readKey)
 	}
 }
 

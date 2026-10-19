@@ -337,6 +337,15 @@ const (
 // signal, higher threshold).
 const duplicateToolMaxRecovery = 5
 
+// readOnlyRepeatLimit is how many times one identical read-only tool call may
+// execute before a further identical one counts as duplicate evidence (issue
+// #256). Re-reading is legitimate (read-edit-verify, cross-referencing,
+// context refresh), so read-only calls share none of the write-tool
+// threshold of 1: a pure read-only batch is nudged only after this many
+// executions with no state change in between — and any file write or bash
+// call resets the counts (resetExecutedKeysAfterStateChange).
+const readOnlyRepeatLimit = 3
+
 // ngramMaxRecovery is the number of n-gram repetition detections allowed
 // before terminating the turn. Sized similarly to MiMo-Code's
 // TEXT_NGRAM_MAX_RECOVERY.
