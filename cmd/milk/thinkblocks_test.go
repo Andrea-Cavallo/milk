@@ -369,9 +369,10 @@ func TestThinkBlocks_NewBlockKeepsFoldStatus(t *testing.T) {
 func TestThinkBlocks_NewTurnCollapsesPreviousTurnBlocks(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.appendThinkingStreamed("one\n")
+	m.toggleThinkBlock(0) // open + pin → the status is open
 	m.appendTranscript("a\n")
-	m.appendThinkingStreamed("two\n")
-	m.toggleThinkBlock(1) // watch mode: the status is open
+	m.appendThinkingStreamed("two\n") // inherits the open status
+	m.toggleThinkBlock(1)             // fold it → the status is folded again
 	m.appendTranscript("b\n")
 	// The turn boundary as dispatchAgent runs it:
 	m.closeOpenThinkBlock()
@@ -386,10 +387,36 @@ func TestThinkBlocks_NewTurnCollapsesPreviousTurnBlocks(t *testing.T) {
 	if strings.Contains(d, "one\n") || strings.Contains(d, "two\n") {
 		t.Errorf("collapsed bodies must not render after the tidy, got %q", d)
 	}
-	// The status survived the tidy: the new turn's first block arrives open.
+	// The tidy is display-only: the folded status stays, so the new turn's
+	// blocks arrive folded.
 	m.appendThinkingStreamed("three\n")
-	if !m.thinkBlocks[2].expanded {
+	if m.thinkBlocks[2].expanded {
 		t.Errorf("the tidy must not change the fold status, got %+v", m.thinkBlocks[2])
+	}
+}
+
+// /think expand means "expand all" and thereby defines the current default:
+// the turn-boundary tidy does not run in that mode — it would fold the very
+// blocks the command just expanded.
+func TestThinkBlocks_ExpandAllOptsOutOfTurnTidy(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.appendThinkingStreamed("one\n")
+	m.appendTranscript("a\n")
+	m.setAllThinkBlocks(true) // /think expand — the default is now expanded
+	// The turn boundary as dispatchAgent runs it:
+	m.closeOpenThinkBlock()
+	m.collapseThinkBlocksBefore(len(m.thinkBlocks))
+	m.thinkBlocksTurnStart = len(m.thinkBlocks)
+	if !m.thinkBlocks[0].expanded || !m.thinkBlocks[0].userSet {
+		t.Errorf("/think expand must survive the turn boundary, got %+v", m.thinkBlocks[0])
+	}
+	if d := m.transcriptDisplay(); !strings.Contains(d, "one\n") {
+		t.Errorf("expanded body must still render after the boundary, got %q", d)
+	}
+	// And the default carries on: the new turn's blocks arrive expanded.
+	m.appendThinkingStreamed("two\n")
+	if !m.thinkBlocks[1].expanded {
+		t.Errorf("new blocks must keep the expand-all status, got %+v", m.thinkBlocks[1])
 	}
 }
 

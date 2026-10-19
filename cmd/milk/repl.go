@@ -732,7 +732,8 @@ type model struct {
 	// reasoning block is created in this state (it keeps the folding status
 	// the previous block was left in). Updated only by explicit fold actions
 	// (header click, Ctrl+T, /think expand|collapse); the turn-boundary tidy
-	// that collapses previous turns' blocks does not change it (ADR-0067).
+	// that collapses previous turns' blocks does not change it — and does
+	// not run while it is open (/think expand defines the current default).
 	thinkFoldOpen bool
 
 	// showTips toggles the idle tip line below the input (ADR-0061, /tips).
@@ -3750,9 +3751,9 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 	m.currentTurnInputChars = 0
 	m.currentTurnThinking.Reset()
 	m.closeOpenThinkBlock()
-	// Turn-boundary tidy: the new turn collapses the previous turns' blocks.
-	// Display-only — thinkFoldOpen (the status new blocks are created with)
-	// is deliberately untouched.
+	// Turn-boundary tidy: the new turn collapses the previous turns' blocks —
+	// only while the fold status is folded (/think expand defines the current
+	// default and opts out). Display-only — thinkFoldOpen is untouched.
 	m.collapseThinkBlocksBefore(len(m.thinkBlocks))
 	m.thinkBlocksTurnStart = len(m.thinkBlocks)
 	m.loopInterrupt = false

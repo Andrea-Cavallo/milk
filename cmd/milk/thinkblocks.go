@@ -39,9 +39,10 @@ import (
 //     swaps in a thinking-only stream.
 //   - A new block keeps the session's current folding status (model
 //     thinkFoldOpen — the status the previous block was left in): folded by
-//     default, open-and-pinned while the user is watching. Turn boundaries
-//     collapse the previous turns' blocks (a display tidy) without changing
-//     that status.
+//     default, open-and-pinned while the user is watching. While that status
+//     is folded, turn boundaries collapse the previous turns' blocks (a
+//     display tidy that never changes the status); /think expand defines the
+//     current default and opts the tidy out.
 //   - Fold containers render on their own background (the thinking surface:
 //     ansiThinkBg) so the thinking region reads as a different surface from
 //     the standard transcript, at every fold state.
@@ -300,11 +301,15 @@ func (m *model) setAllThinkBlocks(expanded bool) {
 }
 
 // collapseThinkBlocksBefore folds every block before index n — the
-// turn-boundary tidy (a new turn collapses the previous turns' blocks). It is
-// display-only: thinkFoldOpen, the status new blocks are created with, is
-// deliberately untouched — the tidy must not silently flip the user's
-// watch/fold preference.
+// turn-boundary tidy (a new turn collapses the previous turns' blocks). It
+// applies only while the session's fold status is folded: /think expand means
+// "expand all" and thereby defines the current default, and a tidy that
+// folded the very blocks it just expanded would contradict it. Display-only
+// either way: thinkFoldOpen is deliberately untouched.
 func (m *model) collapseThinkBlocksBefore(n int) {
+	if m.thinkFoldOpen {
+		return
+	}
 	if n > len(m.thinkBlocks) {
 		n = len(m.thinkBlocks)
 	}

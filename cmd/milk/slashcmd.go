@@ -333,7 +333,8 @@ var helpBlocks = []helpBlock{
              reasoning renders as foldable blocks on their own background,
              folded by default — the header's line count updates live while
              streaming; click a ▸ header to toggle just that block (new blocks
-             keep that fold state; a new turn folds the previous turns' blocks);
+             keep that fold state; while folded, a new turn folds the previous
+             turns' blocks — /think expand opts the tidy out);
              /think expand|collapse folds or opens them all
 
   Notifications
