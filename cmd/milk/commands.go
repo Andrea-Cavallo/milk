@@ -101,6 +101,9 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	if cmd == cmdBg {
 		return m.handleBgCmd(strings.TrimSpace(rest))
 	}
+	if cmd == cmdRestart {
+		return m.handleRestartCmd(strings.TrimSpace(rest))
+	}
 	if cmd == "/help" {
 		output := renderHelp(interactiveHelp, m.vpWidth())
 		m.colorizeForce = true
@@ -388,6 +391,60 @@ func renderBgList(jobs []local.Job, shells []local.ShellInfo) string {
 		}
 	}
 	return sb.String()
+}
+
+// handleRestartCmd runs /restart (issue #258): relaunch milk with the very
+// same starting command, pinning the current session. Refused while
+// anything is running — the process is about to be replaced. On success the
+// TUI quits with m.restartPlan armed; runREPL performs the actual exec after
+// the terminal is restored.
+func (m model) handleRestartCmd(rest string) (tea.Model, tea.Cmd) {
+	if rest != "" {
+		m.appendTranscript(milkTag() + " usage: /restart\n")
+		return m, nil
+	}
+	if reason := m.restartBusyReason(); reason != "" {
+		m.appendTranscript(fmt.Sprintf("%s /restart refused — %s. Finish or cancel it first (Ctrl+C, /bg stop), then /restart.\n", milkTag(), reason))
+		return m, nil
+	}
+	sessID := ""
+	if m.st != nil && m.st.sess != nil {
+		sessID = m.st.sess.ID
+	}
+	plan := capturedLaunch.planRestart(sessID)
+	m.restartPlan = &plan
+	m.appendTranscript(fmt.Sprintf("%s restarting: %s\n", milkTag(), plan.Why))
+	return m, tea.Quit
+}
+
+// restartBusyReason reports the in-flight work that blocks /restart ("" =
+// idle): a turn, a PTY shell pane, a workflow, background agents or
+// background shells — anything whose state would be lost or orphaned by the
+// process swap.
+func (m model) restartBusyReason() string {
+	if m.busy {
+		return "a turn is running"
+	}
+	if m.ptyPane != nil {
+		return "a shell pane is running"
+	}
+	if m.workflowRunning {
+		return "a workflow is running"
+	}
+	if st := m.workflowState; st != nil && st.WorkflowName != "" && st.Role != "done" {
+		return "a workflow is active"
+	}
+	if m.agents.backgroundMgr != nil {
+		if n := m.agents.backgroundMgr.ActiveCount(); n > 0 {
+			return fmt.Sprintf("%d background agent(s) running", n)
+		}
+	}
+	for _, s := range local.BackgroundShells() {
+		if s.Running {
+			return fmt.Sprintf("background shell %s (%s) is running", s.ID, s.Command)
+		}
+	}
+	return ""
 }
 
 // handleReloadCmd re-parses config.json immediately and sends a configReloadMsg.

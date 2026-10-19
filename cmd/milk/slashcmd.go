@@ -207,6 +207,9 @@ var commandRegistry = []cmdSpec{
   /update status         show the update state and the available release
   /update install        download and apply the pending update (then restart)
   /update skip           stop offering the pending release (never announced again)`},
+	{name: cmdRestart, hosts: hostTUI, desc: "quit and relaunch milk with the same starting command", help: `  /restart              quit and relaunch milk — same command, same session
+                         (via ` + "`task run`" + ` rebuild when launched that way; refused while a turn,
+                         job, workflow or shell is running)`},
 	{name: cmdWorkflow, hosts: hostBoth, desc: "run a workflow, or resume, inspect or clear the saved one", hint: "<name> <task> [--<role> <agent>] | resume | status | cancel | reconfigure | clear", help: `  /workflow                                          list available workflows
   /workflow <name> [<task>] [--<role> <agent> ...]   start a registered workflow, e.g. dev (designer→generator→evaluator),
                                                       pair (adds a user checkpoint before each verdict), swarm (concurrent
@@ -302,7 +305,7 @@ var helpBlocks = []helpBlock{
 	{header: "── Server ────────────────────────────────────────────────────────────────", names: []string{cmdServer}},
 	{header: "── Setup ─────────────────────────────────────────────────────────────────", names: []string{cmdConfig, cmdInit, cmdReload, cmdOpen, cmdSetup}},
 	{header: "── Attachments ──────────────────────────────────────────────────────────", names: []string{cmdAttach, cmdPaste}},
-	{header: "── General ──────────────────────────────────────────────────────────────", names: []string{"/help", cmdUpdate, "/exit"}},
+	{header: "── General ──────────────────────────────────────────────────────────────", names: []string{"/help", cmdUpdate, cmdRestart, "/exit"}},
 	{header: "── Multi-value parameters ───────────────────────────────────────────────", note: `  The server and agent name parameters of /mcp assign|unassign (both
   sides of "for") and the "for <agent>|global" scope of
   /agent tool enable|disable|add|remove accept comma separated lists,

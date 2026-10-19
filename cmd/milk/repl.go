@@ -953,6 +953,11 @@ type model struct {
 	// quit confirmation state
 	quitPending bool
 
+	// restartPlan is armed when /restart quits the TUI (issue #258): runREPL
+	// relaunches with this plan after the program exits and the terminal is
+	// restored. See restart_core.go.
+	restartPlan *RestartPlan
+
 	// pendingForceFresh is set to true in dispatchAgent when the turn begins with
 	// ForceFreshEscalation so that handleAgentDone can zero lastEscalationContextHash
 	// after the turn completes, preventing a stale hash from suppressing the fresh
@@ -4158,6 +4163,10 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 // --- runREPL entry point ---
 
 func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSession string, startupWarning string) error {
+	// Capture the launch state before anything can switch directories
+	// (/resume into another project) — /restart replays exactly this
+	// (issue #258).
+	capturedLaunch = captureLaunchInfo()
 	sess, err := openSession(cwd, initialFlagNew, initialFlagSession)
 	if err != nil {
 		return fmt.Errorf("loading session: %w", err)
@@ -4726,6 +4735,14 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	if mem != nil {
 		_ = mem.Consolidate()
 		_ = mem.PruneGlobal(cfg.PerceptStoreSizeLimit())
+	}
+	// /restart (issue #258): the TUI quit with a relaunch plan armed. The
+	// terminal is restored above (p.Run teardown + mouse-mode reset), so the
+	// exec happens here — it never returns on success.
+	if fm, ok := finalModel.(model); ok && fm.restartPlan != nil {
+		if rerr := execRestart(fm.restartPlan.Argv, fm.restartPlan.Dir); rerr != nil {
+			return fmt.Errorf("restart failed: %w", rerr)
+		}
 	}
 	return err
 }
