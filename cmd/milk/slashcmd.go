@@ -330,8 +330,10 @@ var helpBlocks = []helpBlock{
   Agent control
     Ctrl+C   interrupt current agent turn (or copy if selection is active)
     Ctrl+T   toggle the most recent thinking block (the streaming one, if any)
-             reasoning renders as foldable blocks — click a ▸ header to toggle
-             just that block; /think expand|collapse folds or opens them all
+             reasoning renders as foldable blocks, folded by default — the
+             header's line count updates live while streaming; click a ▸ header
+             to toggle just that block; /think expand|collapse folds or opens
+             them all
 
   Notifications
     Ctrl+G                      dismiss all open notification toasts

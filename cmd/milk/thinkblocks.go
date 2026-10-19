@@ -26,13 +26,16 @@ import (
 //     no placeholder line: the header already shows the one thing a hidden
 //     stand-in could say (how much reasoning there is), so the quietest
 //     rendering is still informative.
-//   - A completed block is folded by default (issue #208: long reasoning must
-//     not flood the transcript). The block that is still streaming stays open
-//     so reasoning can be watched live; it folds when it closes unless the
-//     user pinned it open.
+//   - A block is folded by default — streaming or complete alike (issue #208:
+//     long reasoning must not flood the transcript). There is no auto-open:
+//     while reasoning streams in, the folded header's line count updates
+//     live ("▸ thinking · N lines"), and the body shows only when the user
+//     opens the block. A block the user never touched stays folded when it
+//     closes.
 //   - Clicking a fold header — or Ctrl+T for the most recent block — toggles
 //     just that block; per-block state is remembered (userSet pins it against
-//     auto-fold). /think expand|collapse pin all blocks at once, /think view
+//     auto-fold), so a block opened mid-stream STAYS open when streaming
+//     ends. /think expand|collapse pin all blocks at once, /think view
 //     swaps in a thinking-only stream.
 //
 // Consumption/display separation is preserved: loop detection and the session
@@ -58,10 +61,14 @@ type thinkBlock struct {
 	// followed, or the turn ended). While open the block is the transcript's
 	// last content.
 	closed bool
-	// expanded is true while the body is rendered.
+	// expanded is true while the body is rendered. Blocks open folded —
+	// streaming ones included — so a true here is always a user choice
+	// (header click, Ctrl+T, /think expand) except in the force-expanded
+	// /think view copy.
 	expanded bool
 	// userSet pins the expand state the user chose (fold-header click,
-	// /think expand|collapse) so auto-fold-on-close no longer overrides it.
+	// /think expand|collapse) so close-on-stream-end no longer overrides it:
+	// a block the user opened while streaming stays open past its close.
 	userSet bool
 }
 
@@ -103,8 +110,11 @@ func lineLabel(n int) string {
 }
 
 // thinkHeader renders the one-line fold header for a block: glyph, line
-// count, and — while the block is still streaming — a streaming marker. The
-// header is information-only; it never carries a key hint.
+// count, and — on a block the user opened while it is still streaming — a
+// streaming marker. A folded block renders the same header line whether it is
+// streaming or complete: the line count is the live signal (it ticks up as
+// reasoning arrives). The header is information-only; it never carries a key
+// hint.
 func thinkHeader(b *thinkBlock, streaming bool) string {
 	n := lineLabel(b.thinkLines())
 	if b.expanded {
@@ -245,8 +255,9 @@ func (m *model) setAllThinkBlocks(expanded bool) {
 }
 
 // closeOpenThinkBlock ends the streaming block (regular content or turn end
-// followed): it folds unless the user pinned it open. No-op when nothing is
-// open.
+// followed). A block the user never touched stays folded (it was folded all
+// along — no auto-open exists to undo); a block the user opened stays open
+// (userSet pins against the close). No-op when nothing is open.
 func (m *model) closeOpenThinkBlock() {
 	for i := range m.thinkBlocks {
 		b := &m.thinkBlocks[i]

@@ -8,24 +8,31 @@ import (
 // Thinking-as-a-view tests (ADR-0067, issue #208): blocks live out of band,
 // render as fold containers, fold on close, and stay click-toggleable.
 
-func TestThinkBlocks_StreamIntoBlockThenFoldOnClose(t *testing.T) {
+func TestThinkBlocks_StreamIntoFoldedBlock(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.appendThinkingStreamed("first\nsecond\n")
 	disp := m.transcriptDisplay()
-	if !strings.Contains(disp, thinkExpandedPrefix+"2 lines · streaming") {
-		t.Errorf("streaming block must render an open header, got %q", disp)
+	// Folded by default while streaming — same single header line as a
+	// completed block, with the live line count.
+	if !strings.Contains(disp, thinkFoldedPrefix+"2 lines") {
+		t.Errorf("streaming block must render its folded header, got %q", disp)
 	}
-	if !strings.Contains(disp, "first\nsecond") {
-		t.Errorf("streaming block body must be visible while open, got %q", disp)
+	if strings.Contains(disp, "first\nsecond") {
+		t.Errorf("streaming block body must not render unless opened, got %q", disp)
 	}
-	// Regular content closes the block: it folds to its header and the body
-	// is gone from the display (inspectable via expand, not dumped inline).
+	// The count ticks up live as reasoning arrives.
+	m.appendThinkingStreamed("third\n")
+	if disp = m.transcriptDisplay(); !strings.Contains(disp, thinkFoldedPrefix+"3 lines") {
+		t.Errorf("folded header must update its line count live, got %q", disp)
+	}
+	// Regular content closes the block: it stays folded to its header and the
+	// body is gone from the display (inspectable via expand, not dumped inline).
 	m.appendTranscript("the answer\n")
 	disp = m.transcriptDisplay()
-	if !strings.Contains(disp, thinkFoldedPrefix+"2 lines") {
-		t.Errorf("completed block must fold to its header, got %q", disp)
+	if !strings.Contains(disp, thinkFoldedPrefix+"3 lines") {
+		t.Errorf("completed block must render its folded header, got %q", disp)
 	}
-	if strings.Contains(disp, "first") || strings.Contains(disp, "second") {
+	if strings.Contains(disp, "first") || strings.Contains(disp, "third") {
 		t.Errorf("folded body must not render, got %q", disp)
 	}
 	// The transcript buffer itself holds only regular text — no dim escapes,
@@ -75,18 +82,29 @@ func TestThinkBlocks_NoHiddenMode(t *testing.T) {
 }
 
 // Fold headers are information-only: glyph, line count, fold/streaming
-// state — never a key hint (key hints live in /help and the tips line).
+// state — never a key hint (key hints live in /help and the tips line). A
+// folded block renders the same header whether streaming or complete; the
+// streaming marker appears only on a block the user opened mid-stream.
 func TestThinkBlockHeaders_InfoOnly(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.appendThinkingStreamed("one\ntwo\nthree\n")
 	disp := m.transcriptDisplay()
+	if !strings.Contains(disp, thinkFoldedPrefix+"3 lines") {
+		t.Errorf("streaming header must be the folded line with the count, got %q", disp)
+	}
+	if strings.Contains(disp, "· streaming") {
+		t.Errorf("folded streaming header must look like a completed one, got %q", disp)
+	}
+	// Opened explicitly mid-stream: the expanded header carries the marker.
+	m.toggleThinkBlock(0)
+	disp = m.transcriptDisplay()
 	if !strings.Contains(disp, thinkExpandedPrefix+"3 lines · streaming") {
-		t.Errorf("streaming header must carry the line count, got %q", disp)
+		t.Errorf("opened streaming header must carry the marker, got %q", disp)
 	}
 	m.appendTranscript("done\n")
 	disp = m.transcriptDisplay()
-	if !strings.Contains(disp, thinkFoldedPrefix+"3 lines") {
-		t.Errorf("folded header must carry the line count, got %q", disp)
+	if !strings.Contains(disp, thinkExpandedPrefix+"3 lines") || strings.Contains(disp, "· streaming") {
+		t.Errorf("completed header must drop the streaming marker, got %q", disp)
 	}
 	if strings.Contains(disp, "Ctrl+T") || strings.Contains(disp, "/think") {
 		t.Errorf("headers must not carry key hints, got %q", disp)
@@ -95,29 +113,38 @@ func TestThinkBlockHeaders_InfoOnly(t *testing.T) {
 
 // Ctrl+T toggles the most recent block — the streaming one while reasoning
 // is arriving, else the last completed block — and pins it like a header
-// click (explicit action wins over the auto-fold rules).
+// click (explicit action wins over the auto-fold rules). Streaming blocks
+// start folded like everything else; opening one mid-stream pins it against
+// the close, so it stays open when streaming ends.
 func TestToggleLastThinkBlock_TogglesMostRecent(t *testing.T) {
 	m := newTestModelForPanels(t)
-	m.appendThinkingStreamed("first\n") // streaming block opens live
-	if !m.thinkBlocks[0].expanded {
-		t.Fatal("streaming block must open live")
+	m.appendThinkingStreamed("first\n") // folded by default while streaming
+	if m.thinkBlocks[0].expanded {
+		t.Fatal("streaming block must start folded — no auto-open")
 	}
-	m = m.toggleLastThinkBlock() // folds the streaming block
-	if m.thinkBlocks[0].expanded || !m.thinkBlocks[0].userSet {
-		t.Errorf("Ctrl+T must fold and pin the streaming block, got %+v", m.thinkBlocks[0])
+	m = m.toggleLastThinkBlock() // opens + pins the streaming block
+	if !m.thinkBlocks[0].expanded || !m.thinkBlocks[0].userSet {
+		t.Errorf("Ctrl+T must open and pin the streaming block, got %+v", m.thinkBlocks[0])
 	}
 	m.appendTranscript("done\n")
+	if !m.thinkBlocks[0].expanded {
+		t.Error("a block the user opened mid-stream must stay open when streaming ends")
+	}
 	m.appendThinkingStreamed("second\n")
 	m = m.toggleLastThinkBlock() // the streaming block again, not block 0
-	if m.thinkBlocks[1].expanded {
+	if !m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
 		t.Error("Ctrl+T must toggle the streaming block, not a completed one")
+	}
+	m = m.toggleLastThinkBlock() // fold it again, still pinned
+	if m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
+		t.Errorf("Ctrl+T must fold and pin the streaming block, got %+v", m.thinkBlocks[1])
 	}
 	m.appendTranscript("done\n")
 	m = m.toggleLastThinkBlock() // nothing open → the last block
 	if !m.thinkBlocks[1].expanded || !m.thinkBlocks[1].userSet {
 		t.Errorf("Ctrl+T with nothing streaming must toggle the last block, got %+v", m.thinkBlocks[1])
 	}
-	if !m.thinkBlocks[0].userSet || m.thinkBlocks[0].expanded {
+	if !m.thinkBlocks[0].userSet || !m.thinkBlocks[0].expanded {
 		t.Errorf("earlier blocks must be untouched, got %+v", m.thinkBlocks[0])
 	}
 }
@@ -196,18 +223,24 @@ func TestThinkBlocks_PromotedReasoningDropped(t *testing.T) {
 }
 
 // A block pinned open mid-stream stays open past its close: the fold is
-// per-block state (userSet wins over auto-fold), not a global mode.
+// per-block state (userSet wins over the close), not a global mode. A block
+// the user never touched stays folded.
 func TestThinkBlocks_PinnedOpenSurvivesClose(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.appendThinkingStreamed("watching\n")
-	m.toggleThinkBlock(0) // fold
-	m.toggleThinkBlock(0) // pin open again
+	m.toggleThinkBlock(0) // open + pin while streaming
 	m.appendTranscript("done\n")
 	if !m.thinkBlocks[0].expanded || !m.thinkBlocks[0].userSet {
 		t.Fatalf("a block pinned open must stay expanded after close, got %+v", m.thinkBlocks[0])
 	}
 	if d := m.transcriptDisplay(); !strings.Contains(d, "watching") {
 		t.Errorf("pinned body must render, got %q", d)
+	}
+	// The block the user never touched stays folded.
+	m.appendThinkingStreamed("quiet\n")
+	m.appendTranscript("done\n")
+	if m.thinkBlocks[1].expanded {
+		t.Errorf("an untouched block must stay folded, got %+v", m.thinkBlocks[1])
 	}
 }
 

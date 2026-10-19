@@ -483,8 +483,9 @@ func (m model) handleColorizeCmd(arg string) model {
 
 // handleThinkCmd handles `/think [expand|collapse|view]` — the fold surface
 // of the think-block model (ADR-0067). There is no visibility toggle any
-// more: every block always renders its header row (folded once complete,
-// open while streaming), so /think on|off are gone. The bare query answers in
+// more: every block always renders its header row, folded by default —
+// streaming blocks included (the header's line count updates live) — so
+// /think on|off are gone. The bare query answers in
 // the transcript like every other explicit query answer; state *changes* are
 // turn-unrelated informational events → notification toasts (issue #162).
 func (m model) handleThinkCmd(arg string) (model, tea.Cmd) {
@@ -507,7 +508,7 @@ func (m model) handleThinkCmd(arg string) (model, tea.Cmd) {
 		m.appendTranscript(fmt.Sprintf("%s reasoning: %d thinking block(s) · %d expanded, %d folded  (use /think expand|collapse|view)\n",
 			milkTag(), len(m.thinkBlocks), expanded, len(m.thinkBlocks)-expanded))
 	case "on", "off":
-		m.appendTranscript(milkTag() + " /think on|off are gone — reasoning always renders as foldable blocks (open while streaming, folded when done). Use /think expand|collapse|view, or click a ▸ header / press Ctrl+T for one block.\n")
+		m.appendTranscript(milkTag() + " /think on|off are gone — reasoning always renders as foldable blocks, folded by default (the line count updates live while streaming; Ctrl+T or a ▸ header click opens one). Use /think expand|collapse|view.\n")
 	default:
 		m.appendTranscript(milkTag() + " usage: /think [expand|collapse|view]\n")
 	}

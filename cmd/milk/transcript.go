@@ -108,8 +108,10 @@ func (m *model) retractStreamed(from, to string) {
 // block (ADR-0067): the block's own buffer, not the transcript. The first
 // chunk of a reasoning run opens a block anchored at the transcript's current
 // end; the block renders as a fold container there — header always, body only
-// while expanded. The new block opens live (it is the reasoning you are
-// watching arrive) and folds on close unless pinned. Throttled like
+// while expanded. The new block opens folded like every other block (no
+// auto-open, ever): its header shows the line count live as reasoning arrives,
+// and only an explicit open (Ctrl+T / header click) shows the body — which
+// pins it open past the block's close. Throttled like
 // appendTranscriptStreamed — see model.viewportDirty.
 func (m *model) appendThinkingStreamed(text string) {
 	for i := range m.thinkBlocks {
@@ -120,9 +122,11 @@ func (m *model) appendThinkingStreamed(text string) {
 		}
 	}
 	b := thinkBlock{
-		buf:      &strings.Builder{},
-		anchor:   m.transcript.Len(),
-		expanded: true, // the streaming block is watched live; folds on close
+		buf:    &strings.Builder{},
+		anchor: m.transcript.Len(),
+		// folded by default, exactly like a completed block — the header's
+		// line count is the live signal while reasoning streams in.
+		expanded: false,
 	}
 	b.buf.WriteString(text)
 	m.thinkBlocks = append(m.thinkBlocks, b)

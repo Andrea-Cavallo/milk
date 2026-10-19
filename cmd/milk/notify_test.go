@@ -745,8 +745,8 @@ func TestToggleLastThinkBlock_CtrlTPath(t *testing.T) {
 	if len(m4.toastVisible) != len(m3.toastVisible) {
 		t.Errorf("toggling a block must not toast, visible %d -> %d", len(m3.toastVisible), len(m4.toastVisible))
 	}
-	if m4.thinkBlocks[0].expanded {
-		t.Error("Ctrl+T must fold the streaming block")
+	if !m4.thinkBlocks[0].expanded || !m4.thinkBlocks[0].userSet {
+		t.Errorf("Ctrl+T must open and pin the folded streaming block, got %+v", m4.thinkBlocks[0])
 	}
 	if strings.Contains(m4.transcript.String(), "reasoning") {
 		t.Errorf("toggle must not write to the transcript, got %q", m4.transcript.String())
