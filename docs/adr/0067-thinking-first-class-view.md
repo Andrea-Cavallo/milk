@@ -41,8 +41,8 @@ render stack into fully-typed content parts.
 - `transcriptDisplay()` splices each block in at its anchor as a **fold
   container**: a one-line header (`▸ thinking · N lines` folded,
   `▾ thinking · N lines` expanded, `· streaming` on a block opened mid-stream)
-  plus the dim
-  body only when expanded. Everything downstream (colorize + wrap +
+  plus the body only when expanded (on the thinking surface — see the third
+  Update below). Everything downstream (colorize + wrap +
   selection) runs on the display string exactly like it ran on the old
   `activeTranscript()` variant. `transcriptNoThink` and `activeTranscript()`
   are gone; `thinkingActiveInTurn` is replaced by "an open block exists".
@@ -202,3 +202,41 @@ Rationale: the transcript's default rhythm stays quiet — the header row
 already reports that (and how much) reasoning happened. Live-watching is an
 explicit per-block opt-in, and the folded header's updating count carries the
 "something is happening" signal without dumping the body on screen.
+
+## Update (2026-10-19, third pass): fold-status inheritance, turn-boundary tidy, the thinking surface, streaming-render fix
+
+Live-testing feedback (same day) refined the fold model once more — and fixed
+a render bug the model had introduced:
+
+- **A new block keeps the folding status of the previous one.** Fold state is
+  one session-wide bit (`model.thinkFoldOpen`), set only by explicit fold
+  actions (header click, Ctrl+T, `/think expand|collapse`). New blocks are
+  created in it — open-and-pinned while the user is watching, folded
+  otherwise — so open one block and the rest arrive open, fold one and the
+  next arrive folded. (Reading the status from the *previous block's row*
+  would have been self-defeating in combination with the turn-boundary tidy
+  below, which folds that row.)
+- **A new turn collapses the previous turns' blocks** (`dispatchAgent` runs
+  `collapseThinkBlocksBefore`). Display-only: the tidy deliberately does not
+  touch `thinkFoldOpen`, so watching carries into the new turn while the old
+  turns tidy up.
+- **The thinking surface.** Fold containers render on their own background
+  (`ansiThinkBg`, 256-color dark grey) at every fold state — the thinking
+  region reads as a different surface from the standard transcript. Header
+  stays dim on the surface; the body is full-contrast (the background, not
+  dimming, marks reasoning now). Applied at render time only: the transcript
+  and block buffers stay plain.
+- **Streaming-render fix (garbling).** The containers introduced a real bug:
+  `wrappedTranscript`'s fast path appended only the raw tail past its cached
+  prefix, but an open block's container is re-rendered from scratch on every
+  chunk — the header's live line count (digit rolls) and the body's per-line
+  styling (a growing partial line moves its trailing reset) rewrite bytes
+  *inside* the cached region, so the appended suffix started at shifted
+  offsets: stray escape fragments and stale counts between the streaming
+  line and the ones above it. Fix: `transcriptDisplayAt` reports where the
+  open block's container begins and the cache commit is capped there — the
+  stable prefix is committed, the streaming tail is re-wrapped fresh on
+  every render (still the cheap path; arriving-line counting for the
+  re-colorize threshold is tracked separately so the uncommitted tail does
+  not re-count itself every render). `transcriptPlainLines` now renders
+  through the same path, so click hit-testing covers the streaming block.
