@@ -12,26 +12,6 @@ import (
 // text and completion set cover the same commands, and every listing a user
 // or a client sees is rendered from registry data.
 
-// knownUndocumented lists commands that predate the registry and are
-// executable but missing from the TUI help text. The registry surfaced the
-// gap; it is pinned here (not silently accepted) so the set cannot grow.
-// Fixing the gaps is a user-visible change, deliberately out of scope for
-// the registry refactor.
-var knownUndocumented = map[string]bool{
-	cmdUpdate: true,
-}
-
-// knownHintGapLiterals lists, per command, the ACP hint literals the TUI help
-// lines do not show. Like knownUndocumented these are pre-registry gaps the
-// registry surfaced: pinned here (not silently accepted) so the set cannot
-// grow. Closing them changes user-visible strings, deliberately out of scope.
-var knownHintGapLiterals = map[string][]string{
-	// /setup's ACP hint advertises "status" (/setup telegram status answers
-	// with the current state); the TUI help shows only the telegram/on/off
-	// lines.
-	cmdSetup: {"status"},
-}
-
 // TestRegistry_ACPSurface pins the ACP binding table to the registry in both
 // directions: every ACP-hosted spec has exactly one handler binding, every
 // binding resolves to a registry spec, and what available_commands_update
@@ -92,9 +72,6 @@ func TestRegistry_TUISurface(t *testing.T) {
 		if !s.in(hostTUI) || s.hidden {
 			continue
 		}
-		if knownUndocumented[s.name] {
-			continue
-		}
 		// The name must appear in help — a shared line may document it
 		// alongside a sibling ("/exit  /quit").
 		if !strings.Contains(help, s.name) {
@@ -122,9 +99,6 @@ func TestRegistry_GrammarConsistency(t *testing.T) {
 			}
 		}
 		for _, tok := range hintLiterals(s.hint) {
-			if slices.Contains(knownHintGapLiterals[s.name], tok) {
-				continue
-			}
 			if !strings.Contains(s.help, tok) {
 				t.Errorf("%s: ACP hint literal %q never appears in its help lines", s.name, tok)
 			}
@@ -209,4 +183,25 @@ func hintLiterals(hint string) []string {
 		out = append(out, tok)
 	}
 	return out
+}
+
+// TestRegistry_HintsCoverArguedUsage pins the tip-derivation contract: a
+// command whose help lines show argument usage carries a hint. The hint is
+// what registryTips renders into "{/name <hint>}" and what ACP advertises
+// as the input grammar — an argued command without one would advertise
+// itself bare on both surfaces (the /server gap).
+func TestRegistry_HintsCoverArguedUsage(t *testing.T) {
+	for _, s := range commandRegistry {
+		if s.hint != "" {
+			continue
+		}
+		for _, line := range strings.Split(s.help, "\n") {
+			fields := strings.Fields(line)
+			// An argument follows the name immediately as a <placeholder>
+			// or [optional] part — description prose never starts that way.
+			if len(fields) > 1 && fields[0] == s.name && strings.ContainsAny(fields[1], "<[") {
+				t.Errorf("%s: help line %q shows arguments but the registry has no hint — add one", s.name, strings.TrimSpace(line))
+			}
+		}
+	}
 }

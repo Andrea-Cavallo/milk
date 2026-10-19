@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -239,5 +240,303 @@ func TestShowTipsEnabled_Default(t *testing.T) {
 	c.ShowTips = &on
 	if !c.ShowTipsEnabled() {
 		t.Error("show_tips=true must enable")
+	}
+}
+
+// TestRenderTip_ShortcutRef pins the tips visualization contract: every
+// rendered tip line references the browsing shortcut (tipNavRef), and on a
+// narrow terminal the reference yields before the tip text does.
+func TestRenderTip_ShortcutRef(t *testing.T) {
+	plain := ansi.Strip(renderTip("run {/tasks} now", 120))
+	if !strings.Contains(plain, tipNavRef) {
+		t.Errorf("tip line %q must reference the browse shortcut %q", plain, tipNavRef)
+	}
+	if w := rw.StringWidth(plain); w > 120 {
+		t.Errorf("tip line width = %d, want ≤ 120 (%q)", w, plain)
+	}
+	narrow := ansi.Strip(renderTip("run {/tasks} now", 30))
+	if strings.Contains(narrow, tipNavRef) {
+		t.Errorf("narrow tip line %q must drop the shortcut reference first", narrow)
+	}
+	if !strings.Contains(narrow, "run /tasks now") {
+		t.Errorf("narrow tip line %q lost the tip text", narrow)
+	}
+	if w := rw.StringWidth(narrow); w > 30 {
+		t.Errorf("narrow tip line width = %d, want ≤ 30 (%q)", w, narrow)
+	}
+}
+
+// TestTipSeek_WrapAndPin pins the manual-browse core behind /tips
+// next|prev and Alt+Up/Down: wrap-around stepping, the pin that keeps a
+// browsed tip on the line while a contextual hint is live, and the
+// cycling-timer restart every move must hand back to tea.Program.
+func TestTipSeek_WrapAndPin(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.hasInferenceAgent = true
+	m.agents.localAvail = true
+	list := buildTipList()
+	if len(list) < 2 {
+		t.Fatal("need at least two tips to step through")
+	}
+	m.tipIdx = len(list) - 1
+	if cmd := m.tipSeek(1); cmd == nil {
+		t.Error("tipSeek must return the cycling-timer restart command")
+	}
+	if m.tipIdx != 0 {
+		t.Errorf("tipSeek(1) at the end wrapped to %d, want 0", m.tipIdx)
+	}
+	m.tipSeek(-1)
+	if m.tipIdx != len(list)-1 {
+		t.Errorf("tipSeek(-1) at the start wrapped to %d, want %d", m.tipIdx, len(list)-1)
+	}
+	if !m.tipPinned {
+		t.Error("a manual browse must pin the rotation entry")
+	}
+	// Pinned: the contextual hint cannot displace the browsed tip.
+	m.hasInferenceAgent = false
+	if got, want := m.currentTip(), list[m.tipIdx%len(list)]; got != want {
+		t.Errorf("currentTip() while browsing = %q, want the browsed tip %q", got, want)
+	}
+	// Unpinned: contextual precedence is back.
+	m.tipPinned = false
+	if got := m.currentTip(); !strings.Contains(got, "/config init") {
+		t.Errorf("currentTip() unpinned = %q, want the contextual /config init hint", got)
+	}
+}
+
+// TestTipBrowse_RestartsCyclingTimer pins that a manual browse resets the
+// rotation countdown: the move bumps tipsGen and re-arms a fresh tick, so
+// the tick scheduled before the browse is dropped (stale gen) instead of
+// cutting the browse short — while a current-gen tick advances as always.
+func TestTipBrowse_RestartsCyclingTimer(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.hasInferenceAgent = true
+	m.agents.localAvail = true
+	stale := tipsTickMsg{gen: m.tipsGen} // the tick in flight before browsing
+
+	m.tipSeek(1)
+	if m.tipsGen == stale.gen {
+		t.Fatal("a manual browse must bump tipsGen — the old tick would still fire")
+	}
+	// The pre-browse tick is stale now: dropped without advancing.
+	mm, _ := m.updateInner(stale)
+	m = mm.(model)
+	if m.tipIdx != 1 || !m.tipPinned {
+		t.Errorf("stale tick: tipIdx=%d pin=%v, want the browse untouched at 1 and pinned", m.tipIdx, m.tipPinned)
+	}
+	// The restarted tick is current: the normal advance happens.
+	mm, _ = m.updateInner(tipsTickMsg{gen: m.tipsGen})
+	m = mm.(model)
+	if m.tipIdx != 2 {
+		t.Errorf("current tick: tipIdx=%d, want the advance to 2", m.tipIdx)
+	}
+	// A pick restarts the same way.
+	gen := m.tipsGen
+	ok, cmd := m.tipPick(5)
+	if !ok || cmd == nil {
+		t.Fatalf("tipPick(5) = ok=%v cmd=%v, want a jump with a restart command", ok, cmd)
+	}
+	if m.tipsGen == gen {
+		t.Error("tipPick must bump tipsGen too")
+	}
+}
+
+// TestTipsTickMsg_PinsAndRotation pins that the automatic advance ends a
+// manual browse (contextual hints win again) while a busy model freezes
+// both the rotation and the pin — browsing while a turn runs must not snap
+// back mid-read.
+func TestTipsTickMsg_PinsAndRotation(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.hasInferenceAgent = true
+	m.agents.localAvail = true
+	m.tipSeek(3)
+	mm, _ := m.updateInner(tipsTickMsg{gen: m.tipsGen})
+	m = mm.(model)
+	if m.tipPinned {
+		t.Error("the automatic advance must clear the manual-browse pin")
+	}
+	if m.tipIdx != 4 {
+		t.Errorf("tipIdx after idle tick = %d, want 4", m.tipIdx)
+	}
+	m.tipIdx, m.tipPinned = 3, true
+	m.busy = true
+	mm, _ = m.updateInner(tipsTickMsg{gen: m.tipsGen})
+	m = mm.(model)
+	if m.tipIdx != 3 || !m.tipPinned {
+		t.Errorf("busy tick: tipIdx=%d pin=%v, want frozen at 3 and still pinned", m.tipIdx, m.tipPinned)
+	}
+}
+
+// TestTipPick pins the numbered jump behind /tips pick <n>: in-range jumps
+// (and pin), out-of-range refusals.
+func TestTipPick(t *testing.T) {
+	m := newTestModelForPanels(t)
+	list := buildTipList()
+	if ok, _ := m.tipPick(3); !ok || m.tipIdx != 2 {
+		t.Errorf("tipPick(3) set tipIdx=%d, want 2", m.tipIdx)
+	}
+	if !m.tipPinned {
+		t.Error("tipPick must pin the picked tip")
+	}
+	if ok, _ := m.tipPick(0); ok {
+		t.Error("tipPick(0) must refuse — tips are numbered from 1")
+	}
+	if ok, _ := m.tipPick(len(list) + 1); ok {
+		t.Error("tipPick past the pool must refuse")
+	}
+}
+
+// TestSearchTips pins the /tips search matching: case-insensitive
+// substring over the raw tip markup (highlighted spans included), indices
+// into the built pool, nothing on a miss.
+func TestSearchTips(t *testing.T) {
+	hits := searchTips("ctrl")
+	if len(hits) == 0 {
+		t.Fatal(`searchTips("ctrl") found nothing — curated tips name Ctrl keys`)
+	}
+	list := buildTipList()
+	for _, i := range hits {
+		if !strings.Contains(strings.ToLower(list[i]), "ctrl") {
+			t.Errorf("searchTips returned %d (%q) — no match inside", i, list[i])
+		}
+	}
+	if len(searchTips("CTRL")) != len(hits) {
+		t.Error("searchTips must match case-insensitively")
+	}
+	if got := searchTips("zzz-not-a-tip"); len(got) != 0 {
+		t.Errorf("searchTips miss = %v, want empty", got)
+	}
+}
+
+// TestHandleTipsCmd_Browse pins the /tips browsing surface: next/prev
+// step the rotation (quietly while the line is visible, echoing the tip to
+// the transcript while it is hidden), pick lists and jumps, search lists,
+// and unknown verbs get the usage line.
+func TestHandleTipsCmd_Browse(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.hasInferenceAgent = true
+	m.agents.localAvail = true
+	list := buildTipList()
+	total := len(list)
+
+	mm, _ := m.handleTipsCmd("next")
+	m = mm.(model)
+	if m.tipIdx != 1 {
+		t.Errorf("/tips next set tipIdx=%d, want 1", m.tipIdx)
+	}
+	mm, _ = m.handleTipsCmd("prev")
+	m = mm.(model)
+	if m.tipIdx != 0 {
+		t.Errorf("/tips prev set tipIdx=%d, want 0", m.tipIdx)
+	}
+	// Line visible: the changed line is the feedback, no transcript noise.
+	if got := m.transcript.String(); strings.Contains(got, "tip 1/") {
+		t.Errorf("visible-line browse must stay out of the transcript: %q", got)
+	}
+
+	// Line hidden: the browse echoes the tip so it is never invisible.
+	m.showTips = false
+	mm, _ = m.handleTipsCmd("next")
+	m = mm.(model)
+	if !strings.Contains(ansi.Strip(m.transcript.String()), "tip 2/"+strconv.Itoa(total)+":") {
+		t.Errorf("hidden-line browse must echo the tip, transcript = %q", m.transcript.String())
+	}
+	m.showTips = true
+
+	// pick (bare): the numbered catalog with the current entry starred.
+	mm, _ = m.handleTipsCmd("pick")
+	m = mm.(model)
+	out := ansi.Strip(m.transcript.String())
+	if !strings.Contains(out, strconv.Itoa(total)+" tips") {
+		t.Errorf("pick catalog must state the pool size, got %q", out)
+	}
+	if !strings.Contains(out, "*") {
+		t.Errorf("pick catalog must star the current tip, got %q", out)
+	}
+
+	// pick <n>: jumps to the tip and echoes it.
+	mm, _ = m.handleTipsCmd("pick " + strconv.Itoa(total))
+	m = mm.(model)
+	if m.tipIdx != total-1 {
+		t.Errorf("pick %d set tipIdx=%d, want %d", total, m.tipIdx, total-1)
+	}
+	if !strings.Contains(ansi.Strip(m.transcript.String()), "tip "+strconv.Itoa(total)+"/"+strconv.Itoa(total)+":") {
+		t.Errorf("pick must echo the chosen tip, transcript = %q", m.transcript.String())
+	}
+
+	// Out-of-range numbers are refused with the pool size.
+	mm, _ = m.handleTipsCmd("pick 99999")
+	m = mm.(model)
+	if !strings.Contains(ansi.Strip(m.transcript.String()), "no tip 99999") {
+		t.Errorf("out-of-range pick must refuse, transcript = %q", m.transcript.String())
+	}
+
+	// search lists matches (plural header) without moving the rotation.
+	mm, _ = m.handleTipsCmd("search ctrl")
+	m = mm.(model)
+	if !strings.Contains(ansi.Strip(m.transcript.String()), `match "ctrl"`) {
+		t.Errorf("search must list its matches, transcript = %q", m.transcript.String())
+	}
+
+	// pick <text>: a query matching exactly one tip jumps to it.
+	uniq := -1
+	for i, tip := range list {
+		if len(searchTips(tip)) == 1 {
+			uniq = i
+			break
+		}
+	}
+	if uniq < 0 {
+		t.Fatal("no uniquely-identifying tip text in the pool")
+	}
+	mm, _ = m.handleTipsCmd("pick " + list[uniq])
+	m = mm.(model)
+	if m.tipIdx != uniq {
+		t.Errorf(`pick <text> set tipIdx=%d, want the unique match %d`, m.tipIdx, uniq)
+	}
+
+	// A multi-match pick lists candidates instead of guessing.
+	mm, _ = m.handleTipsCmd("pick e")
+	m = mm.(model)
+	if len(searchTips("e")) < 2 {
+		t.Fatal(`"e" must match several tips for this assertion`)
+	}
+	if !strings.Contains(ansi.Strip(m.transcript.String()), `match "e"`) {
+		t.Errorf("multi-match pick must list candidates, transcript = %q", m.transcript.String())
+	}
+
+	// Unknown verbs (and empty queries) get the usage line.
+	mm, _ = m.handleTipsCmd("frobnicate")
+	m = mm.(model)
+	if !strings.Contains(ansi.Strip(m.transcript.String()), "usage: /tips") {
+		t.Errorf("unknown verb must render usage, transcript = %q", m.transcript.String())
+	}
+}
+
+// TestRegistryTips_IncludeHint pins that derived tips advertise the
+// argument grammar: "{/name <hint>} — desc" — the /server gap that started
+// this (a hinted command's tip must show how to type it).
+func TestRegistryTips_IncludeHint(t *testing.T) {
+	byText := strings.Join(registryTips(), "\n")
+	for _, s := range commandRegistry {
+		if s.hidden || !s.in(hostTUI) || s.hint == "" || tipCoveredCmds()[s.name] {
+			continue
+		}
+		want := "{" + s.name + " " + s.hint + "}"
+		if !strings.Contains(byText, want) {
+			t.Errorf("registryTips must render %s for %s (hint %q)", want, s.name, s.hint)
+		}
+	}
+}
+
+// TestHelpDocumentsTipBrowsing pins discoverability: the browsing verbs
+// and the Alt+Up/Down shortcuts show up in /help, next to the tip line's
+// own shortcut reference (tipNavRef).
+func TestHelpDocumentsTipBrowsing(t *testing.T) {
+	help := buildInteractiveHelp()
+	for _, want := range []string{"/tips next", "/tips prev", "/tips pick", "/tips search", "Alt+Up", "Alt+Down"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("interactiveHelp must document %q", want)
+		}
 	}
 }

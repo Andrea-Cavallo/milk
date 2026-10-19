@@ -70,6 +70,9 @@ var freeTextParams = map[string]bool{
 	"verb":             true,
 	"id":               true,
 	"role":             true,
+	"n":                true, // /tips pick <n> — a tip number, printed by /tips pick
+	"text":             true, // /tips pick <text> — substring match over the tip pool
+	"query":            true, // /tips search <query> — substring match over the tip pool
 }
 
 // namespaceForParam returns the name space a <placeholder> refers to for the

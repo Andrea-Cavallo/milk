@@ -48,7 +48,9 @@ absent under the PTY pane, whose layout branch renders no hint rows.
 
 Rendering (`renderTip`, `cmd/milk/tips.go`): a gold `tip:` label, dim
 prose, yellow `{span}` highlights, truncated to the available width with an
-ellipsis — one row is a hard layout invariant.
+ellipsis — one row is a hard layout invariant. The line ends with the
+browse-shortcut reference (`tipNavRef`), which yields before the tip text
+does on narrow terminals.
 
 ### Contents: three sources, precedence order
 
@@ -91,7 +93,26 @@ ellipsis — one row is a hard layout invariant.
 `/tips [on|off]` (registry entry, TUI-hosted) toggles the line and
 persists the default to config `show_tips` (unset = on) via the same
 `saveLocalOrGlobal` path `/colorize` uses; the bare query reports the
-state. The toggle reflows the layout by exactly one row (`syncLayout`).
+state and where the shown tip sits in the rotation. The toggle reflows
+the layout by exactly one row (`syncLayout`).
+
+*Extended 2026-10-19 (tip browsing).* The same registry entry grew
+`/tips next|prev|pick [<n>|<text>]|search <query>` plus the global
+`Alt+Up`/`Alt+Down` shortcuts (same any-mode availability as F1–F4):
+step through the pool, jump to a numbered or text-matched tip (echoed to
+the transcript at full width), search it. Every manual move restarts the
+cycling timer — `tipsTickMsg.gen` vs `tipsGen`, the toastTickMsg generation
+check — so the 20s countdown starts fresh and the tick in flight is
+dropped instead of cutting the browse short. The rendered line carries the
+shortcut reference itself (`tipNavRef`, `· prev/next: Alt+Up/Down`) —
+dropped on narrow terminals before the tip text is cut, so the
+visualization teaches its own navigation. A manual browse pins the
+rotation's entry over contextual hints (`tipPinned`) until the next
+automatic advance, and a browse with the line hidden echoes the tip to
+the transcript — stepping is never a silent no-op. Registry-derived tips
+render the registry's full argument grammar (`{/name <hint>}`), and the
+hints behind them were completed and corrected so that grammar is worth
+rendering (the `/server` gap).
 
 ## Consequences
 

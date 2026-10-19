@@ -93,3 +93,22 @@ func TestExtractSlashCommand_LeadingTokenOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestInteractiveHelp_MentionsInputEditingAndShellInput pins the presence of
+// the input-editing keys and the "!" shell trigger in /help — the exact class
+// of drift the panels/F-key test above exists for: undo/redo and the bang
+// mode were fully wired (repl.go's ctrl+z/ctrl+y cases, stripBangPrefix)
+// long before any help text mentioned them.
+func TestInteractiveHelp_MentionsInputEditingAndShellInput(t *testing.T) {
+	help := buildInteractiveHelp()
+	for _, want := range []string{
+		"Ctrl+Z", "Ctrl+Y", // undo / redo
+		"Alt+Left", "Alt+Right", // word motion
+		"!command",       // the direct-execution trigger
+		"/update status", // the shared hint's status verb must be documented
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("/help does not mention %q", want)
+		}
+	}
+}

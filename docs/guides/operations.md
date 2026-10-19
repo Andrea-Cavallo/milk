@@ -338,7 +338,13 @@ Three content sources, in precedence order (see ADR-0061):
 2. **Curated tips** — hand-written one-liners in priority order; a fresh session starts at the most valuable ones.
 3. **Registry-derived tips** — generated from the slash-command registry, so every command has a tip that cannot drift from the real command set.
 
-`/tips` shows the current state, `/tips off` hides the line (persisted as `show_tips` in config; it is on by default), `/tips on` brings it back.
+`/tips` shows the current state and where the shown tip sits in the rotation. `/tips off` hides the line (persisted as `show_tips` in config; it is on by default), `/tips on` brings it back.
+
+Tips are browsable, not just rotatable:
+
+- `/tips next` / `/tips prev` step through the pool (wrapping at both ends) — or press **Alt+Up / Alt+Down**, the shortcut the tip line itself references at its right edge (`· prev/next: Alt+Up/Down`; dropped on narrow terminals). Every manual move also restarts the 20-second cycling timer (the tick in flight is dropped), so a browsed tip is never cut short by the old schedule, and pins the tip over contextual hints until the next automatic rotation step.
+- `/tips pick` lists every tip with its number (`*` marks the one showing); `/tips pick <n>` jumps to a tip number, `/tips pick <text>` jumps to the tip matching `<text>` (listing candidates when several match). A picked tip is echoed to the transcript at full width.
+- `/tips search <query>` lists the tips whose text contains `<query>` (case-insensitive).
 
 ## Keyboard shortcuts
 
@@ -356,6 +362,7 @@ Three content sources, in precedence order (see ADR-0061):
 | **Shift-Arrows** | Text selection (transcript and input) |
 | **Ctrl-X** | Cut selected input text |
 | **F1 / F2 / F3 / F4** | Show/hide the memory / tasks / background-agents / workflow panel — same effect as `/panel <name>`. Works in any mode, including mid-turn. |
+| **Alt+Up / Alt+Down** | Show the previous / next idle tip (same as `/tips prev`, `/tips next`). Referenced at the right edge of every tip line. |
 | **Ctrl+G** | Dismiss all open notification toasts (history stays: `/notifications`) |
 
 Turn-unrelated informational events — thinking-visibility switches, panel open/close, background-job lifecycle, credential refreshes — surface as floating toasts in the top-right corner (timestamped, each with the related slash-command hint, auto-expiring after a few seconds). They are **not** part of the transcript; `/notifications` shows the full history with timestamps (`/notifications clear` empties them). Tool calls and turn-bound output stay in the transcript. One deliberate exception: a finished background job's *result* is content rather than lifecycle noise and is appended to the transcript as the job completes (capped to the model's delivery budget, `/bg show <id>` for the rest — see [Background sub-agents](#background-sub-agents)); only its lifecycle *notice* stays toast-only.
