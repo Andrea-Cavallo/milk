@@ -61,6 +61,9 @@ cmd/milk/
   notify.go         notification toasts: queue/history, expiry tick, overlay render, /notifications (ADR-0048)
   panel_memory.go   right-side memory panel (/panel memory)
   panel_workflow.go workflow progress panel (/panel workflow)
+  panel_project.go  project tree panel (/panel project)
+  panel_git.go      git graph panel (/panel git)
+  gitgraph.go       git data fetch + code-laid commit-graph lanes
   workflow_cmd.go   /workflow slash command + interactive wizard
   workflow_runner.go workflowTurnRunner adapter (wraps TurnRunner with per-role session tracking)
 
@@ -174,7 +177,7 @@ and, for ACP integration specifically, [docs/reference/acp-integration.md](acp-i
 
 **Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [session <id|prefix>] [json|<path>]` — see [docs/guides/operations.md — Memory](../guides/operations.md#memory).
 
-**Panel commands:** `/panel memory`, `/panel tasks`, `/panel background`, `/panel workflow` (also F1-F4) — see [docs/guides/operations.md — Keyboard shortcuts](../guides/operations.md#keyboard-shortcuts) and [docs/guides/workflows.md](../guides/workflows.md#the-native-workflow-engine).
+**Panel commands:** `/panel memory`, `/panel tasks`, `/panel background`, `/panel workflow`, `/panel project`, `/panel git` (also F1-F6) — see [docs/guides/operations.md — Keyboard shortcuts](../guides/operations.md#keyboard-shortcuts) and [docs/guides/workflows.md](../guides/workflows.md#the-native-workflow-engine).
 
 #### Tab completion and multi-value parameters
 

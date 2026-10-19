@@ -17,7 +17,7 @@ var testAgents = map[string][]string{
 	nsAgent:    {"claude", "local", "zeta"},
 	nsMCP:      {"db", "wiki"},
 	nsTool:     {"helper"},
-	nsPanel:    {"memory", "tasks", "background", "workflow"},
+	nsPanel:    {"memory", "tasks", "background", "workflow", "project", "git"},
 	nsWorkflow: {"dev", "pair", "swarm"},
 }
 
@@ -168,8 +168,8 @@ func TestParamLookup(t *testing.T) {
 	if got := m.paramLookup(nsTool); !stringSlicesEqual(got, []string{"helper", "per-agent-tool"}) {
 		t.Errorf("tool namespace = %v, want union of global and per-agent entries", got)
 	}
-	if got := m.paramLookup(nsPanel); !stringSlicesEqual(got, []string{"memory", "tasks", "background", "workflow"}) {
-		t.Errorf("panel namespace = %v, want the four panel names", got)
+	if got := m.paramLookup(nsPanel); !stringSlicesEqual(got, []string{"memory", "tasks", "background", "workflow", "project", "git"}) {
+		t.Errorf("panel namespace = %v, want the six panel names", got)
 	}
 	wf := m.paramLookup(nsWorkflow)
 	found := false

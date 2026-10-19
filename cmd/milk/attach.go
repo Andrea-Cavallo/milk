@@ -22,6 +22,7 @@ const (
 	attachBackground attachKind = iota
 	attachWorkflow
 	attachShell
+	attachPreview
 )
 
 func (k attachKind) String() string {
@@ -30,6 +31,8 @@ func (k attachKind) String() string {
 		return "workflow"
 	case attachShell:
 		return "shell"
+	case attachPreview:
+		return "preview"
 	}
 	return "background"
 }

@@ -138,10 +138,15 @@ var commandRegistry = []cmdSpec{
 	{name: cmdHistory, hosts: hostTUI, desc: "show or set the input history navigation mode", hint: "[global|session]", help: `  /history               show current history navigation mode
   /history global        navigate global input history
   /history session       navigate session input history (default)`},
-	{name: cmdPanel, hosts: hostTUI, desc: "toggle a side panel (memory, tasks, background, workflow)", hint: "memory|tasks|background|workflow", help: `  /panel memory          toggle the memory panel (right side) — also F1
+	{name: cmdPanel, hosts: hostTUI, desc: "toggle a side panel (memory, tasks, background, workflow, project, git)", hint: "memory|tasks|background|workflow|project|git", help: `  /panel memory          toggle the memory panel (right side) — also F1
   /panel tasks           toggle the tasks panel (right side) — also F2
   /panel background      toggle the background-agents panel (right side) — also F3
-  /panel workflow        toggle the workflow panel (right side) — also F4`},
+  /panel workflow        toggle the workflow panel (right side) — also F4
+  /panel project         toggle the project tree panel (right side) — also F5
+                         click a dir to expand/collapse, a file to preview it,
+                         double-click a file to insert an @-mention
+  /panel git             toggle the git graph panel (right side) — also F6
+                         click a commit to preview its summary and diff`},
 	{name: cmdForget, hosts: hostTUI, desc: "delete a percept (asks for confirmation)", hint: "<pat|#id>", help: `  /forget <pat|#id>      delete a percept (asks for confirmation)`},
 	{name: cmdSkipPerms, hosts: hostBoth, desc: "approve every tool call without asking, or go back to asking", hint: "[on|off]", help: `  /skip-permissions      show current skip-permissions state
   /skip-permissions on   all agents auto-approve tool uses (no prompts)
