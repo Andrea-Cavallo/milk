@@ -108,6 +108,13 @@ type acpSession struct {
 	// with pendingInit — starting either wizard clears the other.
 	pendingTelegram *telegramSetupState
 
+	// pendingAsk is an armed ask_user question waiting for a typed answer
+	// (acp_askchat.go — the floor for clients without form dialogs). Unlike
+	// the wizards it is armed mid-turn, so its answer is taken either before
+	// turnMu (as.prompt — the prompt would otherwise deadlock against the
+	// turn that asked) or after the wizard blocks in runTurn. Guarded by mu.
+	pendingAsk *askSlot
+
 	// closed: session/close (or session/delete) tore this session down —
 	// the turn was cancelled, the state persisted, and no further automatic
 	// work (background follow-ups) may start. Set once via close(); the flag
@@ -477,6 +484,27 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 	// cancelling it: the follow-up has already drained the finished jobs'
 	// results, so cancelling would lose them.
 	as.lastActive.Store(time.Now().UnixNano())
+
+	// An armed ask_user question's typed answer (acp_askchat.go) is
+	// intercepted before turnMu: the question was asked mid-turn, so the
+	// prompt carrying its answer would deadlock against the very turn that
+	// asked. With no turn in flight the prompt falls through to runTurn's
+	// wizard-then-question consumption instead. Synthetic follow-ups are
+	// never answers.
+	prompt := strings.TrimSpace(text.String())
+	if prompt != backgroundFollowupPrompt && as.turnBusy() {
+		if consumed, answered := as.takeAskAnswer(prompt); consumed {
+			msgID := as.liveID("msg")
+			as.emitHistoryMessage(histUser, msgID, prompt)
+			if answered {
+				as.notify(acp.AgentMessageChunk(as.liveID("ask"), stripANSI(milkTag()+" ✓ answer recorded")))
+			} else {
+				as.notify(acp.AgentMessageChunk(as.liveID("ask"), stripANSI(milkTag()+" question skipped")))
+			}
+			return acp.PromptResponse{MessageID: msgID}, nil
+		}
+	}
+
 	as.turnMu.Lock()
 	defer func() {
 		as.releaseTurn()
@@ -590,6 +618,22 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 			}
 			if out != "" {
 				say(stripANSI(out))
+			}
+			as.notify(acp.IdleState(acp.StopReasonEndTurn))
+			return acp.PromptResponse{MessageID: msgID}, nil
+		}
+	}
+
+	// An armed ask_user question (acp_askchat.go) consumes the prompt as its
+	// typed answer — after the wizards (which get first claim under turnMu),
+	// before slash dispatch (whose commands withdraw the question and run,
+	// takeAskAnswer's escape hatch). Synthetic follow-ups are never answers.
+	if prompt != backgroundFollowupPrompt {
+		if consumed, answered := as.takeAskAnswer(prompt); consumed {
+			if answered {
+				say(stripANSI(milkTag() + " ✓ answer recorded"))
+			} else {
+				say(stripANSI(milkTag() + " question skipped"))
 			}
 			as.notify(acp.IdleState(acp.StopReasonEndTurn))
 			return acp.PromptResponse{MessageID: msgID}, nil
@@ -782,15 +826,14 @@ func (as *acpSession) backgroundPermissionAsk(jobID, tool, summary string) bool 
 }
 
 // askUser answers an ask_user question on an ACP session (issue #249): the
-// question race over the client's form dialog (form-capable clients — the
-// same one-field elicit the setup wizard uses), remote oversight, and no
-// timed answer: a foreground question waits for a human. Clients without
-// form dialogs have no direct surface — the question then races remote
-// oversight alone and resolves unanswered without it.
+// question race over the client's direct surface — the form dialog
+// (form-capable clients) or the typed-chat floor (acp_askchat.go, issue
+// #266) — remote oversight, and no timed answer: a foreground question waits
+// for a human.
 func (as *acpSession) askUser(ctx context.Context, question string, options []string) (string, bool) {
 	answer, ok, _ := askUserQuestion(ctx, as.notifier(),
 		oversight.InputRequest{Question: question, Options: options},
-		as.elicitAnswer(question, options), foregroundAskPolicy)
+		as.questionSurface(question, options, ""), foregroundAskPolicy)
 	return answer, ok
 }
 
@@ -804,12 +847,13 @@ func (as *acpSession) backgroundAskUser(ctx context.Context, jobID, question str
 	as.mu.Lock()
 	cfg, ov := as.cfg, as.permOverrides
 	as.mu.Unlock()
+	p := bgAskPolicy(cfg, ov)
 	if jobID != "" {
 		question = "job " + jobID + ": " + question
 	}
 	answer, ok, _ := askUserQuestion(ctx, as.notifier(),
 		oversight.InputRequest{Question: question, Options: options},
-		as.elicitAnswer(question, options), bgAskPolicy(cfg, ov))
+		as.questionSurface(question, options, autoNoteQuestion(p.deadline)), p)
 	return answer, ok
 }
 
