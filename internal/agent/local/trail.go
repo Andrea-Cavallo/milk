@@ -184,7 +184,8 @@ func trailMessages(steps []session.TrailStep, keep [][]bool) []Message {
 }
 
 // TrailManifest is the one-line stand-in for an old turn's tool activity:
-// call counts per tool and the files it read or changed.
+// call counts per tool and the files it read or changed. Tagged "[milk] "
+// per the platform-annotation standard.
 func TrailManifest(steps []session.TrailStep) string {
 	counts := map[string]int{}
 	var calls []namedArgs
@@ -211,7 +212,10 @@ func TrailManifest(steps []session.TrailStep) string {
 	for i, n := range names {
 		parts[i] = fmt.Sprintf("%s ×%d", n, counts[n])
 	}
-	note := "\n\n[Tool activity in that turn: " + strings.Join(parts, ", ")
+	// The note follows milk's "[milk] " annotation standard (same tag as
+	// the transcript's milk lines and prompt-side notices), so anything
+	// reading turn content can tell platform annotations from speech.
+	note := "\n\n[milk] tool activity in that turn: " + strings.Join(parts, ", ")
 	if files := touchedFiles(calls, 12); len(files) > 0 {
 		var fs []string
 		for _, f := range files {
@@ -219,5 +223,5 @@ func TrailManifest(steps []session.TrailStep) string {
 		}
 		note += "; files: " + strings.Join(fs, ", ")
 	}
-	return note + "]"
+	return note
 }

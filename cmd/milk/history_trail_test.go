@@ -50,7 +50,7 @@ func TestBuildAgentHistory_NeverReplaysAnotherAgentsTrail(t *testing.T) {
 		if m.Role == "tool" || len(m.ToolCalls) > 0 {
 			t.Fatalf("another agent's tool calls must not be replayed: %+v", m)
 		}
-		if strings.Contains(m.Content, "Tool activity") {
+		if strings.Contains(strings.ToLower(m.Content), "tool activity in that turn") {
 			t.Fatalf("another agent's manifest must not leak: %q", m.Content)
 		}
 	}
