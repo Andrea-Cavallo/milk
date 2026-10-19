@@ -320,7 +320,12 @@ func (m model) startThinkView() (model, tea.Cmd) {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(thinkHeader(b, !b.closed))
+		// The view is force-expanded — copy the block (buf is a pointer, so
+		// this is safe) and show the expanded glyph regardless of the
+		// block's transcript fold state.
+		v := *b
+		v.expanded = true
+		sb.WriteString(thinkHeader(&v, !b.closed))
 		sb.WriteString("\n")
 		if body := b.text(); body != "" {
 			sb.WriteString(body)

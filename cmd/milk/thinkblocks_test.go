@@ -283,4 +283,9 @@ func TestStartThinkView_ShowsAllBodies(t *testing.T) {
 			t.Errorf("thinking view missing %q:\n%s", want, snap)
 		}
 	}
+	// Force-expanded: bodies are shown, so the view must use the expanded
+	// glyph even for blocks that are folded in the transcript.
+	if !strings.Contains(snap, thinkExpandedPrefix) || strings.Contains(snap, thinkFoldedPrefix) {
+		t.Errorf("thinking view headers must render expanded:\n%s", snap)
+	}
 }
