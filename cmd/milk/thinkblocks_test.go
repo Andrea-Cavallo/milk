@@ -2,8 +2,14 @@ package main
 
 import (
 	"fmt"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Thinking-as-a-view tests (ADR-0067, issue #208): blocks live out of band,
@@ -444,6 +450,153 @@ func TestThinkBlocks_ThinkingSurfaceBackground(t *testing.T) {
 	}
 	if b := m.thinkBlocks[0].text(); strings.Contains(b, ansiThinkBg) {
 		t.Error("the thinking surface must not leak into the block buffer")
+	}
+}
+
+// The thinking surface is a full-row one: every row of a fold container —
+// header, body lines, blank body lines included — is padded to the viewport
+// width inside the surface background, so the background spans the row and
+// not just the glyphs. Rows off the surface are left alone, and the pad
+// itself is render-time only (it never reaches the plain coordinate space).
+func TestThinkSurface_FullRowCoverage(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+	m := layoutTestModel(t, 40, 20)
+	m.colorizeMode = ColorizeFenced // plain lines pass through untouched
+	m.appendTranscript("before\n")
+	m.appendThinkingStreamed("short\n\nalpha beta gamma delta epsilon zeta eta theta iota kappa\n")
+	m.appendTranscript("after\n") // closes + folds
+	m.toggleThinkBlock(0)         // expand: body rows must carry the surface too
+	vw := m.vpWidth()
+	rows := strings.Split(m.wrappedTranscript(), "\n")
+
+	var surfacePlain, otherPlain []string
+	for i, row := range rows {
+		plain := strings.TrimRight(ansi.Strip(row), " ")
+		if !strings.Contains(row, ansiThinkBg) {
+			otherPlain = append(otherPlain, plain)
+			if w := ansi.StringWidth(row); w != utf8.RuneCountInString(plain) {
+				t.Errorf("row %d off the surface must not be padded: %q", i, row)
+			}
+			continue
+		}
+		surfacePlain = append(surfacePlain, plain)
+		if w := ansi.StringWidth(row); w != vw {
+			t.Errorf("surface row %d width = %d, want full-row %d: %q", i, w, vw, row)
+		}
+		// The pad must sit inside the surface run — background-coloured
+		// spaces before the row's closing reset, never bare tail cells. A
+		// full-width row legitimately carries zero pad.
+		if !surfaceRowShape.MatchString(row) {
+			t.Errorf("surface row %d must end pad-then-reset: %q", i, row)
+		}
+	}
+	// Full coverage: only the regular rows sit off the surface.
+	if want := []string{"before", "after", ""}; !reflect.DeepEqual(otherPlain, want) {
+		t.Errorf("off-surface rows = %q, want %q", otherPlain, want)
+	}
+	// Header, body rows and the blank body row are all surface rows, and the
+	// word-wrapped fragments of the long line rejoin into it.
+	if len(surfacePlain) < 4 {
+		t.Fatalf("surface rows = %q, want header + body rows + wrapped fragments", surfacePlain)
+	}
+	if want := thinkExpandedPrefix + "3 lines"; surfacePlain[0] != want {
+		t.Errorf("first surface row = %q, want %q", surfacePlain[0], want)
+	}
+	if surfacePlain[1] != "short" || surfacePlain[2] != "" {
+		t.Errorf("body rows = %q, want %q", surfacePlain[1:], []string{"short", "", "(wrapped fragments)"})
+	}
+	if joined := strings.Join(surfacePlain[3:], " "); joined != "alpha beta gamma delta epsilon zeta eta theta iota kappa" {
+		t.Errorf("wrapped body rows rejoin to %q", joined)
+	}
+}
+
+// surfaceRowShape matches a row whose background-coloured pad (possibly
+// empty on a full-width row) runs right up to the closing reset —
+// tintThinkSurface's full-row shape; a row ending in bare pad spaces would
+// leave the tail on the terminal default instead of the surface.
+var surfaceRowShape = regexp.MustCompile(` *\x1b\[0m$`)
+
+// Full-row coverage holds on the moving target too: while reasoning streams
+// into an open block — partial line, live header count, the render cache warm
+// between chunks — and after a terminal resize, every surface row still pads
+// to the current viewport width, and the plain coordinate space (hit-testing,
+// selection, copy) stays free of the pad.
+func TestThinkSurface_FullRowCoverageStreamingAndResize(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+	m := layoutTestModel(t, 120, 30)
+	m.colorizeMode = ColorizeFenced
+	m.thinkFoldOpen = true // watch mode: the block streams open and pinned
+	m.appendThinkingStreamed("first line\nsecond line\n")
+	_ = m.wrappedTranscript() // warm/extend the render cache mid-stream
+	m.appendThinkingStreamed("partial")
+	_ = m.wrappedTranscript()
+	m.appendThinkingStreamed(" line\n")
+
+	check := func(stage string) {
+		vw := m.vpWidth()
+		surface := 0
+		for i, row := range strings.Split(m.wrappedTranscript(), "\n") {
+			if !strings.Contains(row, ansiThinkBg) {
+				continue
+			}
+			surface++
+			if w := ansi.StringWidth(row); w != vw {
+				t.Errorf("%s: surface row %d width = %d, want full-row %d: %q", stage, i, w, vw, row)
+			}
+			if !surfaceRowShape.MatchString(row) {
+				t.Errorf("%s: surface row %d must end pad-then-reset: %q", stage, i, row)
+			}
+		}
+		if surface < 4 {
+			t.Errorf("%s: %d surface rows, want header + body rows (incl. the partial line)", stage, surface)
+		}
+		for i, l := range m.transcriptPlainLines() {
+			if strings.HasSuffix(l, " ") {
+				t.Errorf("%s: plain line %d carries render-time pad: %q", stage, i, l)
+			}
+		}
+	}
+	check("streaming")
+
+	// Resize: the rows re-wrap and the pad follows the new width.
+	nm, _ := m.handleResize(tea.WindowSizeMsg{Width: 80, Height: 30})
+	m = nm.(model)
+	check("resized")
+}
+
+// The surface survives every colorization mode: glamour (colorizeFull) needs
+// its input ANSI-stripped, so thinking rows must be routed around it — a
+// container row that loses its background there loses the surface entirely.
+func TestThinkSurface_SurvivesFullColorize(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+	m := layoutTestModel(t, 80, 30)
+	m.colorizeMode = ColorizeFull
+	m.appendThinkingStreamed("a thought\n")
+	m.appendTranscript("done\n")
+	m.toggleThinkBlock(0) // expand: the body row must keep the surface too
+	vw := m.vpWidth()
+	found := map[string]bool{}
+	for i, row := range strings.Split(m.wrappedTranscript(), "\n") {
+		plain := strings.TrimSpace(ansi.Strip(row))
+		if plain != "a thought" && !isThinkHeaderLine(plain) {
+			continue
+		}
+		found[plain] = true
+		if !strings.Contains(row, ansiThinkBg) {
+			t.Errorf("row %d lost the thinking surface under full colorize: %q", i, row)
+		}
+		if w := ansi.StringWidth(row); w != vw {
+			t.Errorf("row %d width = %d, want full-row %d: %q", i, w, vw, row)
+		}
+	}
+	if !found["a thought"] || !found[thinkExpandedPrefix+"1 line"] {
+		t.Errorf("container rows not found in render: %v", found)
 	}
 }
 

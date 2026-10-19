@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/livebuf"
 )
@@ -45,7 +46,11 @@ import (
 //     current default and opts the tidy out.
 //   - Fold containers render on their own background (the thinking surface:
 //     ansiThinkBg) so the thinking region reads as a different surface from
-//     the standard transcript, at every fold state.
+//     the standard transcript, at every fold state. The surface is a full-row
+//     one: after wrapping, every row of a container — header, body lines,
+//     blank body lines, and word-wrap continuation rows alike — is padded to
+//     the viewport width and re-wrapped in the background (tintThinkSurface),
+//     so the surface spans the row and not just the glyphs.
 //
 // Consumption/display separation is preserved: loop detection and the session
 // turn record consume reasoning from their own accumulators regardless of
@@ -110,18 +115,139 @@ const (
 	thinkExpandedPrefix = "▾ thinking · "
 )
 
+// thinkBgColor256 is the 256-colour index behind ansiThinkBg. The full-row
+// painter (tintThinkSurface) parses SGR sequences and recognises the surface
+// by value, so the two are defined together.
+const thinkBgColor256 = "235"
+
 // ansiThinkBg is the thinking-surface background: fold containers render on
 // it so the thinking region is a visibly different surface from the standard
 // transcript (header and body alike, every fold state). Applied at render
 // time only — the transcript and block buffers stay plain.
-const ansiThinkBg = "\033[48;5;235m"
+const ansiThinkBg = "\033[48;5;" + thinkBgColor256 + "m"
+
+// thinkSurfaceLines paints every line of s with code — like colorize,
+// closing the reset before each newline, but a blank line still gets its
+// code+reset pair: a blank reasoning line is a row of the thinking surface
+// and must render as one (tintThinkSurface recognises surface rows by their
+// surface escape, and an unstyled blank row would punch a hole in the
+// surface).
+func thinkSurfaceLines(s, code string) string {
+	if !isTTY || s == "" {
+		return s
+	}
+	lines := strings.SplitAfter(s, "\n")
+	var out strings.Builder
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		if body, ok := strings.CutSuffix(line, "\n"); ok {
+			out.WriteString(code + body + ansiReset + "\n")
+			continue
+		}
+		out.WriteString(code + line + ansiReset)
+	}
+	return out.String()
+}
 
 // thinkHeaderLine styles a fold-header line: dim on the thinking surface.
-func thinkHeaderLine(s string) string { return colorize(s, ansiThinkBg+ansiDim) }
+func thinkHeaderLine(s string) string { return thinkSurfaceLines(s, ansiThinkBg+ansiDim) }
 
 // thinkBodyLine styles a reasoning body: full-contrast text on the thinking
 // surface (the background — not dimming — marks reasoning).
-func thinkBodyLine(s string) string { return colorize(s, ansiThinkBg) }
+func thinkBodyLine(s string) string { return thinkSurfaceLines(s, ansiThinkBg) }
+
+// sgrThinkBg reports whether an SGR sequence with the given parameter string
+// (between "ESC[" and "m") leaves the thinking-surface background active given
+// the current state. Parameters apply left to right; only the background
+// matters here: 0 resets it, 49 restores the default, and 48 sets it — to the
+// think colour when the run is 48;5;<thinkBgColor256>, to something else
+// otherwise (48;2;… truecolor included).
+func sgrThinkBg(on bool, params string) bool {
+	parts := strings.Split(params, ";")
+	for i := 0; i < len(parts); i++ {
+		switch parts[i] {
+		case "", "0", "49":
+			on = false
+		case "48":
+			switch {
+			case i+2 < len(parts) && parts[i+1] == "5":
+				on = parts[i+2] == thinkBgColor256
+				i += 2
+			case i+4 < len(parts) && parts[i+1] == "2":
+				on = false
+				i += 4
+			default:
+				on = false
+			}
+		}
+	}
+	return on
+}
+
+// thinkRowSurface classifies one wrapped row of content: surface reports
+// whether the row renders on the thinking surface — it opens the surface
+// itself (a container line's code, including the code+reset pair of a blank
+// body line) or continues a surface run left open by the row above (a
+// word-wrap fragment of a long reasoning line) — and open reports the
+// background state the next row inherits. SGR state persists across the
+// newline until a reset says otherwise, exactly as the terminal sees it.
+func thinkRowSurface(line string, open bool) (surface, endOpen bool) {
+	surface = open
+	on := open
+	for i := 0; i < len(line); {
+		if line[i] != 0x1B || i+1 >= len(line) || line[i+1] != '[' {
+			i++
+			continue
+		}
+		j := i + 2
+		for j < len(line) && (line[j] < 0x40 || line[j] > 0x7E) {
+			j++
+		}
+		if j >= len(line) {
+			break // dangling escape at the row end — the rest is opaque
+		}
+		if line[j] == 'm' {
+			was := on
+			on = sgrThinkBg(on, line[i+2:j])
+			if on && !was {
+				surface = true
+			}
+		}
+		i = j + 1
+	}
+	return surface, on
+}
+
+// tintThinkSurface makes the thinking surface a full-row one. content is the
+// already-wrapped render; every row that renders on the surface is padded to
+// width cells and re-wrapped in the surface background (tintBlock's per-line
+// convention — the background must span the row, not just the underlying
+// text). The rows are final at this point, so the padding cannot re-wrap, and
+// the pad lands inside the background run so the surface — not the terminal
+// default — fills the rest of the row. Render-time only: the transcript and
+// block buffers never see any of this, and transcriptPlainLines strips the
+// escapes and trims the pad back off so hit-testing and copy stay plain.
+func tintThinkSurface(content string, width int) string {
+	if width <= 0 || !strings.Contains(content, ansiThinkBg) {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	open := false // surface run open at the row start
+	for i, line := range lines {
+		surface, next := thinkRowSurface(line, open)
+		open = next
+		if !surface {
+			continue
+		}
+		if w := ansi.StringWidth(line); w < width {
+			line += strings.Repeat(" ", width-w)
+		}
+		lines[i] = withPanelBackground(line, ansiThinkBg)
+	}
+	return strings.Join(lines, "\n")
+}
 
 // lineLabel renders "N lines"/"1 line" for the fold header.
 func lineLabel(n int) string {

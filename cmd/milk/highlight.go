@@ -137,35 +137,65 @@ func colorizeSingle(seg string, mode ColorizeMode) string {
 	}
 }
 
-// colorizeFull applies glamour to non-dim portions and colorizeCodeBlocks to
-// dim-wrapped portions (thinking output). This preserves the dim styling of
-// thinking blocks which ansi.Strip would otherwise erase.
+// colorizeFull applies glamour to unstyled portions and colorizeCodeBlocks
+// to preserved styled spans — thinking-surface rows and dim-wrapped notes
+// (thinking output of old) — which glamour would erase (it needs the segment
+// ANSI-stripped) and reflow. Each span runs from its opening code to the
+// first full reset after it: exactly one rendered line's styling.
 func colorizeFull(seg string) string {
-	if !strings.Contains(seg, ansiDim) {
+	if !strings.Contains(seg, ansiDim) && !strings.Contains(seg, ansiThinkBg) {
 		return colorizeGlamour(ansi.Strip(seg))
 	}
 	var sb strings.Builder
 	remaining := seg
 	for {
-		dimStart := strings.Index(remaining, ansiDim)
-		if dimStart == -1 {
-			sb.WriteString(colorizeGlamour(ansi.Strip(remaining)))
+		start := styledSpanStart(remaining)
+		if start == -1 {
+			sb.WriteString(glamourChunk(remaining))
 			break
 		}
-		if dimStart > 0 {
-			sb.WriteString(colorizeGlamour(ansi.Strip(remaining[:dimStart])))
+		if start > 0 {
+			sb.WriteString(glamourChunk(remaining[:start]))
 		}
-		remaining = remaining[dimStart:] // starts with ansiDim
+		remaining = remaining[start:] // starts with the span's opening code
 		resetIdx := strings.Index(remaining, ansiReset)
 		if resetIdx == -1 {
 			sb.WriteString(remaining)
 			break
 		}
-		dimBlock := remaining[:resetIdx+len(ansiReset)]
-		sb.WriteString(colorizeCodeBlocks(dimBlock))
+		styled := remaining[:resetIdx+len(ansiReset)]
+		sb.WriteString(colorizeCodeBlocks(styled))
 		remaining = remaining[resetIdx+len(ansiReset):]
 	}
 	return sb.String()
+}
+
+// glamourChunk runs one unstyled chunk through glamour — except a chunk that
+// is whitespace only (typically the newline between two styled rows), which
+// is passed through verbatim: glamour collapses it to nothing and would glue
+// the rows together.
+func glamourChunk(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
+	return colorizeGlamour(ansi.Strip(s))
+}
+
+// styledSpanStart returns the byte index of the next preserved styled span in
+// s — a thinking-surface row (ansiThinkBg) or a dim-wrapped note (ansiDim) —
+// or -1 when none remains. A fold-header row opens with the surface code and
+// carries the dim code inside its span (ansiThinkBg+ansiDim), so the span must
+// start at the surface escape, not at the dim one.
+func styledSpanStart(s string) int {
+	i := strings.Index(s, ansiThinkBg)
+	j := strings.Index(s, ansiDim)
+	if i < 0 {
+		return j
+	}
+	if j < 0 || i < j {
+		return i
+	}
+	return j
 }
 
 // findOpenFence returns the byte index of the next ``` that starts at a line
