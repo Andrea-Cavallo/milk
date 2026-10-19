@@ -50,7 +50,7 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 		return m.handleColorizeCmd(strings.TrimSpace(rest)), nil
 	}
 	if cmd == cmdThink {
-		return m.handleThinkCmd(strings.TrimSpace(rest)), nil
+		return m.handleThinkCmd(strings.TrimSpace(rest))
 	}
 	if cmd == cmdTips {
 		return m.handleTipsCmd(strings.TrimSpace(rest))
@@ -481,42 +481,38 @@ func (m model) handleColorizeCmd(arg string) model {
 	return m
 }
 
-// handleThinkCmd handles `/think [on|off]`.
-// With no arg: shows the current reasoning visibility. With on/off: toggles it.
-// The toggle is retroactive — switching between transcript variants is instantaneous
-// because both are maintained in parallel during streaming.
-//
-// State *changes* are turn-unrelated informational events → notification
-// toasts (issue #162); the bare query response stays in the transcript like
-// every other explicit query answer.
-func (m model) handleThinkCmd(arg string) model {
+// handleThinkCmd handles `/think [expand|collapse|view]` — the fold surface
+// of the think-block model (ADR-0067). There is no visibility toggle any
+// more: every block always renders its header row, folded by default —
+// streaming blocks included (the header's line count updates live) — so
+// /think on|off are gone. The bare query answers in
+// the transcript like every other explicit query answer; state *changes* are
+// turn-unrelated informational events → notification toasts (issue #162).
+func (m model) handleThinkCmd(arg string) (model, tea.Cmd) {
 	switch arg {
-	case "on":
-		if m.showThinking {
-			m.notify("reasoning visibility: already on", "/think off")
-			return m
+	case "expand":
+		m.setAllThinkBlocks(true)
+		m.notify("reasoning: all blocks expanded", "/think collapse")
+	case "collapse":
+		m.setAllThinkBlocks(false)
+		m.notify("reasoning: all blocks folded", "/think expand")
+	case "view":
+		return m.startThinkView()
+	case "":
+		expanded := 0
+		for i := range m.thinkBlocks {
+			if m.thinkBlocks[i].expanded {
+				expanded++
+			}
 		}
-		m.showThinking = true
-		m.colorizeForce = true // switch transcript variant — invalidate cache
-		m.colorizeTransLen = 0
-		m.notify("reasoning visibility: on", "/think off")
-	case "off":
-		if !m.showThinking {
-			m.notify("reasoning visibility: already off", "/think on")
-			return m
-		}
-		m.showThinking = false
-		m.colorizeForce = true // switch transcript variant — invalidate cache
-		m.colorizeTransLen = 0
-		m.notify("reasoning visibility: off — thinking blocks hidden ([thinking…])", "/think on")
+		m.appendTranscript(fmt.Sprintf("%s reasoning: %d thinking block(s) · %d expanded, %d folded  (use /think expand|collapse|view)\n",
+			milkTag(), len(m.thinkBlocks), expanded, len(m.thinkBlocks)-expanded))
+	case "on", "off":
+		m.appendTranscript(milkTag() + " /think on|off are gone — reasoning always renders as foldable blocks, folded by default (the line count updates live while streaming; Ctrl+T or a ▸ header click opens one). Use /think expand|collapse|view.\n")
 	default:
-		state := "off"
-		if m.showThinking {
-			state = "on"
-		}
-		m.appendTranscript(fmt.Sprintf("%s reasoning visibility: %s  (use /think on|off)\n", milkTag(), bold(state)))
+		m.appendTranscript(milkTag() + " usage: /think [expand|collapse|view]\n")
 	}
-	return m
+	return m, nil
 }
 
 // handleTipsCmd handles `/tips …` — the idle tip line below the input
@@ -645,21 +641,6 @@ func (m model) handleTipsBrowse(arg string) (model, tea.Cmd) {
 		usage()
 	}
 	return m, tick
-}
-
-// toggleThinking flips reasoning visibility and posts a notification toast.
-// Works at any time including while the agent is responding, since it only
-// mutates showThinking and the colorize cache — no input submission needed.
-func (m model) toggleThinking() model {
-	m.showThinking = !m.showThinking
-	m.colorizeForce = true
-	m.colorizeTransLen = 0
-	if m.showThinking {
-		m.notify("reasoning visibility: on", "/think off")
-	} else {
-		m.notify("reasoning visibility: off", "/think on")
-	}
-	return m
 }
 
 // handleSetupCmd dispatches /setup <subcommand>.

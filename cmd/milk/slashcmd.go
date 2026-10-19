@@ -170,9 +170,11 @@ var commandRegistry = []cmdSpec{
   /colorize fenced       highlight fenced code blocks only
   /colorize balanced     fenced blocks + inline markdown (default)
   /colorize full         full glamour markdown render (experimental)`},
-	{name: cmdThink, hosts: hostBoth, desc: "show or hide model reasoning in this session", hint: "[on|off]", help: `  /think                 show current reasoning visibility
-  /think on              show thinking/reasoning tokens inline
-  /think off             hide thinking tokens ([thinking…] placeholder)`},
+	{name: cmdThink, hosts: hostBoth, desc: "inspect or fold model reasoning (ACP: toggle thought relay)", hint: "[on|off|expand|collapse]", help: `  /think                 show thinking-block count and fold state
+  /think expand          expand every thinking block
+  /think collapse        fold every thinking block
+  /think view            swap the main area to a thinking-only stream
+  /think on|off          ACP only: relay or withhold thought chunks`},
 	{name: cmdTips, hosts: hostTUI, desc: "show, hide or browse the idle tips under the input", hint: "[on|off|next|prev|pick [<n>|<text>]|search <query>]", help: `  /tips                  show tip line state and the current tip's position
   /tips on               show the idle tip line under the input
   /tips off              hide the idle tip line
@@ -327,7 +329,13 @@ var helpBlocks = []helpBlock{
 
   Agent control
     Ctrl+C   interrupt current agent turn (or copy if selection is active)
-    Ctrl+T   toggle thinking/reasoning visibility (works during streaming)
+    Ctrl+T   toggle the most recent thinking block (the streaming one, if any)
+             reasoning renders as foldable blocks on their own background,
+             folded by default — the header's line count updates live while
+             streaming; click a ▸ header to toggle just that block (new blocks
+             keep that fold state; while folded, a new turn folds the previous
+             turns' blocks — /think expand opts the tidy out);
+             /think expand|collapse folds or opens them all
 
   Notifications
     Ctrl+G                      dismiss all open notification toasts

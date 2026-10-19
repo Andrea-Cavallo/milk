@@ -130,8 +130,8 @@ func TestHandleSlashInputResumeReseedsTranscript(t *testing.T) {
 	if strings.Contains(got, "OLDVIEW-MARKER") {
 		t.Errorf("old conversation left on screen after /resume:\n%s", got)
 	}
-	if m2.transcriptNoThink.String() != got {
-		t.Error("no-think variant out of sync after reseed")
+	if len(m2.thinkBlocks) != 0 {
+		t.Errorf("thinking blocks must not survive a /resume reseed: %d", len(m2.thinkBlocks))
 	}
 }
 

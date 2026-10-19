@@ -54,7 +54,7 @@ The painted band itself only spans `avail = boxWidth - sharedCol` columns — fr
 
 | Moves to toast | Stays in transcript |
 |---|---|
-| `/think on|off` state changes, Ctrl+T toggle (bare `/think` *query* stays — it's an explicit answer) | tool calls and their results (turn-bound) |
+| `/think expand|collapse` state changes, the Ctrl+T empty-session notice (bare `/think` *query* stays — it's an explicit answer) | tool calls and their results (turn-bound) |
 | `/panel …` on/off confirmations, F1-F4 equivalents | turn output, streaming content |
 | ADR-0044 auto-open panels — **closed→open transition only** (repeated workflow-chunk calls stay silent), respecting `panelManualOverride` | warnings and errors (e.g. OAuth failure still prints a persistent transcript line) |
 | background agent spawned / completed / failed | explicit query answers (`/notifications`, `/history`, `/export`…) |

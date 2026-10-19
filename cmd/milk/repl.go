@@ -717,18 +717,24 @@ type model struct {
 	ready  bool
 
 	// transcript accumulator (pointer — strings.Builder must not be copied by value).
-	// Always contains the full content including thinking (dim-wrapped).
+	// Holds the regular (non-reasoning) content. Reasoning lives in thinkBlocks
+	// (ADR-0067) and is spliced in as fold containers at render time by
+	// transcriptDisplay — there is no second buffer variant to keep in lockstep.
 	transcript *strings.Builder
-	// transcriptNoThink mirrors transcript but replaces thinking blocks with a
-	// "[thinking…]" placeholder. Both are maintained in parallel so toggling is
-	// instantaneous — no rebuild required.
-	transcriptNoThink *strings.Builder
-	// thinkingActiveInTurn is true while thinking tokens are arriving for the
-	// current turn. The placeholder is flushed to transcriptNoThink when the
-	// first regular content chunk or turn-end arrives.
-	thinkingActiveInTurn bool
-	// showThinking controls whether thinking content is visible in the viewport.
-	showThinking bool
+	// thinkBlocks are this session's reasoning blocks (see thinkblocks.go).
+	// Rendered at their anchor offsets as collapsible containers.
+	thinkBlocks []thinkBlock
+	// thinkBlocksTurnStart is the thinkBlocks index where the current turn's
+	// blocks begin — reasoningPromotedMsg drops from here when the streamed
+	// reasoning is promoted to the turn's answer.
+	thinkBlocksTurnStart int
+	// thinkFoldOpen is the session's current think-block fold status: a new
+	// reasoning block is created in this state (it keeps the folding status
+	// the previous block was left in). Updated only by explicit fold actions
+	// (header click, Ctrl+T, /think expand|collapse); the turn-boundary tidy
+	// that collapses previous turns' blocks does not change it — and does
+	// not run while it is open (/think expand defines the current default).
+	thinkFoldOpen bool
 
 	// showTips toggles the idle tip line below the input (ADR-0061, /tips).
 	// Defaults on (config show_tips); the line's row is reserved while it is
@@ -1085,10 +1091,15 @@ type model struct {
 	// new lines, or when the viewport width changes, or when the caller
 	// explicitly sets colorizeForce = true (e.g. after agentDoneMsg, resize).
 	colorizeCached    string // last colorized output
-	colorizeTransLen  int    // transcript byte length when cache was built
+	colorizeTransLen  int    // transcript byte length cache was committed to
 	colorizeVPWidth   int    // vpWidth when cache was built
 	colorizeForce     bool   // if true, bypass cache on next render
 	colorizeLinesSeen int    // new lines since last full re-colorize
+	// colorizeSeenLen is the display byte length seen by the previous render
+	// — the base for counting arriving lines (colorizeLinesSeen). Distinct
+	// from colorizeTransLen, which is deliberately capped before an open
+	// think block's container and would otherwise re-count it every render.
+	colorizeSeenLen int
 
 	// Per-turn colorization cache: stores colorized output for each completed
 	// turn (splitTurns segments ending with "\n\n"). Completed turns never
@@ -1201,10 +1212,8 @@ func newModel(ctx context.Context, st *interactiveState, rtr *router.Router, age
 		agents:              agents,
 		ta:                  ta,
 		transcript:          &strings.Builder{},
-		transcriptNoThink:   &strings.Builder{},
 		currentTurnThinking: &strings.Builder{},
 		searchQuery:         &strings.Builder{},
-		showThinking:        st.cfg.ShowReasoningDefault(),
 		showTips:            st.cfg.ShowTipsEnabled(),
 		mem:                 mem,
 		panelMemory:         true,
@@ -1564,6 +1573,7 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	if m.st != nil && m.st.cwd != "" {
 		indexFor(m.st.cwd).invalidate()
 	}
+	m.closeOpenThinkBlock()
 	m.busy = false
 	m.activeToolUse = ""
 	m.cancelTurn = nil
@@ -1870,6 +1880,13 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			setMouseDragMode(false)
 			if m.selAnchorLine >= 0 {
 				if contentLine == m.selAnchorLine && ev.X == m.selAnchorCol {
+					// A click without drag on a thinking fold header toggles
+					// that block (ADR-0067) — the same arm/act rhythm as panel
+					// clicks, and only claimed on exact header lines, so drag
+					// selection over reasoning text is untouched.
+					if idx := m.thinkBlockAtLine(contentLine); idx >= 0 {
+						m.toggleThinkBlock(idx)
+					}
 					m.clearSelection()
 					m.setViewportContent()
 					return m, nil
@@ -2035,7 +2052,7 @@ func (m *model) welcomeScreen() string {
 			dim("type a message and press Enter to start"),
 			"",
 			dim("routing: "+primaryName+" ↔ "+escName+"  ·  /escalate to pin  ·  /primary to unpin"),
-			dim("/need — set current goal  ·  F1-F4 — memory/tasks/agents/workflow panels  ·  /think on — reasoning tokens"),
+			dim("/need — set current goal  ·  F1-F4 — memory/tasks/agents/workflow panels  ·  /think view — reasoning stream"),
 			dim("/config — view config  ·  /config init — reconfigure  ·  /config open — edit in $EDITOR"),
 			dim("--new — fresh session  ·  --resume — resume last session  ·  /help for all commands"),
 		)
@@ -2424,6 +2441,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reasoningPromotedMsg:
 		m.currentTurnThinking.Reset()
+		// The streamed reasoning became the turn's answer (it is re-streamed
+		// through the content path) — drop this turn's blocks so it isn't
+		// rendered twice.
+		m.dropThinkBlocksFrom(m.thinkBlocksTurnStart)
 		return m, nil
 
 	case agentDoneMsg:
@@ -2499,7 +2520,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case workflowThinkChunkMsg:
-		if m.workflowState != nil && m.showThinking {
+		// Reasoning is consumed into the workflow's own live buffer like every
+		// other workflow output — the fold state of transcript think blocks and
+		// the ACP thought-relay toggle are both independent of this (ADR-0067).
+		if m.workflowState != nil {
 			m.workflowState.LiveBuffer().Append([]byte(dim(msg.text)))
 			if m.attached != nil && m.attached.kind == attachWorkflow {
 				m.syncAttachedContent()
@@ -3230,8 +3254,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleTabKey(dir), nil
 	case "ctrl+t":
-		m = m.toggleThinking()
-		return m, nil
+		return m.toggleLastThinkBlock(), nil
 	case "pgup", "ctrl+u":
 		m.vp.HalfPageUp()
 		return m, nil
@@ -3727,7 +3750,12 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 	m.turnFirstOutputAt = time.Time{}
 	m.currentTurnInputChars = 0
 	m.currentTurnThinking.Reset()
-	m.thinkingActiveInTurn = false
+	m.closeOpenThinkBlock()
+	// Turn-boundary tidy: the new turn collapses the previous turns' blocks —
+	// only while the fold status is folded (/think expand defines the current
+	// default and opts out). Display-only — thinkFoldOpen is untouched.
+	m.collapseThinkBlocksBefore(len(m.thinkBlocks))
+	m.thinkBlocksTurnStart = len(m.thinkBlocks)
 	m.loopInterrupt = false
 	m.loopInterruptLabel = ""
 	m.loopWarning = ""

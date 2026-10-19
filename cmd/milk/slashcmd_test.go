@@ -167,6 +167,18 @@ func regName(cmd string) bool {
 	return ok
 }
 
+// TestRegistry_HelpLinesRealNewlines pins the help-rendering wart fixed in
+// the #208 refinement: a help entry's line breaks must be real newlines — a
+// literal "\n" inside a raw-string help block renders as two visible
+// characters and merges the entry's lines into one.
+func TestRegistry_HelpLinesRealNewlines(t *testing.T) {
+	for _, s := range commandRegistry {
+		if strings.Contains(s.help, "\\n") {
+			t.Errorf("%s: help contains a literal backslash-n — use real newlines", s.name)
+		}
+	}
+}
+
 // hintLiterals extracts the literal (non-placeholder) words of a compact
 // argument grammar like "[list|start <task>|stop <id>]" — the words a user
 // must type. Tokens touched by brackets or angle brackets are placeholders

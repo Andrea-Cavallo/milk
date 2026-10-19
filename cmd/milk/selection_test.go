@@ -159,14 +159,13 @@ func selModel() model {
 	tx := &strings.Builder{}
 	tx.WriteString("line zero\nline one\nline two\n")
 	m := model{
-		transcript:        tx,
-		transcriptNoThink: tx,
-		selAnchorLine:     1,
-		selAnchorCol:      2,
-		selEndLine:        1,
-		selEndCol:         4,
-		colorizeMode:      ColorizeOff,
-		vp:                viewport.New(80, 20),
+		transcript:    tx,
+		selAnchorLine: 1,
+		selAnchorCol:  2,
+		selEndLine:    1,
+		selEndCol:     4,
+		colorizeMode:  ColorizeOff,
+		vp:            viewport.New(80, 20),
 	}
 	m.vp.SetYOffset(0)
 	return m

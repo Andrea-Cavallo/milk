@@ -14,8 +14,7 @@ import (
 func toolWizardModel(t *testing.T) model {
 	t.Helper()
 	m := model{
-		transcript:        &strings.Builder{},
-		transcriptNoThink: &strings.Builder{},
+		transcript: &strings.Builder{},
 	}
 	m.st = mvState(t)
 	m.ta = textarea.New()

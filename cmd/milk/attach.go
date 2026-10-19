@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -172,6 +171,12 @@ func (m *model) syncAttachedContent() {
 		lines = applyPanelSelectionHighlight(lines, m.attachSelAnchorLine, m.attachSelAnchorCol, m.attachSelEndLine, m.attachSelEndCol)
 	}
 	content := strings.Join(lines, "\n")
+	// Thinking-surface rows (the /think view) get their full-row surface here
+	// — after the selection step, so the shared click/copy coordinate space
+	// (attachContentLines) stays free of the render-time pad — and before the
+	// panel tint below, whose wrap leaves the surface run in charge of the
+	// row's cells.
+	content = tintThinkSurface(content, vw)
 	// Tint every row of the attach view with the same subtle background used
 	// to set an alternating side panel apart from the main transcript —
 	// applied unconditionally here (not alternating with anything) so the
@@ -189,10 +194,13 @@ func (m *model) syncAttachedContent() {
 // tintBlock pads every line of content to width (so the background tint
 // spans the full row, not just the underlying text) and applies bg via
 // withPanelBackground, mirroring renderSidePanel's per-line treatment.
+// Width is measured in terminal cells (ansi.StringWidth), so rows carrying
+// wide glyphs — or an already-applied full-row pad like the thinking surface
+// — are padded to exactly width and never past it.
 func tintBlock(content string, width int, bg string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		if lineW := utf8.RuneCountInString(stripANSI(line)); width > 0 && lineW < width {
+		if lineW := ansi.StringWidth(line); width > 0 && lineW < width {
 			line += strings.Repeat(" ", width-lineW)
 		}
 		lines[i] = withPanelBackground(line, bg)

@@ -22,29 +22,14 @@ import (
 // is O(last turn) not O(transcript), so a higher threshold is affordable.
 const colorizeLineThresh = 32
 
-// appendTranscript adds text to both transcript variants and refreshes the viewport.
-// Sticky-bottom: only auto-scrolls when already at the bottom.
+// appendTranscript adds regular (non-reasoning) text to the transcript and
+// refreshes the viewport. Sticky-bottom: only auto-scrolls when already at the bottom.
+// A streaming thinking block ends at regular content: the block closes and
+// folds (closeOpenThinkBlock), so the container boundary between "what the
+// model thought" and "what the model said" is structural, not an escape pair.
 func (m *model) appendTranscript(text string) {
-	// If regular content follows thinking, close the open dim escape (opened once
-	// in appendThinking, not per-chunk, so it must be closed explicitly here) and
-	// ensure both variants end with a newline so the final content starts on its
-	// own line rather than the last thinking row.
-	if m.thinkingActiveInTurn {
-		if isTTY {
-			m.transcript.WriteString(ansiReset)
-		}
-		if s := m.transcript.String(); len(s) > 0 && s[len(s)-1] != '\n' {
-			m.transcript.WriteByte('\n')
-		}
-		if s := m.transcriptNoThink.String(); len(s) > 0 && s[len(s)-1] != '\n' {
-			m.transcriptNoThink.WriteByte('\n')
-		}
-	}
+	m.closeOpenThinkBlock()
 	m.transcript.WriteString(text)
-	m.transcriptNoThink.WriteString(text)
-	// If regular content arrives after thinking, mark that the think block ended
-	// (the placeholder was already written when the block started).
-	m.thinkingActiveInTurn = false
 	if m.ready {
 		atBottom := m.vp.AtBottom()
 		m.setViewportContent()
@@ -60,20 +45,8 @@ func (m *model) appendTranscript(text string) {
 // function included, for one-off system/status messages) keeps rebuilding
 // the viewport immediately instead.
 func (m *model) appendTranscriptStreamed(text string) {
-	if m.thinkingActiveInTurn {
-		if isTTY {
-			m.transcript.WriteString(ansiReset)
-		}
-		if s := m.transcript.String(); len(s) > 0 && s[len(s)-1] != '\n' {
-			m.transcript.WriteByte('\n')
-		}
-		if s := m.transcriptNoThink.String(); len(s) > 0 && s[len(s)-1] != '\n' {
-			m.transcriptNoThink.WriteByte('\n')
-		}
-	}
+	m.closeOpenThinkBlock()
 	m.transcript.WriteString(text)
-	m.transcriptNoThink.WriteString(text)
-	m.thinkingActiveInTurn = false
 	m.syncViewportThrottled()
 }
 
@@ -88,30 +61,36 @@ const retractFallbackNote = "[milk] an unparsed tool call was not executed — t
 // from in favor of to (a turn that ended on unparsed tool-call markup, whose
 // raw text already streamed out before the source-side strip replaced it —
 // see local.stripUnparsedToolMarkup and Agent.WithOnRetract). The LAST
-// occurrence of from is replaced with to in both transcript variants — exact
+// occurrence of from is replaced with to in the transcript buffer — exact
 // verbatim surgery, no fuzzy matching, so ordinary text is never touched.
+// Thinking blocks live out of band (ADR-0067), so their anchors shift with
+// the replacement instead of the surgery having to hunt around interleaved
+// reasoning text.
 // When from isn't found (the streamed form diverged from the final response —
-// interleaved status lines or thinking-block breaks), the honest replacement
-// is appended instead: to followed by a yellow note, so raw markup is never
-// the transcript's final state.
+// interleaved status lines), the honest replacement is appended instead: to
+// followed by a yellow note, so raw markup is never the transcript's final
+// state.
 func (m *model) retractStreamed(from, to string) {
-	for _, b := range []*strings.Builder{m.transcript, m.transcriptNoThink} {
-		s := b.String()
-		idx := -1
-		if from != "" {
-			idx = strings.LastIndex(s, from)
+	s := m.transcript.String()
+	idx := -1
+	if from != "" {
+		idx = strings.LastIndex(s, from)
+	}
+	m.transcript.Reset()
+	switch {
+	case idx >= 0:
+		m.transcript.WriteString(s[:idx] + to + s[idx+len(from):])
+		m.adjustThinkAnchors(idx, len(from), len(to))
+	default:
+		// The fallback note replaces the transcript's tail state — end any
+		// streaming block first so the note lands at the end, not above a
+		// still-open container.
+		m.closeOpenThinkBlock()
+		m.transcript.WriteString(s)
+		if s != "" && !strings.HasSuffix(s, "\n") {
+			m.transcript.WriteString("\n")
 		}
-		b.Reset()
-		switch {
-		case idx >= 0:
-			b.WriteString(s[:idx] + to + s[idx+len(from):])
-		default:
-			b.WriteString(s)
-			if s != "" && !strings.HasSuffix(s, "\n") {
-				b.WriteString("\n")
-			}
-			b.WriteString(to + "\n" + yellow(retractFallbackNote) + "\n")
-		}
+		m.transcript.WriteString(to + "\n" + yellow(retractFallbackNote) + "\n")
 	}
 	// Content changed mid-transcript, so the offset-keyed colorize caches
 	// can't be trusted any more — force a full re-colorize.
@@ -125,35 +104,36 @@ func (m *model) retractStreamed(from, to string) {
 	}
 }
 
-// appendThinkingStreamed adds thinking/reasoning text to the full transcript
-// (dim-styled) and a single "[thinking…]" placeholder to transcriptNoThink
-// (only on the first chunk of a new thinking block, to avoid repeated
-// placeholders per token). The only source of thinking text is the per-token
-// reasoning stream (thinkChunkMsg), so this is throttled the same way
-// appendTranscriptStreamed is — see its doc comment on model.viewportDirty.
-//
-// The dim escape is opened once per block (not re-wrapped per chunk) and closed
-// in appendTranscript when regular content follows: back-to-back self-terminated
-// \x1b[2m...\x1b[0m pairs from per-chunk wrapping could otherwise land right at
-// a line-wrap boundary and leave a stray, orphaned "m" terminator visible.
+// appendThinkingStreamed adds thinking/reasoning text to the current think
+// block (ADR-0067): the block's own buffer, not the transcript. The first
+// chunk of a reasoning run opens a block anchored at the transcript's current
+// end; the block renders as a fold container there — header always, body only
+// while expanded. A new block keeps the session's current folding status
+// (thinkFoldOpen — the status the previous block was left in): folded by
+// default until the user opens one, and open-and-pinned when the user is
+// watching. Throttled like appendTranscriptStreamed — see model.viewportDirty.
 func (m *model) appendThinkingStreamed(text string) {
-	if !m.thinkingActiveInTurn {
-		if isTTY {
-			m.transcript.WriteString(ansiDim)
+	for i := range m.thinkBlocks {
+		if !m.thinkBlocks[i].closed {
+			m.thinkBlocks[i].buf.WriteString(text)
+			m.syncViewportThrottled()
+			return
 		}
-		m.transcriptNoThink.WriteString(dim("[thinking… Ctrl+T to show]"))
-		m.thinkingActiveInTurn = true
 	}
-	m.transcript.WriteString(text)
+	b := thinkBlock{
+		buf:    &strings.Builder{},
+		anchor: m.transcript.Len(),
+		// Keep the folding status of the previous block (session state, not
+		// the previous block's row — the turn-boundary tidy folds older blocks
+		// without changing it). userSet matches so a block created in
+		// watch-mode stays open past its close, like one opened directly.
+		expanded: m.thinkFoldOpen,
+		userSet:  m.thinkFoldOpen,
+	}
+	b.buf.WriteString(text)
+	m.thinkBlocks = append(m.thinkBlocks, b)
+	m.invalidateThinkDisplay()
 	m.syncViewportThrottled()
-}
-
-// activeTranscript returns the transcript variant to render based on showThinking.
-func (m *model) activeTranscript() *strings.Builder {
-	if m.showThinking {
-		return m.transcript
-	}
-	return m.transcriptNoThink
 }
 
 // wrappedTranscript returns the transcript (or welcome screen) word-wrapped to
@@ -161,31 +141,41 @@ func (m *model) activeTranscript() *strings.Builder {
 // text region is highlighted with an inverted background, respecting column
 // boundaries on the first and last lines.
 func (m *model) wrappedTranscript() string {
-	tx := m.activeTranscript()
-	if tx.Len() == 0 {
+	raw, openAt := m.transcriptDisplayAt()
+	if raw == "" {
 		return m.applySelectionHighlight(m.welcomeScreen())
 	}
 	vw := m.vpWidth()
-	raw := tx.String()
 	if vw <= 0 {
 		return raw
 	}
 	if m.colorizeMode == ColorizeOff {
-		return m.applySelectionHighlight(ansi.Wrap(expandTabsForWrap(raw), vw, ""))
+		return m.applySelectionHighlight(tintThinkSurface(ansi.Wrap(expandTabsForWrap(raw), vw, ""), vw))
 	}
 
-	txLen := tx.Len()
+	txLen := len(raw)
 	// Check cache validity: width change requires re-wrap; YOffset is not a cache
 	// key because colorization covers the full transcript regardless of scroll
 	// position, and GotoBottom legitimately advances YOffset after every append.
 	vpChanged := vw != m.colorizeVPWidth
 	txGrew := txLen - m.colorizeTransLen
+	if txGrew < 0 {
+		// The display shrank without an explicit invalidate (defensive — every
+		// fold-state change goes through invalidateThinkDisplay): the cached
+		// tail is no longer a prefix match, force a full rebuild.
+		m.colorizeForce = true
+	}
 
 	// Count new lines since last re-colorize to decide if threshold is met.
-	newLines := 0
-	if txGrew > 0 {
-		newLines = strings.Count(raw[m.colorizeTransLen:], "\n")
-		m.colorizeLinesSeen += newLines
+	// Counted against the display's total length (colorizeSeenLen), not the
+	// commit point: the commit is deliberately capped before an open think
+	// block's container (see below), whose arriving lines still count toward
+	// the threshold — but must not be re-counted on every render.
+	if txLen > m.colorizeSeenLen {
+		m.colorizeLinesSeen += strings.Count(raw[m.colorizeSeenLen:], "\n")
+		m.colorizeSeenLen = txLen
+	} else if txLen < m.colorizeSeenLen {
+		m.colorizeSeenLen = txLen
 	}
 
 	if !m.colorizeForce && !vpChanged && m.colorizeCached != "" && m.colorizeLinesSeen < colorizeLineThresh {
@@ -202,9 +192,9 @@ func (m *model) wrappedTranscript() string {
 			if !strings.HasSuffix(base, ansiReset) {
 				base += ansiReset
 			}
-			return m.applySelectionHighlight(base + newText)
+			return m.applySelectionHighlight(tintThinkSurface(base+newText, vw))
 		}
-		return m.applySelectionHighlight(m.colorizeCached)
+		return m.applySelectionHighlight(tintThinkSurface(m.colorizeCached, vw))
 	}
 
 	// Full re-colorize with per-turn caching: colorize on the raw (unwrapped)
@@ -224,6 +214,16 @@ func (m *model) wrappedTranscript() string {
 	effLen := txLen
 	if idx := danglingEscapeStart(raw); idx >= 0 {
 		effLen = idx
+	}
+	// Never commit the cache into an open think block's container (its first
+	// byte is openAt): the container is re-rendered from scratch on every
+	// chunk — the header's live line count and the body's per-line styling
+	// both rewrite bytes mid-display — so a cached prefix reaching into it
+	// would go stale while the appended suffix started at shifted offsets:
+	// garbled lines. The commit stops before the container; the streaming
+	// tail is re-wrapped fresh on every render instead.
+	if openAt < effLen {
+		effLen = openAt
 	}
 	m.colorizeForce = false
 	m.colorizeLinesSeen = 0
@@ -261,20 +261,25 @@ func (m *model) wrappedTranscript() string {
 
 	wrapped := ansi.Wrap(expandTabsForWrap(colorized.String()), vw, "")
 
-	// Update cache.
+	// Update cache. The cache stores the untinted wrap: the thinking
+	// surface's full-row pad (tintThinkSurface) is width-dependent and is
+	// applied to the returned render instead — the cached bytes never
+	// change with the viewport width again after their own re-wrap, so
+	// the seam between the cached prefix and the fresh suffix can't pick
+	// up stale padding.
 	m.colorizeCached = wrapped
 	m.colorizeTransLen = effLen
 	m.colorizeVPWidth = vw
 
 	if effLen == txLen {
-		return m.applySelectionHighlight(wrapped)
+		return m.applySelectionHighlight(tintThinkSurface(wrapped, vw))
 	}
 	newText := ansi.Wrap(expandTabsForWrap(raw[effLen:]), vw, "")
 	base := wrapped
 	if !strings.HasSuffix(base, ansiReset) {
 		base += ansiReset
 	}
-	return m.applySelectionHighlight(base + newText)
+	return m.applySelectionHighlight(tintThinkSurface(base+newText, vw))
 }
 
 // danglingEscapeStart returns the byte offset of an incomplete trailing ANSI
@@ -298,29 +303,19 @@ func danglingEscapeStart(s string) int {
 // cached colorized content when available so coordinates match the viewport exactly.
 // Falls back to a fresh render when the cache is empty (e.g. ColorizeOff mode or
 // before first paint).
+// transcriptPlainLines returns the transcript lines stripped of ANSI, using
+// the same render the viewport shows so coordinates match it exactly —
+// including an open think block's container, which the colorize cache
+// deliberately never commits (a stale cache copy alone would omit the
+// streaming block and skew click hit-testing and selection).
 func (m *model) transcriptPlainLines() []string {
-	var wrapped string
-	if m.colorizeCached != "" {
-		// Fast path: cache already holds the wrapped+colorized content.
-		wrapped = m.colorizeCached
-	} else {
-		// Slow path: render fresh so selection coordinates are still correct.
-		vw := m.vpWidth()
-		if m.transcript.Len() == 0 {
-			wrapped = m.welcomeScreen()
-		} else {
-			raw := m.activeTranscript().String()
-			if vw <= 0 {
-				wrapped = raw
-			} else {
-				colorized := colorizeTranscriptWrapped(raw, m.colorizeMode)
-				wrapped = ansi.Wrap(expandTabsForWrap(colorized), vw, "")
-			}
-		}
-	}
+	wrapped := m.wrappedTranscript()
 	lines := strings.Split(wrapped, "\n")
 	for i, l := range lines {
-		lines[i] = ansi.Strip(l)
+		// Trailing spaces on thinking-surface rows are the render-time
+		// full-row pad (tintThinkSurface), not content — trim them so the
+		// plain coordinate space stays clean for hit-testing and copy.
+		lines[i] = strings.TrimRight(ansi.Strip(l), " ")
 	}
 	return lines
 }
@@ -489,7 +484,6 @@ func (m *model) seedTranscriptFromHistory() {
 	}
 	if text := seedTranscriptText(m.st, false); text != "" {
 		m.transcript.WriteString(text)
-		m.transcriptNoThink.WriteString(text)
 	}
 }
 
@@ -503,8 +497,9 @@ func (m *model) reseedTranscriptFromHistory() {
 		return
 	}
 	m.transcript.Reset()
-	m.transcriptNoThink.Reset()
-	m.thinkingActiveInTurn = false
+	m.thinkBlocks = nil
+	m.thinkBlocksTurnStart = 0
+	m.thinkFoldOpen = false
 	if text := seedTranscriptText(m.st, true); text != "" {
 		m.appendTranscript(text)
 	}

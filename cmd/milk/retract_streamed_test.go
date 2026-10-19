@@ -5,31 +5,65 @@ import (
 	"testing"
 )
 
+// rawToolMarkup is the verbatim unparsed tool-call text a turn can end on.
+// Hex escapes keep the literal markup sequence out of this file's own source.
+const rawToolMarkup = "\x3ctool_call\x3e=bash\x3e\x3cparameter=command\x3els\x3c/parameter\x3e\x3c/function\x3e\x3c/tool_call\x3e"
+
 func TestRetractStreamed_ReplacesLastExactOccurrence(t *testing.T) {
 	m := newTestModelForPanels(t)
-	const raw = "<tool_call>=bash><parameter=command>ls</parameter></function></tool_call>"
-	for _, b := range []*strings.Builder{m.transcript, m.transcriptNoThink} {
-		b.WriteString("earlier\n" + raw + "\n")
+	m.transcript.WriteString("earlier\n" + rawToolMarkup + "\n")
+	m.retractStreamed(rawToolMarkup, "[clean summary]")
+	got := m.transcript.String()
+	if strings.Contains(got, "tool_call") || !strings.Contains(got, "[clean summary]") || !strings.HasPrefix(got, "earlier\n") {
+		t.Errorf("transcript = %q", got)
 	}
-	m.retractStreamed(raw, "[clean summary]")
-	for name, b := range map[string]*strings.Builder{"full": m.transcript, "nothink": m.transcriptNoThink} {
-		got := b.String()
-		if strings.Contains(got, "<tool_call>") || !strings.Contains(got, "[clean summary]") || !strings.HasPrefix(got, "earlier\n") {
-			t.Errorf("%s transcript = %q", name, got)
-		}
-		if strings.Contains(got, retractFallbackNote) {
-			t.Errorf("%s: exact match must not add the fallback note", name)
-		}
+	if strings.Contains(got, retractFallbackNote) {
+		t.Errorf("exact match must not add the fallback note: %q", got)
 	}
 }
 
 func TestRetractStreamed_FallsBackToNoteWhenNotFound(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.transcript.WriteString("something else")
-	m.transcriptNoThink.WriteString("something else")
-	m.retractStreamed("<tool_call>x", "[clean summary]")
+	m.retractStreamed("missing-markup", "[clean summary]")
 	got := m.transcript.String()
 	if !strings.HasPrefix(got, "something else\n[clean summary]\n") || !strings.Contains(got, retractFallbackNote) {
 		t.Errorf("transcript = %q", got)
+	}
+}
+
+func TestRetractStreamed_AdjustsThinkBlockAnchors(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.transcript.WriteString("AAA" + rawToolMarkup + "BBB")
+	// One block anchored at the transcript end (opened after all text), one
+	// anchored before the markup (inside the soon-to-be-replaced region is
+	// covered by TestAdjustThinkAnchors).
+	m.thinkBlocks = []thinkBlock{{anchor: m.transcript.Len(), closed: true}, {anchor: 3, closed: true}}
+	m.retractStreamed(rawToolMarkup, "X")
+	// [3, 3+len(rawToolMarkup)) replaced by 1 byte: the trailing block shifts
+	// by the delta, the anchor at 3 (the replacement's start) stays put.
+	wantTail := 3 + 1 + 3 // "AAA" + "X" + "BBB"
+	if m.thinkBlocks[0].anchor != wantTail {
+		t.Errorf("tail block anchor = %d, want %d", m.thinkBlocks[0].anchor, wantTail)
+	}
+	if m.thinkBlocks[1].anchor != 3 {
+		t.Errorf("pre block anchor = %d, want 3", m.thinkBlocks[1].anchor)
+	}
+	// The display still splices both blocks at their (adjusted) anchors.
+	disp := m.transcriptDisplay()
+	if !strings.Contains(disp, "AAAXBBB") {
+		t.Errorf("display = %q", disp)
+	}
+}
+
+func TestAdjustThinkAnchors(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.thinkBlocks = []thinkBlock{{anchor: 4}, {anchor: 12}, {anchor: 20}}
+	m.adjustThinkAnchors(8, 6, 2) // replace [8,14) with 2 bytes: delta -4
+	want := []int{4, 10, 16}
+	for i := range m.thinkBlocks {
+		if m.thinkBlocks[i].anchor != want[i] {
+			t.Errorf("block %d anchor = %d, want %d", i, m.thinkBlocks[i].anchor, want[i])
+		}
 	}
 }

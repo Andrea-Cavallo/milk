@@ -110,7 +110,7 @@ func acpThink(as *acpSession, rest string) (string, string) {
 		as.showThinking.Store(false)
 	case "":
 	default:
-		return "usage: /think [on|off]", ""
+		return "usage: /think [on|off] (expand|collapse|view are TUI-only)", ""
 	}
 	state := "off"
 	if as.showThinking.Load() {
