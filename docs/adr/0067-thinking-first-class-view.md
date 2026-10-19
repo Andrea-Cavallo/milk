@@ -40,7 +40,8 @@ render stack into fully-typed content parts.
   already closes the reset before every newline.
 - `transcriptDisplay()` splices each block in at its anchor as a **fold
   container**: a one-line header (`▸ thinking · N lines` folded,
-  `▾ thinking · N lines` expanded, `· streaming` while open) plus the dim
+  `▾ thinking · N lines` expanded, `· streaming` on a block opened mid-stream)
+  plus the dim
   body only when expanded. Everything downstream (colorize + wrap +
   selection) runs on the display string exactly like it ran on the old
   `activeTranscript()` variant. `transcriptNoThink` and `activeTranscript()`
@@ -50,11 +51,14 @@ Display rules (as amended by the 2026-10-19 Update below):
 
 - Every block always renders its header row — there is no hidden mode and no
   placeholder line. The header is information-only: glyph, line count, fold
-  state (`· streaming` while open), never a key hint.
-- Blocks are **collapsed by default once complete** (the issue's requirement:
-  long reasoning must not flood the transcript). The block that is still
-  streaming stays open so reasoning can be watched live and folds when it
-  closes unless the user pinned it open.
+  state (`· streaming` on a block the user opened mid-stream), never a key
+  hint.
+- Blocks are **folded by default — streaming or complete** (the issue's
+  requirement: long reasoning must not flood the transcript). There is no
+  auto-open: while reasoning streams in the folded header's line count
+  updates live ("▸ thinking · N lines", the same line a completed block
+  shows), and only an explicit open (header click / Ctrl+T) shows the body.
+  A block the user never touched stays folded when it closes.
 - **Click a fold header** to expand/collapse that block (mouse release
   without drag, hit-tested against header lines in the selection coordinate
   space) — the same arm/act rhythm as panel clicks; drag selection over
@@ -168,3 +172,33 @@ changed and why:
   contract as the thought-relay toggle (`agent_thought_chunk` updates, ACP
   history replay), loop detection keeps consuming reasoning regardless, and
   TUI fold state is independent of all of it.
+
+## Update (2026-10-19, later the same day): streaming blocks are folded by default too
+
+User decision after live-testing the fold model: the streaming block must not
+start fold-open. "I don't want 'current' reasoning to be fold-open at the
+beginning and then folded. If not explicitly open, I want to see the single
+line with updated row count as when collapsed." The Decision above is amended
+in place again:
+
+- **No auto-open, ever.** "Expanded by default" ceases to exist as a state:
+  a new block is created folded (`expanded: false`), exactly like a completed
+  one. While reasoning streams in, the folded `▸ thinking · N lines` header
+  is the whole visual — and the line count *is* the live signal, ticking up
+  as chunks arrive. The earlier "watch it live" rule inverted the default for
+  everyone to serve a use case (watching raw reasoning stream) that is one
+  keystroke away — and works better this way: Ctrl+T opens the streaming
+  block and keeps it open.
+- **User-open is pinned against close-on-stream-end.** A block opened while
+  streaming (`userSet`) stays open when streaming ends; only blocks the user
+  never touched remain folded. `closeOpenThinkBlock`'s auto-fold now only
+  enforces the default for untouched blocks (which were folded all along).
+- **The `· streaming` marker follows the open state.** A folded streaming
+  block renders the same header line as a completed block (the updating
+  count is the tell); `▾ thinking · N lines · streaming` appears only on a
+  block the user opened while it is still receiving chunks.
+
+Rationale: the transcript's default rhythm stays quiet — the header row
+already reports that (and how much) reasoning happened. Live-watching is an
+explicit per-block opt-in, and the folded header's updating count carries the
+"something is happening" signal without dumping the body on screen.
