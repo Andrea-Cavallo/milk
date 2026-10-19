@@ -2790,7 +2790,7 @@ Action streak detected: %s. You are stuck in a non-progressing loop. Stop and tr
 // writes, MCP tools — is a barrier executed alone, in order.
 func isParallelSafeTool(name string) bool {
 	switch name {
-	case "read_file", "list_dir", "grep", "find_files",
+	case "read_file", "list_dir", "grep", "find_files", "bash_output",
 		"get_memory", "list_memory", "get_session_context", "get_context_stats",
 		"get_metrics", "search_signals", "list_tasks", "milk_config_help":
 		return true

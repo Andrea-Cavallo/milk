@@ -235,6 +235,7 @@ func run(cmd *cobra.Command, args []string) error {
 	sessionStart := time.Now()
 	obsShutdown := initObs(cfg)
 	defer func() {
+		local.StopBackgroundShells() // ADR-0063: no background shell outlives milk
 		obs.SetGauge(context.Background(), milkScope, "milk.session.duration_ms",
 			time.Since(sessionStart).Milliseconds(),
 		)
