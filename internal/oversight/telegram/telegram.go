@@ -21,6 +21,14 @@ import (
 const (
 	defaultAPIBase     = "https://api.telegram.org"
 	defaultPollTimeout = 20 * time.Second
+	// maxMessageUnits is the per-message budget in UTF-16 code units (the
+	// unit Telegram counts for its 4096-character sendMessage limit), kept a
+	// margin below 4096 for entity-parsing subtleties. Messages longer than
+	// this are split into ordered chunks — never truncated (issue #253).
+	maxMessageUnits = 4000
+	// sendQueueSize bounds the outbound queue; the single worker goroutine
+	// drains it in FIFO order so multi-chunk messages arrive in order.
+	sendQueueSize = 256
 )
 
 // Config holds the Telegram-specific configuration.
@@ -44,6 +52,9 @@ type Notifier struct {
 	lastUpdate int64        // getUpdates offset
 	permCh     chan string  // non-nil when AskPermission is waiting
 	onInput    func(string) // called for non-permission messages when set
+
+	outCh   chan string // outbound FIFO, drained by one worker goroutine
+	outOnce sync.Once
 }
 
 // New creates a Notifier. Call StartPolling to begin receiving messages.
@@ -60,6 +71,7 @@ func New(cfg Config) *Notifier {
 	return &Notifier{
 		cfg:    cfg,
 		client: &http.Client{Timeout: 30 * time.Second},
+		outCh:  make(chan string, sendQueueSize),
 	}
 }
 
@@ -167,10 +179,7 @@ func (n *Notifier) Ping(ctx context.Context) error {
 }
 
 func (n *Notifier) NotifyTurnStart(_ context.Context, agent, target, prompt string) {
-	short := prompt
-	if len(short) > 120 {
-		short = short[:117] + "..."
-	}
+	short := trimPreview(prompt, 117, "...")
 	msg := fmt.Sprintf("🔄 *%s* → %s\n`%s`", escMD(agent), escMD(target), escMD(short))
 	n.sendAsync(msg)
 }
@@ -189,10 +198,9 @@ func (n *Notifier) NotifyToolResult(_ context.Context, toolName, summary string,
 	if summary == "" {
 		return
 	}
-	const maxLen = 500
-	if len(summary) > maxLen {
-		summary = summary[:maxLen] + "\n…"
-	}
+	// Tool-result summaries stay a summary (per issue #253's scope) — capped,
+	// but the cap is rune-safe so it can never split a multi-byte character.
+	summary = trimPreview(summary, 497, "\n…")
 	icon := "📤"
 	if isError {
 		icon = "❌"
@@ -206,15 +214,29 @@ func (n *Notifier) NotifyTurnDone(_ context.Context, agent string, err error) {
 	}
 }
 
+// NotifyResponse relays the agent's response in full. Text longer than one
+// Telegram message is split into ordered chunks (each its own sendMessage),
+// never trimmed — see issue #253. Chunks go through the FIFO send queue, so
+// they arrive in order, as do back-to-back notifications.
 func (n *Notifier) NotifyResponse(_ context.Context, agent, text string) {
 	if text == "" {
 		return
 	}
-	const maxLen = 3000
-	if len(text) > maxLen {
-		text = text[:maxLen] + "\n…"
+	header := "💬 *" + escMD(agent) + "*"
+	// Reserve room for the worst-case header suffix " (n/m)" on chunked sends
+	// so that header + escaped chunk always fits the Telegram limit.
+	budget := maxMessageUnits - utf16Len(header) - 10
+	if budget < 256 {
+		budget = 256
 	}
-	n.sendAsync(fmt.Sprintf("💬 *%s*\n%s", escMD(agent), escMD(text)))
+	chunks := chunkMessage(text, budget)
+	for i, chunk := range chunks {
+		h := header
+		if len(chunks) > 1 {
+			h = fmt.Sprintf("💬 *%s* (%d/%d)", escMD(agent), i+1, len(chunks))
+		}
+		n.sendAsync(h + "\n" + escMD(chunk))
+	}
 }
 
 // AskPermission sends a formatted permission prompt and waits for a y/n reply
@@ -296,9 +318,25 @@ func (n *Notifier) send(text string) {
 	resp.Body.Close()
 }
 
-// sendAsync fires send in a goroutine so callers are never blocked.
+// sendAsync enqueues text on the FIFO outbound queue, started lazily. A single
+// worker goroutine drains it, so multi-chunk messages and back-to-back
+// notifications always arrive in send order (a goroutine per message — the
+// pre-#253 behavior — could reorder chunks).
 func (n *Notifier) sendAsync(text string) {
-	go n.send(text)
+	n.outOnce.Do(func() {
+		go func() {
+			for msg := range n.outCh {
+				n.send(msg)
+			}
+		}()
+	})
+	select {
+	case n.outCh <- text:
+	default:
+		// Queue full: deliver best-effort out of band rather than dropping
+		// content (order may interleave only in this overflow case).
+		go n.send(text)
+	}
 }
 
 // apiGet calls a Telegram Bot API method with query params and decodes the JSON response.
@@ -329,4 +367,114 @@ func escMD(s string) string {
 		`.`, `\.`, `!`, `\!`,
 	)
 	return replacer.Replace(s)
+}
+
+// utf16Len returns the length of s in UTF-16 code units — the unit Telegram
+// counts against its 4096-character sendMessage limit (astral runes are 2).
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r > 0xFFFF {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+// trimPreview cuts s to at most max runes — rune-safe, so it never splits a
+// multi-byte character — and appends suffix to mark the cut.
+func trimPreview(s string, max int, suffix string) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + suffix
+}
+
+// chunkMessage splits text into chunks whose escaped size fits maxUnits UTF-16
+// code units, so header + escaped chunk always fits one Telegram message. It
+// breaks at line boundaries when possible, then at whitespace, and only hard
+// splits at a rune boundary when an unbroken run exceeds the budget. No chunk
+// ever splits a character; the concatenation of chunks is exactly text.
+func chunkMessage(text string, maxUnits int) []string {
+	if text == "" {
+		return nil
+	}
+	if utf16Len(escMD(text)) <= maxUnits {
+		return []string{text}
+	}
+	var chunks []string
+	cur := ""
+	curUnits := 0
+	flush := func() {
+		if cur != "" {
+			chunks = append(chunks, cur)
+			cur = ""
+			curUnits = 0
+		}
+	}
+	for _, line := range strings.SplitAfter(text, "\n") {
+		if line == "" {
+			continue
+		}
+		le := utf16Len(escMD(line))
+		if cur == "" && le <= maxUnits {
+			cur, curUnits = line, le
+			continue
+		}
+		if cur != "" && curUnits+le <= maxUnits {
+			cur += line
+			curUnits += le
+			continue
+		}
+		flush()
+		if le <= maxUnits {
+			cur, curUnits = line, le
+			continue
+		}
+		// A single line exceeds the budget on its own.
+		for _, piece := range splitLongLine(line, maxUnits) {
+			chunks = append(chunks, piece)
+		}
+	}
+	flush()
+	return chunks
+}
+
+// splitLongLine splits one over-long line into pieces each fitting maxUnits
+// (escaped). It prefers cutting at whitespace (when at least half the fitted
+// run is kept) and falls back to hard rune-boundary splits.
+func splitLongLine(line string, maxUnits int) []string {
+	var pieces []string
+	r := []rune(line)
+	for len(r) > 0 {
+		if utf16Len(escMD(string(r))) <= maxUnits {
+			pieces = append(pieces, string(r))
+			break
+		}
+		acc, fit, lastSpace := 0, 0, 0
+		for i, ch := range r {
+			w := utf16Len(escMD(string(ch)))
+			if acc+w > maxUnits {
+				fit = i
+				break
+			}
+			acc += w
+			fit = i + 1
+			if ch == ' ' || ch == '\t' {
+				lastSpace = i + 1
+			}
+		}
+		if fit == 0 {
+			fit = 1 // always make progress
+		}
+		if lastSpace > 0 && lastSpace >= fit/2 {
+			fit = lastSpace
+		}
+		pieces = append(pieces, string(r[:fit]))
+		r = r[fit:]
+	}
+	return pieces
 }
