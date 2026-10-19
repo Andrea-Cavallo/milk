@@ -213,7 +213,7 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 					"type": "object",
 					"properties": map[string]any{
 						"path":   map[string]any{"type": "string", "description": "Absolute or relative file path"},
-						"offset": map[string]any{"type": "integer", "description": "Line offset to start reading from (0-based)"},
+						"offset": map[string]any{"type": "integer", "description": "Line number to start reading from (1-based, matching the output numbering; default 1)"},
 						"limit":  map[string]any{"type": "integer", "description": fmt.Sprintf("Maximum number of lines to return (default %d)", maxReadLines)},
 					},
 					"required": []string{"path"},
@@ -659,25 +659,25 @@ func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Sess
 
 	switch name {
 	case "bash":
-		return runBash(ctx, args)
+		return runBash(ctx, args, cwd)
 	case "find_files":
 		return runFindFiles(ctx, args, cwd)
 	case "grep":
 		return runGrep(ctx, args, cwd)
 	case "read_file":
-		return runReadFile(args)
+		return runReadFile(args, cwd)
 	case "write_file":
-		return runWriteFile(args)
+		return runWriteFile(args, cwd)
 	case "edit_file":
-		return runEditFile(args)
+		return runEditFile(args, cwd)
 	case "delete_file":
-		return runDeleteFile(args)
+		return runDeleteFile(args, cwd)
 	case "move_file":
-		return runMoveFile(args)
+		return runMoveFile(args, cwd)
 	case "http_request":
 		return runHTTPRequest(ctx, args)
 	case "list_dir":
-		return runListDir(args)
+		return runListDir(args, cwd)
 	case "http_get":
 		return runHTTPGet(ctx, args)
 	case "get_session_context":
@@ -1032,7 +1032,7 @@ const (
 	bashMaxTimeout     = 600 * time.Second
 )
 
-func runBash(ctx context.Context, args map[string]any) (string, bool) {
+func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool) {
 	command, _ := args["command"].(string)
 
 	timeout := bashDefaultTimeout
@@ -1050,6 +1050,9 @@ func runBash(ctx context.Context, args map[string]any) (string, bool) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	setProcGroup(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1096,6 +1099,20 @@ func expandTilde(path string) string {
 		return path
 	}
 	return home + path[1:]
+}
+
+// resolvePath expands "~", anchors a relative path at the session cwd (not the
+// process cwd — over ACP session/new carries its own cwd, so the two can
+// differ), and cleans the result. Absolute paths pass through unchanged.
+func resolvePath(path, cwd string) string {
+	path = expandTilde(path)
+	if path == "" {
+		return path
+	}
+	if !filepath.IsAbs(path) && cwd != "" {
+		path = filepath.Join(cwd, path)
+	}
+	return filepath.Clean(path)
 }
 
 // runMilkConfigHelp looks up a self-config doc section by topic, or lists
@@ -1157,8 +1174,11 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 	recursive, _ := args["recursive"].(bool)
 
 	// Always exclude hidden/binary directories and skip binary files.
+	// -E is required: the tool advertises "Regex pattern" and models write
+	// extended syntax (foo|bar, a+, a?) — GNU basic grep treats those as
+	// literals and the search silently returns nothing.
 	// -r is forced when path is a directory, regardless of the recursive flag.
-	gargs := []string{"-n", "--color=never", "--binary-files=without-match",
+	gargs := []string{"-E", "-n", "--color=never", "--binary-files=without-match",
 		"--exclude-dir=.git", "--exclude-dir=.claude"}
 	if recursive {
 		gargs = append(gargs, "-r")
@@ -1190,10 +1210,10 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 	}.String(), false
 }
 
-func runWriteFile(args map[string]any) (string, bool) {
+func runWriteFile(args map[string]any, cwd string) (string, bool) {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
-	path = filepath.Clean(expandTilde(path))
+	path = resolvePath(path, cwd)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return toolResult{Error: err.Error()}.String(), false
@@ -1204,9 +1224,9 @@ func runWriteFile(args map[string]any) (string, bool) {
 	return toolResult{Output: "wrote " + path}.String(), false
 }
 
-func runReadFile(args map[string]any) (string, bool) {
+func runReadFile(args map[string]any, cwd string) (string, bool) {
 	path, _ := args["path"].(string)
-	path = filepath.Clean(expandTilde(path))
+	path = resolvePath(path, cwd)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1215,13 +1235,19 @@ func runReadFile(args map[string]any) (string, bool) {
 
 	lines := strings.Split(string(data), "\n")
 
-	offset := 0
+	// offset is a 1-based line number matching the output numbering, so a
+	// model that sees line 120 and requests offset=120 gets line 120 (the
+	// old 0-based offset silently skipped it).
+	offset := 1
 	if v, ok := args["offset"]; ok {
 		switch n := v.(type) {
 		case float64:
 			offset = int(n)
 		case string:
 			offset, _ = strconv.Atoi(n)
+		}
+		if offset < 1 {
+			offset = 1
 		}
 	}
 	limitSet := false
@@ -1239,26 +1265,26 @@ func runReadFile(args map[string]any) (string, bool) {
 		limit = min(limit, maxReadLines)
 	}
 
-	offset = min(offset, len(lines))
-	end := min(offset+limit, len(lines))
+	start := min(offset-1, len(lines))
+	end := min(start+limit, len(lines))
 
-	numbered := make([]string, 0, end-offset+1)
-	for i, l := range lines[offset:end] {
-		numbered = append(numbered, fmt.Sprintf("%d\t%s", offset+i+1, l))
+	numbered := make([]string, 0, end-start+1)
+	for i, l := range lines[start:end] {
+		numbered = append(numbered, fmt.Sprintf("%d\t%s", start+i+1, l))
 	}
 	out := strings.Join(numbered, "\n")
 	if !limitSet && end < len(lines) {
-		out += fmt.Sprintf("\n\n[truncated: showed lines %d-%d of %d; use offset+limit to read more]", offset+1, end, len(lines))
+		out += fmt.Sprintf("\n\n[truncated: showed lines %d-%d of %d; use offset+limit to read more]", start+1, end, len(lines))
 	}
 	return toolResult{Output: out}.String(), false
 }
 
-func runEditFile(args map[string]any) (string, bool) {
+func runEditFile(args map[string]any, cwd string) (string, bool) {
 	path, _ := args["path"].(string)
 	oldStr, _ := args["old_string"].(string)
 	newStr, _ := args["new_string"].(string)
 	replaceAll, _ := args["replace_all"].(bool)
-	path = filepath.Clean(expandTilde(path))
+	path = resolvePath(path, cwd)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1288,12 +1314,12 @@ func runEditFile(args map[string]any) (string, bool) {
 	return toolResult{Output: "edited " + path}.String(), false
 }
 
-func runListDir(args map[string]any) (string, bool) {
+func runListDir(args map[string]any, cwd string) (string, bool) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		path = "."
 	}
-	path = filepath.Clean(expandTilde(path))
+	path = resolvePath(path, cwd)
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -1315,20 +1341,20 @@ func runListDir(args map[string]any) (string, bool) {
 	return toolResult{Output: strings.Join(lines, "\n")}.String(), false
 }
 
-func runDeleteFile(args map[string]any) (string, bool) {
+func runDeleteFile(args map[string]any, cwd string) (string, bool) {
 	path, _ := args["path"].(string)
-	path = filepath.Clean(expandTilde(path))
+	path = resolvePath(path, cwd)
 	if err := os.Remove(path); err != nil {
 		return toolResult{Error: err.Error()}.String(), false
 	}
 	return toolResult{Output: "deleted " + path}.String(), false
 }
 
-func runMoveFile(args map[string]any) (string, bool) {
+func runMoveFile(args map[string]any, cwd string) (string, bool) {
 	src, _ := args["source"].(string)
 	dst, _ := args["destination"].(string)
-	src = filepath.Clean(expandTilde(src))
-	dst = filepath.Clean(expandTilde(dst))
+	src = resolvePath(src, cwd)
+	dst = resolvePath(dst, cwd)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return toolResult{Error: err.Error()}.String(), false
 	}
