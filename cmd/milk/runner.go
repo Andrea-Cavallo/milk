@@ -157,9 +157,9 @@ type TurnRunner interface {
 	// RunToolCall executes a single lightweight inference call with no session
 	// bookkeeping. images are forwarded from a calling agent that couldn't
 	// attach them itself (see local.ToolAgentDispatcher); only localRunner
-	// can actually use them (via SetPendingImageParts) — cliRunner and
-	// subprocessRunner accept but ignore the parameter. Returns the agent's
-	// text response or an error.
+	// can actually use them (via per-call ctx — local.WithImageParts, issue
+	// #297) — cliRunner and subprocessRunner accept but ignore the parameter.
+	// Returns the agent's text response or an error.
 	RunToolCall(ctx context.Context, cfg config.Config, prompt string, images []local.ContentPart, out io.Writer) (string, error)
 }
 
@@ -184,13 +184,6 @@ func newLocalRunner(agent *local.Agent, name string) *localRunner {
 func (r *localRunner) Name() string { return r.name }
 func (r *localRunner) IsCLI() bool  { return false }
 func (r *localRunner) Ping() error  { return r.agent.Ping(context.Background()) }
-
-// SetPendingImageParts forwards multipart vision content to the wrapped agent
-// (consumed once by its next Run call). Satisfies the optional
-// imagePartReceiver interface used by workflowTurnRunner.
-func (r *localRunner) SetPendingImageParts(parts []local.ContentPart) {
-	r.agent.SetPendingImageParts(parts)
-}
 
 func (r *localRunner) Execute(
 	ctx context.Context,
@@ -394,9 +387,10 @@ func (r *localRunner) RunToolCall(ctx context.Context, _ config.Config, prompt s
 	toolSess := &session.Session{CWD: cwd}
 	if len(images) > 0 {
 		// Reuses Run's own vision gate: this agent attaches them if
-		// "vision": true, otherwise drops with a note — same as any other
-		// pendingImageParts consumer.
-		r.agent.SetPendingImageParts(images)
+		// "vision": true, otherwise drops with a note. Per-call ctx, not the
+		// shared instance field (issue #297) — this agent is shared with
+		// background workflows running concurrently.
+		ctx = local.WithImageParts(ctx, images)
 	}
 	updatedMsgs, err := r.agent.Run(ctx, nil, prompt, out, toolSess, r.mem)
 	if err != nil {

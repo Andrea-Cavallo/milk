@@ -837,8 +837,47 @@ func (a *Agent) WithTaskStore(ts TaskStore) *Agent {
 // SetPendingImageParts stores ContentParts to be injected into the next user
 // message as a multipart vision payload. The parts are consumed (cleared)
 // after a single Run call so they do not affect subsequent turns.
+//
+// This writes the instance field, so it is safe only for single-threaded
+// callers (the REPL's own turns, direct tests). Callers whose agent is
+// SHARED between goroutines — workflow parallel_group items, background
+// jobs racing a live turn (issue #297) — must pass parts per call via
+// WithImageParts instead: nothing is written to the Agent at all.
 func (a *Agent) SetPendingImageParts(parts []ContentPart) {
 	a.pendingImageParts = parts
+}
+
+type imagePartsKey struct{}
+
+// WithImageParts returns ctx carrying multipart vision content parts for
+// exactly the call that runs with it. This is the concurrency-safe path for
+// callers sharing one *Agent between goroutines (issue #297): local.Run
+// consumes the value from its own ctx — the instance is never written, and
+// two overlapping calls can carry different (or no) parts without racing.
+// Non-local runners ignore the value; the vision gate inside Run applies
+// unchanged ("vision": true attaches, otherwise drops with a note).
+func WithImageParts(ctx context.Context, parts []ContentPart) context.Context {
+	return context.WithValue(ctx, imagePartsKey{}, parts)
+}
+
+// ImagePartsFromContext reports whether ctx carries per-call vision parts
+// (WithImageParts). Exported so callers — and tests — can assert what a
+// given call will send.
+func ImagePartsFromContext(ctx context.Context) ([]ContentPart, bool) {
+	parts, ok := ctx.Value(imagePartsKey{}).([]ContentPart)
+	return parts, ok
+}
+
+// takeImageParts resolves this call's vision parts: ctx parts win — they are
+// per-call state for shared-agent concurrency — and the instance field is
+// only the single-threaded fallback, consumed once here.
+func (a *Agent) takeImageParts(ctx context.Context) []ContentPart {
+	if parts, ok := ImagePartsFromContext(ctx); ok {
+		return parts
+	}
+	parts := a.pendingImageParts
+	a.pendingImageParts = nil
+	return parts
 }
 
 func (a *Agent) WithToolTimeout(d time.Duration) *Agent {
@@ -1733,9 +1772,10 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 	// current_need are injected as tools. Tag-based instruction injection is only for
 	// external-process agents (CLI, subprocess) that cannot receive injected tools.
 	// Consumed once, up front, regardless of path below — pendingImages is a
-	// local copy from here on, so it never leaks into a later, unrelated turn.
-	pendingImages := a.pendingImageParts
-	a.pendingImageParts = nil
+	// local copy from here on, so it never leaks into a later, unrelated
+	// turn. Per-call ctx parts (WithImageParts, issue #297) win over the
+	// instance field, which is only the single-threaded fallback.
+	pendingImages := a.takeImageParts(ctx)
 
 	modelPrompt := userPrompt
 	if a.jobID == "" && !a.workflowRole && !a.isToolAgent {

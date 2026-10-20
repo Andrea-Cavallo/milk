@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/scoutme/milk/internal/agent/local"
@@ -106,20 +107,29 @@ func TestLaunchGenericWorkflow_ConsumesPendingAttachments(t *testing.T) {
 
 // ── workflowTurnRunner first-turn attachment injection ────────────────────────
 
-// fakeTurnRunner is a minimal TurnRunner recording the prompts it receives.
+// fakeTurnRunner is a minimal TurnRunner recording the prompts it receives
+// and the ctx of each call (so vision attachment asserts on the per-call ctx
+// parts — local.WithImageParts, issue #297 — not an instance write).
 // Set isCLI to select the CLI branch (@path injection) or the local branch
-// (vision content parts via the imagePartReceiver interface below).
+// (vision content parts carried on the call ctx).
 type fakeTurnRunner struct {
-	isCLI         bool
+	isCLI bool
+	// mu guards the record slices: concurrent clone runs (issue #297) both
+	// hit this one fake inner, exactly as items share a role's inner runner.
+	mu            sync.Mutex
 	prompts       []string
 	perceptsCalls [][]string
+	ctxs          []context.Context
+	// newSessionID, when set, is returned as TurnResult.NewSessionID so a
+	// test can watch sessionID state land on the adapter (issue #297).
+	newSessionID string
 }
 
 func (f *fakeTurnRunner) Name() string { return "fake" }
 func (f *fakeTurnRunner) IsCLI() bool  { return f.isCLI }
 func (f *fakeTurnRunner) Ping() error  { return nil }
 func (f *fakeTurnRunner) Execute(
-	_ context.Context,
+	ctx context.Context,
 	_ config.Config,
 	_ *session.Session,
 	_ *memory.Store,
@@ -132,24 +142,35 @@ func (f *fakeTurnRunner) Execute(
 	_ TurnCallbacks,
 	_ io.Writer,
 ) (TurnResult, error) {
+	f.mu.Lock()
 	f.prompts = append(f.prompts, prompt)
 	f.perceptsCalls = append(f.perceptsCalls, percepts)
-	return TurnResult{Text: "ok"}, nil
+	f.ctxs = append(f.ctxs, ctx)
+	f.mu.Unlock()
+	return TurnResult{Text: "ok", NewSessionID: f.newSessionID}, nil
 }
 
 func (f *fakeTurnRunner) RunToolCall(context.Context, config.Config, string, []local.ContentPart, io.Writer) (string, error) {
 	return "", nil
 }
 
-// fakeVisionRunner additionally records SetPendingImageParts calls (satisfying
-// the imagePartReceiver interface like localRunner does).
+// fakeVisionRunner derives its per-turn vision-payload record from the call
+// ctx — parts ride local.WithImageParts (issue #297) instead of an instance
+// write, so a call without the ctx key recorded nil-ok (no injection).
 type fakeVisionRunner struct {
 	fakeTurnRunner
-	imageCalls [][]local.ContentPart
 }
 
-func (f *fakeVisionRunner) SetPendingImageParts(parts []local.ContentPart) {
-	f.imageCalls = append(f.imageCalls, parts)
+// imagePartCalls returns the image parts each executed call carried, in
+// order; calls without ctx parts are skipped.
+func (f *fakeVisionRunner) imagePartCalls() [][]local.ContentPart {
+	var out [][]local.ContentPart
+	for _, ctx := range f.ctxs {
+		if parts, ok := local.ImagePartsFromContext(ctx); ok {
+			out = append(out, parts)
+		}
+	}
+	return out
 }
 
 func TestWorkflowTurnRunner_CLIInjectsAtPathOnFirstTurnOnly(t *testing.T) {
@@ -201,10 +222,11 @@ func TestWorkflowTurnRunner_LocalInjectsImagePartsOnFirstTurnOnly(t *testing.T) 
 	if _, err := wtr.Run(context.Background(), "next stage", nil); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
-	if len(inner.imageCalls) != 1 {
-		t.Fatalf("expected exactly 1 SetPendingImageParts call (first turn only), got %d", len(inner.imageCalls))
+	imageCalls := inner.imagePartCalls()
+	if len(imageCalls) != 1 {
+		t.Fatalf("expected exactly 1 call carrying ctx image parts (first turn only), got %d", len(imageCalls))
 	}
-	parts := inner.imageCalls[0]
+	parts := imageCalls[0]
 	if len(parts) != 1 {
 		t.Fatalf("expected 1 image part (text attachments are path-referenced only), got %d", len(parts))
 	}

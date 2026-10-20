@@ -215,6 +215,8 @@ stages:
 | `user_checkpoint` | Pause for a real user reply | `prompt` (rendered from current vars), `save_as` |
 | `parallel_group` | Like `loop over`, but each item's `body` runs **concurrently** | `over`, `from`, `max_concurrency`, `save_as` (aggregated per-item results) |
 
+**Per-item isolation (issue #297)**: each fan-out item gets its own clone of the role's runner adapter (`workflow.CloneableTurnRunner` — own scratch session, session ID, nonce and one-shot flags), so concurrent items never share or interleave session state; an item's passes resume within *that item's* session. Vision attachments for workflow turns ride the call's context (`local.WithImageParts`) rather than any shared agent field, so a background workflow running concurrently with a REPL turn touches no shared mutable state either. Runners that don't implement the optional clone interface keep the previous shared-instance behavior.
+
 **Declared collections**: a designer-style stage's saved output can declare structure the interpreter parses automatically — numbered sections (`## Sprint 1`, or `## Item 2 (depends_on: 1)` for dependency-ordered `parallel_group` items) and scalar limits (`max_passes: 4` on its own line). `dev.yaml`'s `plan_instructions` var is the exact text instructing the designer agent to produce this format — reuse or adapt it in a custom definition rather than inventing a new plan syntax from scratch.
 
 All workflows — including the built-in `dev`, `pair`, and `swarm` — run through the YAML-driven interpreter. Legacy dev-format checkpoints (pre-migration) can be cleared with `/workflow clear` and restarted.

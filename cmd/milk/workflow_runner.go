@@ -18,15 +18,6 @@ import (
 	"github.com/scoutme/milk/internal/workflow"
 )
 
-// imagePartReceiver is implemented by runners wrapping agents that can accept
-// multipart vision content parts (localRunner → *local.Agent via
-// SetPendingImageParts). cliRunner and subprocessRunner cannot — a CLI role
-// instead receives @path prompt lines (the claude binary attaches files
-// natively), and subprocessRunner relies on the task's file references.
-type imagePartReceiver interface {
-	SetPendingImageParts(parts []local.ContentPart)
-}
-
 // workflowTurnRunner adapts a TurnRunner (cmd/milk interface) to
 // workflow.TurnRunner, capturing the session/config/memory context needed
 // by Execute so workflow code stays clean of those dependencies.
@@ -63,6 +54,24 @@ func (r *workflowTurnRunner) Name() string { return r.inner.Name() }
 // SetUseMemoryForNextCall implements workflow.MemoryAwareTurnRunner.
 func (r *workflowTurnRunner) SetUseMemoryForNextCall(v bool) { r.useMemoryNextCall = v }
 
+// CloneTurnRunner implements workflow.CloneableTurnRunner (issue #297): the
+// interpreter gives every parallel_group item its own adapter — its own
+// scratch session (so concurrent items no longer interleave their turns into
+// one shared session) and its own call state (sessionID, lazy nonce, the
+// one-shot attachment and use-memory flags). Inner runner, config, memory
+// and notifier stay shared deliberately: with per-call state off the shared
+// struct they are read-only here, and the underlying runners take their
+// mutable state from parameters (ctx, scratch session, per-call nonce).
+func (r *workflowTurnRunner) CloneTurnRunner() workflow.TurnRunner {
+	c := *r // stable fields only — the mutable ones are reset below
+	c.sess = newWorkflowSession()
+	c.sessionID = ""
+	c.nonce = ""
+	c.attachmentsInjected = false
+	c.useMemoryNextCall = false
+	return &c
+}
+
 func (r *workflowTurnRunner) Run(ctx context.Context, prompt string, out io.Writer) (string, error) {
 	var ctxMode escalation.ContextMode
 	if r.sessionID != "" {
@@ -94,22 +103,25 @@ func (r *workflowTurnRunner) Run(ctx context.Context, prompt string, out io.Writ
 				sb.WriteString(prompt)
 				runPrompt = sb.String()
 			}
-			if ir, ok := r.inner.(imagePartReceiver); ok {
-				// Local-provider roles: multipart vision content parts —
-				// local.Run's vision gate drops them (with a note) for agents
-				// without "vision": true, same as a normal REPL turn.
-				var parts []local.ContentPart
-				for _, a := range r.attachments {
-					if a.isImage() {
-						parts = append(parts, local.ContentPart{
-							Type:     "image_url",
-							ImageURL: &local.ImageURLPart{URL: attachmentDataURI(a)},
-						})
-					}
+			// Local-provider roles: multipart vision content parts ride THIS
+			// call's context instead of the agent's pending-image field
+			// (issue #297): the inner agent is shared between concurrent
+			// parallel_group items, and the instance field would be a
+			// cross-goroutine write on that shared instance. local.Run
+			// prefers ctx parts and its vision gate drops them (with a note)
+			// for agents without "vision": true, same as a normal REPL turn;
+			// other runners ignore the value, as before.
+			var parts []local.ContentPart
+			for _, a := range r.attachments {
+				if a.isImage() {
+					parts = append(parts, local.ContentPart{
+						Type:     "image_url",
+						ImageURL: &local.ImageURLPart{URL: attachmentDataURI(a)},
+					})
 				}
-				if len(parts) > 0 {
-					ir.SetPendingImageParts(parts)
-				}
+			}
+			if len(parts) > 0 {
+				ctx = local.WithImageParts(ctx, parts)
 			}
 		}
 	}

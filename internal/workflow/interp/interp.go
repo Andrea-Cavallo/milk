@@ -866,6 +866,21 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 				// the workflow panel still tracks progress via activePathTracker.
 				workerCfg := ec.cfg
 				workerCfg.Send = nil
+				// Issue #297: items run as concurrent goroutines over a
+				// map-cloned RunConfig — the SAME runner values. Give each
+				// item its own adapter where the runner supports cloning,
+				// so per-call/session state (session ID, nonce, one-shot
+				// flags) is never shared between goroutines. Non-cloneable
+				// runners keep the previous shared-instance behavior.
+				itemRunners := make(map[string]workflow.TurnRunner, len(ec.cfg.Runners))
+				for role, rn := range ec.cfg.Runners {
+					if c, ok := rn.(workflow.CloneableTurnRunner); ok {
+						itemRunners[role] = c.CloneTurnRunner()
+					} else {
+						itemRunners[role] = rn
+					}
+				}
+				workerCfg.Runners = itemRunners
 				itemEC := &execContext{
 					ctx: ec.ctx, cfg: workerCfg, vars: itemVars, defName: ec.defName,
 					active: ec.active, activePathID: ec.forkActivePath(),
