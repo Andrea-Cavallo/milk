@@ -142,15 +142,19 @@ func backgroundJobStatusBadge(status local.JobStatus) string {
 }
 
 // backgroundShellStatusBadge is backgroundJobStatusBadge's shell counterpart
-// (ADR-0064): ▶ running, ■ stopping (killed but not yet exited), ✓ clean
-// exit, ✗ anything else (non-zero exit, exec error, killed).
+// (ADR-0064): ▶ running, ■ stopping (killed but not yet exited, yellow), ■ dim
+// once a killed shell has exited — stopping a dev server or browser is how
+// those shells normally end, not a failure — ✓ clean exit, ✗ any other
+// non-zero exit or exec error.
 func backgroundShellStatusBadge(s local.ShellInfo) string {
 	switch {
 	case s.Running && s.Killed:
 		return yellow("■")
 	case s.Running:
 		return green("▶")
-	case s.Err != nil || s.ExitCode != 0 || s.Killed:
+	case s.Killed:
+		return dim("■")
+	case s.Err != nil || s.ExitCode != 0:
 		return red("✗")
 	default:
 		return dim("✓")

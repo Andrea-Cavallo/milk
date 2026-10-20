@@ -805,7 +805,7 @@ func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Sess
 	case "bash_output":
 		return runBashOutput(args)
 	case "kill_bash":
-		return runKillBash(args)
+		return runKillBash(ctx, args)
 	case "find_files":
 		return runFindFiles(ctx, args, cwd)
 	case "grep":
@@ -1207,7 +1207,7 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 	// immediately (ADR-0063). timeout_seconds does not apply — the shell is
 	// bounded by the registry's lifetime cap and kill_bash instead.
 	if bg, _ := args["run_in_background"].(bool); bg {
-		s, err := bgShells.start(command, dir)
+		s, err := bgShells.start(command, dir, shellActor(ctx))
 		if err != nil {
 			return toolResult{Error: err.Error(), ExitCode: -1}.String(), false
 		}

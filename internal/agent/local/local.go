@@ -357,6 +357,31 @@ func sessionLogAttrs(sessionID string) []any {
 	return []any{"session_id", sessionID}
 }
 
+// toolResultLogHead is how much of a tool result the "tool result" debug line
+// carries: enough to see what a failing or surprising call returned (an exit
+// code, an error message) without copying file contents into the log.
+const toolResultLogHead = 240
+
+// sessionAttrs is sessionLogAttrs for a possibly-nil session.
+func sessionAttrs(sess *session.Session) []any {
+	if sess == nil {
+		return nil
+	}
+	return sessionLogAttrs(sess.ID)
+}
+
+// logSnippet returns at most n bytes of s, cut on a rune boundary, with an
+// ellipsis when it cut.
+func logSnippet(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
+}
+
 // logWarn, logDebug and logInfo mirror obs.Warn/Debug/Info but splice in
 // this agent's job-tagging attrs (see jobAttrs). Go forbids mixing literal
 // variadic arguments with a trailing slice spread, so log calls that carry
@@ -2956,7 +2981,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 		if len(args) > 120 {
 			args = args[:120] + "…"
 		}
-		a.logDebug("tool call", "name", tc.Function.Name, "args", args)
+		a.logDebug("tool call", append([]any{"name", tc.Function.Name, "args", args, "agent", a.logRole(), "call_id", tc.ID}, sessionAttrs(sess)...)...)
 		if d := toolDiff(tc.Function.Name, tc.Function.Arguments); d != "" {
 			fmt.Fprint(out, d)
 		}
@@ -3487,6 +3512,11 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 	result = a.postEditCheck(tc.Function.Name, result, postEditCWD)
 
 	toolElapsed := time.Since(toolStart)
+	a.logDebug("tool result", append([]any{
+		"name", tc.Function.Name, "call_id", tc.ID, "agent", a.logRole(),
+		"elapsed_ms", toolElapsed.Milliseconds(), "result_bytes", len(result),
+		"result_head", logSnippet(result, toolResultLogHead),
+	}, sessionAttrs(sess)...)...)
 	agentRole := agentRoleForMetrics(a.escalationName)
 	obs.Inc(ctx, inferenceScope, "milk.tools.calls",
 		attribute.String("name", tc.Function.Name),

@@ -12,6 +12,7 @@ import (
 
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/session"
+	"github.com/scoutme/milk/internal/workflow/board"
 )
 
 func TestGlobToRegex_MatchGlob(t *testing.T) {
@@ -143,12 +144,12 @@ func TestBash_Workdir(t *testing.T) {
 // Background shell lifecycle: start, read output, kill. Exit criteria for
 // Phase 3 ("dev server up, hit it, kill it") in unit form.
 func TestBackgroundShell_Lifecycle(t *testing.T) {
-	s, err := bgShells.start("echo boot; sleep 30; echo done", t.TempDir())
+	s, err := bgShells.start("echo boot; sleep 30; echo done", t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := s.id
-	t.Cleanup(func() { s.kill() }) //nolint:errcheck
+	t.Cleanup(func() { s.kill("test cleanup", "") }) //nolint:errcheck
 
 	// Output arrives asynchronously.
 	deadline := time.Now().Add(3 * time.Second)
@@ -173,7 +174,7 @@ func TestBackgroundShell_Lifecycle(t *testing.T) {
 	}
 
 	// kill
-	res, _ = runKillBash(map[string]any{"shell_id": id})
+	res, _ = runKillBash(context.Background(), map[string]any{"shell_id": id})
 	if isToolError(res) {
 		t.Fatalf("kill_bash: %s", res)
 	}
@@ -191,7 +192,7 @@ func TestBackgroundShell_Lifecycle(t *testing.T) {
 	if res, _ := runBashOutput(map[string]any{"shell_id": "nope"}); !isToolError(res) {
 		t.Errorf("unknown shell_id must error: %s", res)
 	}
-	if res, _ := runKillBash(map[string]any{"shell_id": "nope"}); !isToolError(res) {
+	if res, _ := runKillBash(context.Background(), map[string]any{"shell_id": "nope"}); !isToolError(res) {
 		t.Errorf("unknown shell_id must error: %s", res)
 	}
 }
@@ -212,7 +213,7 @@ func TestBash_RunInBackgroundTool(t *testing.T) {
 		id = id[:idx]
 	}
 	t.Cleanup(func() {
-		runKillBash(map[string]any{"shell_id": id}) //nolint:errcheck
+		runKillBash(context.Background(), map[string]any{"shell_id": id}) //nolint:errcheck
 	})
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -234,4 +235,41 @@ func tail(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// A shell started under a board identity remembers its owner (the tool path
+// reads it off the ctx), and a kill from a different requester — logged as
+// cross_owner — still stops it: ownership is attribution, not access control.
+func TestBackgroundShell_OwnerFromBoardIdentity(t *testing.T) {
+	ctx := board.WithIdentity(context.Background(), "worker\u00b7Item-2")
+	if got := shellActor(ctx); got != "worker\u00b7Item-2" {
+		t.Fatalf("shellActor = %q", got)
+	}
+	s, err := bgShells.start("sleep 30", t.TempDir(), shellActor(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.kill("test cleanup", "") })
+	if s.owner != "worker\u00b7Item-2" {
+		t.Errorf("owner = %q, want the board identity", s.owner)
+	}
+	other := board.WithIdentity(context.Background(), "evaluator\u00b7Item-2")
+	if out, _ := runKillBash(other, map[string]any{"shell_id": s.id}); isToolError(out) {
+		t.Fatalf("cross-owner kill_bash failed: %s", out)
+	}
+	select {
+	case <-s.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shell was not stopped")
+	}
+}
+
+func TestLogSnippet(t *testing.T) {
+	if got := logSnippet("short", 10); got != "short" {
+		t.Errorf("got %q", got)
+	}
+	// "é" is two bytes: cutting at 3 would split the second one.
+	if got := logSnippet("abéé", 4); got != "abé…" {
+		t.Errorf("got %q, want rune-safe cut", got)
+	}
 }
