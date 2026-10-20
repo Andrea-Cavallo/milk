@@ -499,7 +499,10 @@ func (m *model) reseedTranscriptFromHistory() {
 	m.transcript.Reset()
 	m.thinkBlocks = nil
 	m.thinkBlocksTurnStart = 0
-	m.thinkFoldOpen = false
+	// The starting fold status, re-seeded from config (issue #278): a
+	// switch restores the configured default, not a hardcoded folded —
+	// per-session actions still win for the rest of this session.
+	m.thinkFoldOpen = m.st.cfg.ThinkFoldExpanded()
 	if text := seedTranscriptText(m.st, true); text != "" {
 		m.appendTranscript(text)
 	}

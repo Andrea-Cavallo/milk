@@ -2035,3 +2035,45 @@ func TestBusyIndicatorEnabled(t *testing.T) {
 		t.Error("explicit false: want false")
 	}
 }
+
+// --- issue #278: think_fold_default ---------------------------------------
+
+func TestThinkFoldExpanded_Accessor(t *testing.T) {
+	cases := []struct {
+		v    string
+		want bool
+	}{
+		{"", false},         // unset — the folded default, exactly as before
+		{"folded", false},   // explicit default
+		{"expanded", true},  // the knob
+		{"garbage", false},  // unknown values are lenient: folded
+		{"Expanded", false}, // case-sensitive, like other enums
+	}
+	for _, c := range cases {
+		if got := (Config{ThinkFoldDefault: c.v}).ThinkFoldExpanded(); got != c.want {
+			t.Errorf("think_fold_default=%q: ThinkFoldExpanded()=%v, want %v", c.v, got, c.want)
+		}
+	}
+	// Zero-value config (every test fixture, fresh install) behaves as today.
+	if (Config{}).ThinkFoldExpanded() {
+		t.Error("zero-value config must seed folded")
+	}
+}
+
+func TestDeepMerge_ThinkFoldDefault(t *testing.T) {
+	// local overrides global
+	merged := DeepMerge(Config{ThinkFoldDefault: "expanded"}, Config{ThinkFoldDefault: "folded"})
+	if merged.ThinkFoldDefault != "folded" {
+		t.Errorf("local override lost: %q", merged.ThinkFoldDefault)
+	}
+	// an absent local field never clobbers the base ("" = unset)
+	merged = DeepMerge(Config{ThinkFoldDefault: "expanded"}, Config{})
+	if merged.ThinkFoldDefault != "expanded" {
+		t.Errorf("empty local clobbered the base: %q", merged.ThinkFoldDefault)
+	}
+	// both unset → default
+	merged = DeepMerge(Config{}, Config{})
+	if merged.ThinkFoldDefault != "" {
+		t.Errorf("unset must stay empty: %q", merged.ThinkFoldDefault)
+	}
+}
