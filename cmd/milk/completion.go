@@ -41,7 +41,11 @@ type cmdVariant struct {
 }
 
 // buildCmdVariants parses interactiveHelp and returns a map from bare slash
-// command to its ordered list of variants (sig + desc).
+// command to its ordered list of variants (sig + desc). Help lines whose
+// description starts with "ACP only" document a command the TUI does NOT
+// execute (e.g. /think on|off — ACP's data-plane relay toggle): they stay
+// in /help as annotated documentation but are excluded from completion, so
+// the TUI never offers an argument its own handler rejects.
 func buildCmdVariants() map[string][]cmdVariant {
 	result := map[string][]cmdVariant{}
 
@@ -58,6 +62,9 @@ func buildCmdVariants() map[string][]cmdVariant {
 		desc := strings.TrimSpace(parts[1])
 		if desc == "" {
 			continue
+		}
+		if strings.HasPrefix(desc, "ACP only") {
+			continue // TUI-help documentation, not a TUI-completion variant
 		}
 		cmd := strings.Fields(sig)[0]
 		result[cmd] = append(result[cmd], cmdVariant{sig: sig, desc: desc})

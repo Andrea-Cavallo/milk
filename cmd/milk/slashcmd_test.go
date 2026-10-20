@@ -98,9 +98,11 @@ func TestRegistry_GrammarConsistency(t *testing.T) {
 				t.Errorf("%s: help line starts with %q — filed under the wrong command", s.name, fields[0])
 			}
 		}
-		for _, tok := range hintLiterals(s.hint) {
-			if !strings.Contains(s.help, tok) {
-				t.Errorf("%s: ACP hint literal %q never appears in its help lines", s.name, tok)
+		for _, h := range []string{s.hint, s.hintTUI} {
+			for _, tok := range hintLiterals(h) {
+				if !strings.Contains(s.help, tok) {
+					t.Errorf("%s: hint literal %q never appears in its help lines", s.name, tok)
+				}
 			}
 		}
 	}
@@ -214,6 +216,95 @@ func TestRegistry_HintsCoverArguedUsage(t *testing.T) {
 			if len(fields) > 1 && fields[0] == s.name && strings.ContainsAny(fields[1], "<[") {
 				t.Errorf("%s: help line %q shows arguments but the registry has no hint — add one", s.name, strings.TrimSpace(line))
 			}
+		}
+	}
+}
+
+// TestRegistry_ThinkHintsDivergePerHost pins issue #276: /think executes
+// differently per host (TUI folds/streams reasoning views, ACP toggles the
+// data-plane thought relay), so each surface advertises only its own
+// vocabulary — ACP's available_commands_update and /help see [on|off], the
+// TUI tip renderer sees [expand|collapse|view].
+func TestRegistry_ThinkHintsDivergePerHost(t *testing.T) {
+	spec, ok := specFor(cmdThink)
+	if !ok {
+		t.Fatal("/think missing from the registry")
+	}
+	if spec.hint != "[on|off]" {
+		t.Errorf("/think ACP hint = %q, want [on|off]", spec.hint)
+	}
+	if got := spec.hintFor(hostTUI); got != "[expand|collapse|view]" {
+		t.Errorf("/think TUI hint = %q, want [expand|collapse|view]", got)
+	}
+	if tip := registryTip(spec); strings.Contains(tip, "on|off") || !strings.Contains(tip, "[expand|collapse|view]") {
+		t.Errorf("registry tip for /think = %q, want the TUI fold vocabulary", tip)
+	}
+	seen := false
+	for _, a := range acpAdvertisedCommands() {
+		if "/"+a.Name != cmdThink {
+			continue
+		}
+		seen = true
+		got := ""
+		if a.Input != nil {
+			got = a.Input.Hint
+		}
+		if got != "[on|off]" {
+			t.Errorf("ACP advertises /think hint %q, want [on|off]", got)
+		}
+	}
+	if !seen {
+		t.Error("/think missing from ACP's advertised commands")
+	}
+}
+
+// TestThinkCompletion_ExcludesACPOnlyVariants pins the completion half of
+// issue #276: TUI tab completion derives from the help lines and must offer
+// the TUI's fold vocabulary while excluding the "ACP only"-annotated
+// /think on|off line — the TUI's handler rejects those arguments.
+func TestThinkCompletion_ExcludesACPOnlyVariants(t *testing.T) {
+	vars := cmdVariants[cmdThink]
+	if len(vars) == 0 {
+		t.Fatal("no completion variants for /think")
+	}
+	want := map[string]bool{"/think": false, "/think expand": false, "/think collapse": false, "/think view": false}
+	for _, v := range vars {
+		if _, ok := want[v.sig]; ok {
+			want[v.sig] = true
+		}
+		if strings.Contains(v.sig, "on|off") {
+			t.Errorf("TUI completion offers the ACP-only variant %q", v.sig)
+		}
+	}
+	for sig, seen := range want {
+		if !seen {
+			t.Errorf("TUI completion missing variant %q", sig)
+		}
+	}
+}
+
+// TestACPThinkHint_AdvertisesOnlyAcceptedArgs pins issue #276's acceptance
+// behaviorally: every literal the shared hint advertises must be an
+// argument the real ACP handler accepts, and the TUI-only arguments must be
+// rejected — re-adding expand|collapse|view to the ACP hint fails here even
+// if acpThink's wording changes.
+func TestACPThinkHint_AdvertisesOnlyAcceptedArgs(t *testing.T) {
+	spec, ok := specFor(cmdThink)
+	if !ok {
+		t.Fatal("/think missing from the registry")
+	}
+	server, _ := acpTestServer(t, "ok")
+	as := server.session(acpNewSession(t, server))
+	for _, lit := range hintLiterals(spec.hint) {
+		out, _ := acpThink(as, lit)
+		if strings.HasPrefix(out, "usage:") {
+			t.Errorf("hint advertises %q but acpThink rejects it: %q", lit, out)
+		}
+	}
+	for _, lit := range []string{"expand", "collapse", "view"} {
+		out, _ := acpThink(as, lit)
+		if !strings.HasPrefix(out, "usage:") {
+			t.Errorf("acpThink accepts the TUI-only argument %q: %q", lit, out)
 		}
 	}
 }

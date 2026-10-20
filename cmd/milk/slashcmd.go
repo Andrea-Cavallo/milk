@@ -90,9 +90,15 @@ type cmdSpec struct {
 	// (available_commands_update and /help). The TUI help lines carry
 	// their own inline descriptions and are verbatim.
 	desc string
-	// hint is the compact argument grammar for ACP's structured input
-	// ("" = none). The TUI shows the fuller variant signatures in help.
+	// hint is the compact argument grammar ACP advertises for the command
+	// (available_commands_update, ACP /help, and registryTips for commands
+	// without a TUI override) — "" = none. It must only contain arguments
+	// the ACP handler accepts. The TUI shows the fuller variant signatures
+	// in help.
 	hint string
+	// hintTUI overrides hint on TUI surfaces (registryTips) for a command
+	// whose TUI vocabulary differs from ACP's — empty = the shared hint.
+	hintTUI string
 	// help is the command's verbatim TUI help lines, already aligned,
 	// joined with "\n" ("" = not shown in help — hidden commands, or
 	// covered by a sibling's line like "/exit  /quit").
@@ -101,9 +107,29 @@ type cmdSpec struct {
 
 func (s cmdSpec) in(host hostSet) bool { return s.hosts&host != 0 }
 
+// hintFor returns the display hint for the given host: ACP always sees the
+// base hint (its structured-input grammar); the TUI sees hintTUI when the
+// command diverges, else the shared hint. Mirrors how completion follows
+// the help lines per host (see the "ACP only" rule on commandRegistry).
+func (s cmdSpec) hintFor(host hostSet) string {
+	if host&hostTUI != 0 && s.hintTUI != "" {
+		return s.hintTUI
+	}
+	return s.hint
+}
+
 // commandRegistry lists every executable slash command. Order is the tab
 // completion cycle order (slashCommands derives from it); the help text's
 // display order is defined separately by helpBlocks below.
+//
+// Hosts may diverge on ARGUMENTS for a command that genuinely executes
+// differently per host: hint is ACP's compact grammar (the only form the
+// ACP surface advertises), and hintTUI overrides it on TUI surfaces
+// (registry tips) when the TUI accepts a different vocabulary. Completion
+// follows the help lines instead — a help line whose description starts
+// with "ACP only" documents the command for TUI help but is excluded from
+// TUI completion variants (buildCmdVariants), so neither surface offers
+// arguments the other host would reject.
 var commandRegistry = []cmdSpec{
 	{name: cmdEscalate, hosts: hostBoth, desc: "pin all turns to the escalation agent, or force one turn with a message", hint: "[fresh] [<message>]", help: `  /escalate              pin all turns to escalation agent (/primary to unpin)
   /escalate <msg>        force this turn to escalation agent, then resume routing
@@ -170,7 +196,7 @@ var commandRegistry = []cmdSpec{
   /colorize fenced       highlight fenced code blocks only
   /colorize balanced     fenced blocks + inline markdown (default)
   /colorize full         full glamour markdown render (experimental)`},
-	{name: cmdThink, hosts: hostBoth, desc: "inspect or fold model reasoning (ACP: toggle thought relay)", hint: "[on|off|expand|collapse]", help: `  /think                 show thinking-block count and fold state
+	{name: cmdThink, hosts: hostBoth, desc: "inspect or fold model reasoning (ACP: toggle thought relay)", hint: "[on|off]", hintTUI: "[expand|collapse|view]", help: `  /think                 show thinking-block count and fold state
   /think expand          expand every thinking block
   /think collapse        fold every thinking block
   /think view            swap the main area to a thinking-only stream
