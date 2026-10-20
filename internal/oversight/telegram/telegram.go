@@ -265,13 +265,7 @@ func (n *Notifier) NotifyToolUse(_ context.Context, toolName, summary string) {
 	// flips even when notify_tools gates the message itself (the gate sits
 	// in cmd/milk's callers), so the status line stays truthful either way.
 	n.setStatus(statusThinking)
-	var msg string
-	if summary != "" {
-		msg = fmt.Sprintf("⚙ *%s*: `%s`", escMD(toolName), escMD(summary))
-	} else {
-		msg = fmt.Sprintf("⚙ *%s*", escMD(toolName))
-	}
-	n.sendAsync(msg)
+	n.sendAsync(toolUseMessage(toolName, summary))
 }
 
 func (n *Notifier) NotifyToolResult(_ context.Context, toolName, summary string, isError bool) {
@@ -280,14 +274,7 @@ func (n *Notifier) NotifyToolResult(_ context.Context, toolName, summary string,
 	if summary == "" {
 		return
 	}
-	// Tool-result summaries stay a summary (per issue #253's scope) — capped,
-	// but the cap is rune-safe so it can never split a multi-byte character.
-	summary = trimPreview(summary, 497, "\n…")
-	icon := "📤"
-	if isError {
-		icon = "❌"
-	}
-	n.sendAsync(fmt.Sprintf("%s *%s*\n`%s`", icon, escMD(toolName), escMD(summary)))
+	n.sendAsync(toolResultMessage(toolName, summary, isError))
 }
 
 func (n *Notifier) NotifyTurnDone(_ context.Context, agent string, err error) {
@@ -629,6 +616,56 @@ func (n *Notifier) sendTyping(ctx context.Context) (int, time.Duration) {
 	return typingFailed, 0
 }
 
+// Quiet tool-line formatting (issue #290, ADR-0070): the TUI dims tool
+// hints (ADR-0026) and Telegram has no dim, so the message uses the
+// affordances it does have — italic tool name + inline-code summary, no
+// bold, single line. Error results stay bold: a failure is never quietly
+// de-emphasized. User-facing messages (🔄 turn start, 💬 response,
+// 🔐/❓ asks, the busy-status line) keep full weight.
+const (
+	// toolUseSummaryCap bounds the tool-use argument preview: it ships
+	// unchunked, so it must stay far below Telegram's 4096-unit message
+	// limit (pre-#290 an oversized preview made the send silently fail).
+	toolUseSummaryCap = 200
+	// toolResultSummaryCap is the long-standing result cap (issue #253).
+	toolResultSummaryCap = 497
+)
+
+// codeText flattens a summary for an inline code span: newlines become
+// " ⏎ " (multi-line MarkdownV2 code spans parse unreliably), then trim to
+// the rune cap — trimPreview never splits a multi-byte character.
+func codeText(s string, cap int) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\n", " ⏎ ")
+	s = strings.TrimSpace(s)
+	return trimPreview(s, cap, "…")
+}
+
+// toolUseMessage builds the quiet tool-use line: ⚙ _Bash_ · `summary`
+// (bare ⚙ _Bash_ with no summary — as before, but never bold).
+func toolUseMessage(toolName, summary string) string {
+	if summary == "" {
+		return "⚙ _" + escMD(toolName) + "_"
+	}
+	return fmt.Sprintf("⚙ _%s_ · `%s`", escMD(toolName), escCode.Replace(codeText(summary, toolUseSummaryCap)))
+}
+
+// toolResultMessage builds the tool-result line: 📤 _Bash_ · `summary`,
+// or — for a failure — the bold ❌ *Bash* error · `summary`. Callers keep
+// the pre-existing rule that an empty result summary sends nothing.
+func toolResultMessage(toolName, summary string, isError bool) string {
+	if isError {
+		if summary == "" {
+			return "❌ *" + escMD(toolName) + "* error"
+		}
+		return fmt.Sprintf("❌ *%s* error · `%s`", escMD(toolName), escCode.Replace(codeText(summary, toolResultSummaryCap)))
+	}
+	if summary == "" {
+		return "📤 _" + escMD(toolName) + "_"
+	}
+	return fmt.Sprintf("📤 _%s_ · `%s`", escMD(toolName), escCode.Replace(codeText(summary, toolResultSummaryCap)))
+}
+
 // NotifyResponse relays the agent's response in full. Text longer than one
 // Telegram message is split into ordered chunks (each its own sendMessage),
 // never trimmed — see issue #253. Chunks go through the FIFO send queue, so
@@ -873,6 +910,12 @@ func (n *Notifier) apiGet(ctx context.Context, method string, params url.Values,
 	defer resp.Body.Close()
 	return json.NewDecoder(resp.Body).Decode(out)
 }
+
+// escCode escapes text for the inside of a MarkdownV2 inline code span:
+// per Telegram's spec only '\\' and '`' are special there. Full escMD
+// would over-escape separators like '-' and '.' inside code with no
+// purpose — and every tool summary now lives inside code (issue #290).
+var escCode = strings.NewReplacer(`\`, `\\`, "`", "\\`")
 
 // escMD escapes special characters for Telegram MarkdownV2.
 func escMD(s string) string {

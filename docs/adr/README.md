@@ -68,3 +68,4 @@
 * [67. Thinking as a first-class view: out-of-band think blocks with fold containers](0067-thinking-first-class-view.md)
 * [68. Background jobs get a soft deadline before the hard timeout](0068-background-job-soft-deadline.md)
 * [69. Full-row diff backgrounds: the surface painter reused for +/- rows](0069-full-row-diff-backgrounds.md)
+* [70. Quiet tool styling: italic + code, no bold, in the Telegram view](0070-quiet-tool-styling.md)
