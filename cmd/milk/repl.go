@@ -4021,6 +4021,13 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		send(retractMsg{from: from, to: to})
 	}
 	localOnToolUse := func(id, name, summary string, rawInput map[string]any) {
+		if m.loopDetector != nil {
+			// A committed tool call is observable progress: the reasoning-
+			// chunk flood signal counts reasoning *since* the last content
+			// output or tool call, so a tool-heavy turn never accumulates
+			// toward its limit (FeedChunk covers the content half).
+			m.loopDetector.FeedProgress()
+		}
 		if st.cfg.RemoteOversight.NotifyToolsEnabled() {
 			st.notifier.NotifyToolUse(context.Background(), name, summary)
 		}

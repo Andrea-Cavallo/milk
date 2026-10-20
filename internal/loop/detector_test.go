@@ -2,6 +2,7 @@ package loop
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -500,6 +501,80 @@ func TestReasoningChunkFlood_ResetTurnResetsCounter(t *testing.T) {
 		if v.Signal == SignalReasoningChunkFlood {
 			t.Error("ResetTurn should reset the flood counter")
 		}
+	}
+}
+
+// floodFired reports whether verdicts contain the reasoning-chunk flood
+// signal (shared by the progress-reset cases below).
+func floodFired(verdicts []Verdict) bool {
+	for _, v := range verdicts {
+		if v.Signal == SignalReasoningChunkFlood {
+			return true
+		}
+	}
+	return false
+}
+
+// The flood signal counts reasoning chunks SINCE THE LAST OBSERVABLE
+// PROGRESS — a committed tool call (FeedProgress) or content output
+// (FeedChunk) — not across the whole turn. A tool-heavy turn that reasons
+// before every call must never accumulate toward the limit; a single
+// unbroken thinking burst still must.
+func TestReasoningChunkFlood_ProgressResetsCount(t *testing.T) {
+	cfg := testConfig()
+	cfg.ReasoningChunkFloodThreshold = 5
+	d := New(cfg)
+	for i := 0; i < 4; i++ {
+		d.FeedReasoningChunk(fmt.Sprintf("thinking about iteration %d of the plan", i))
+	}
+	d.FeedProgress() // tool call committed — progress
+	for i := 0; i < 4; i++ {
+		if floodFired(d.FeedReasoningChunk(fmt.Sprintf("planning after the tool call at %d", i))) {
+			t.Fatalf("progress must reset the accumulation (chunk %d)", i)
+		}
+	}
+	// Fifth chunk with no progress in between — the unbroken burst floods.
+	verdicts := d.FeedReasoningChunk("one more fragment pushes the burst past the limit")
+	if !floodFired(verdicts) {
+		t.Fatal("a burst without progress should flood at the threshold")
+	}
+	for _, v := range verdicts {
+		if v.Signal == SignalReasoningChunkFlood && !strings.Contains(v.Message, "without output or tool calls") {
+			t.Errorf("message must say what the docs say: %q", v.Message)
+		}
+	}
+}
+
+// Content output is progress too: FeedChunk resets the accumulation for
+// every substantive chunk — and whitespace-only chunks are not output.
+func TestReasoningChunkFlood_ContentOutputResetsCount(t *testing.T) {
+	cfg := testConfig()
+	cfg.ReasoningChunkFloodThreshold = 5
+	d := New(cfg)
+	for i := 0; i < 4; i++ {
+		d.FeedReasoningChunk(fmt.Sprintf("thinking before the answer at %d", i))
+	}
+	d.FeedChunk("The agent wrote a real sentence of output here.")
+	for i := 0; i < 4; i++ {
+		if floodFired(d.FeedReasoningChunk(fmt.Sprintf("still thinking through step %d", i))) {
+			t.Fatalf("content output must reset the accumulation (chunk %d)", i)
+		}
+	}
+	if !floodFired(d.FeedReasoningChunk("the unbroken tail of thinking floods here")) {
+		t.Fatal("a burst after content output should still flood at the threshold")
+	}
+}
+
+func TestReasoningChunkFlood_WhitespaceIsNotProgress(t *testing.T) {
+	cfg := testConfig()
+	cfg.ReasoningChunkFloodThreshold = 5
+	d := New(cfg)
+	for i := 0; i < 4; i++ {
+		d.FeedReasoningChunk(fmt.Sprintf("thinking chunk number %d", i))
+	}
+	d.FeedChunk("\n \t\n") // whitespace-only — not content output
+	if !floodFired(d.FeedReasoningChunk("the fifth chunk completes the burst")) {
+		t.Error("whitespace-only chunks must not count as progress")
 	}
 }
 

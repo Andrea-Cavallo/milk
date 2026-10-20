@@ -830,6 +830,36 @@ func TestACPSignals_RepeatedReasoningIsFlaggedEvenWhenHidden(t *testing.T) {
 	}
 }
 
+// Tool use counts as observable progress for the reasoning-chunk flood
+// signal (its contract, on every surface, is reasoning "without content
+// output or tool calls"): a tool-heavy turn reasoning before every call
+// never accumulates toward the limit, while a single unbroken thinking
+// burst still fires.
+func TestACPSignals_ToolUseResetsReasoningFlood(t *testing.T) {
+	server, conn := acpTestServer(t, "ok")
+	as := server.session(acpNewSession(t, server))
+	as.loop = loop.New(loop.Config{Enabled: true, ReasoningChunkFloodThreshold: 5})
+
+	for i := 0; i < 4; i++ {
+		as.feedThinking(fmt.Sprintf("thinking about step %d of the work", i))
+	}
+	as.onLocalToolUse("t1", "Bash", "ls", map[string]any{"command": "ls"})
+	for i := 0; i < 4; i++ {
+		as.feedThinking(fmt.Sprintf("planning after the tool call at %d", i))
+	}
+	if chunks := acpChunks(conn); len(chunks) != 0 {
+		t.Fatalf("reasoning since the last tool call must not flood, got %v", chunks)
+	}
+	// The fifth chunk with no further progress crosses the limit.
+	as.feedThinking("one more fragment pushes the burst past the limit")
+	chunks := acpChunks(conn)
+	if len(chunks) != 1 ||
+		!strings.Contains(chunks[0], "consumption") ||
+		!strings.Contains(chunks[0], "without output or tool calls") {
+		t.Errorf("flood after an unbroken burst = %q", chunks)
+	}
+}
+
 // writeTinyWorkflow registers a one-stage user workflow under the test HOME.
 func writeTinyWorkflow(t *testing.T) {
 	t.Helper()

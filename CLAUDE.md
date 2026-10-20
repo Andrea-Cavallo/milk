@@ -245,7 +245,7 @@ Escalation mechanics (crop → mild nudge → strong nudge → terminate) are co
 | Signal | Scope | What it catches | Default threshold |
 |---|---|---|---|
 | **chunk_repetition** | Intra-turn | Same text repeating in streaming output (consecutive, or scattered for chunks ≥40 runes) | 5 occurrences in 50-chunk window |
-| **reasoning_chunk_flood** | Intra-turn | Too many reasoning chunks without content output | 5000 chunks |
+| **reasoning_chunk_flood** | Intra-turn | Too many reasoning chunks with no content output or tool call since the last progress (both reset the accumulation) | 5000 chunks |
 | **token_velocity** | Cross-turn | Rapid token consumption without progress | 300k tokens in 60s window |
 | **silent_burn** | Per-turn | High input tokens, near-zero output | 20k input tokens |
 | **turn_flood** | Session | Excessive turns without user input | 10 consecutive non-user turns |
