@@ -594,17 +594,33 @@ func execOtel(sub string, st *interactiveState) string {
 
 // execExport dumps a session as text or JSON, optionally to a file. Grammar
 // (docs/internal/plans/acp-session-resume-plan.md D6):
-// `/export [session <id|prefix>] [json|<path>]` — with a `session` target it
-// exports *that* session without attaching it (the /list → /export session
-// a1b2 → session/resume preview flow); without one it exports the current
-// session (on a resumed session that includes pre-resume turns).
+// `/export [--no-reasoning] [session <id|prefix>] [json|<path>]` — with a
+// `session` target it exports *that* session without attaching it (the
+// /list → /export session a1b2 → session/resume preview flow); without one
+// it exports the current session (on a resumed session that includes
+// pre-resume turns). `--no-reasoning` (or bare `no-reasoning`) anywhere in
+// the arguments strips reasoning from the output (issue #277); without the
+// flag the argument string is left byte-for-byte intact so paths keep
+// spaces and odd whitespace exactly as typed.
 func execExport(sub string, st *interactiveState) string {
 	sub = strings.TrimSpace(sub)
+	opts := session.ExportOptions{}
+	if fields := strings.Fields(sub); slices.Contains(fields, "--no-reasoning") || slices.Contains(fields, "no-reasoning") {
+		kept := fields[:0]
+		for _, tok := range fields {
+			if tok == "--no-reasoning" || tok == "no-reasoning" {
+				opts.NoReasoning = true
+				continue
+			}
+			kept = append(kept, tok)
+		}
+		sub = strings.Join(kept, " ")
+	}
 	sess := st.sess
 	if sub == "session" || strings.HasPrefix(sub, "session ") {
 		id, after, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(sub, "session")), " ")
 		if id == "" {
-			return milkTag() + " usage: /export [session <id|prefix>] [json|<path>]"
+			return milkTag() + " usage: /export [--no-reasoning] [session <id|prefix>] [json|<path>]"
 		}
 		target, err := session.Lookup(id) // exact ID or unambiguous prefix
 		if err != nil {
@@ -624,16 +640,16 @@ func execExport(sub string, st *interactiveState) string {
 	var content string
 	switch format {
 	case "json":
-		data, err := session.ExportJSON(sess)
+		data, err := session.ExportJSONWithOptions(sess, opts)
 		if err != nil {
 			return fmt.Sprintf("%s export error: %v", milkTag(), err)
 		}
 		content = string(data)
 	default:
 		if outputPath != "" {
-			content = session.ExportText(sess) // plain — no ANSI in files
+			content = session.ExportTextWithOptions(sess, opts) // plain — no ANSI in files
 		} else {
-			content = session.ExportTextColorized(sess) // colorized for terminal
+			content = session.ExportTextColorizedWithOptions(sess, opts) // colorized for terminal
 		}
 	}
 

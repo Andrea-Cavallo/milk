@@ -175,7 +175,7 @@ and, for ACP integration specifically, [docs/reference/acp-integration.md](acp-i
 
 **Slash commands:** `/escalate`, `/primary`, `/sessions`, `/new`, `/clear`, `/resume`, `/drop`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/init`, `/open`, `/update`, `/restart`, `/interrupt`, `/notifications`, `/help`, `/exit` (`/list` is a deprecated hidden alias of `/sessions`, kept one release)
 
-**Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [session <id|prefix>] [json|<path>]` — see [docs/guides/operations.md — Memory](../guides/operations.md#memory).
+**Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [--no-reasoning] [session <id|prefix>] [json|<path>]` — reasoning (`<reasoning>…</reasoning>` fences / JSON `thinking` fields) is included by default and stripped by the flag (deterministic either way — fold state never enters an export); see [docs/guides/operations.md — Memory](../guides/operations.md#memory).
 
 **Panel commands:** `/panel memory`, `/panel tasks`, `/panel background`, `/panel workflow`, `/panel project`, `/panel git` (also F1-F6) — see [docs/guides/operations.md — Keyboard shortcuts](../guides/operations.md#keyboard-shortcuts) and [docs/guides/workflows.md](../guides/workflows.md#the-native-workflow-engine).
 
@@ -365,7 +365,7 @@ Resume-by-default adoption over ACP (`milk serve --acp`): when on (the default),
 
 ### ACP session parity
 
-The TUI and `milk serve --acp` share one session model — one conversation per working directory — and one session store, so a conversation continues the same way whichever surface opens it: TUI `--continue` ≈ ACP `session/new` adopting (the `acp_resume` default), TUI `--new` ≈ `acp_resume: false` or a per-request `_meta.milk.fresh: true`, and the in-chat vocabulary is one set on both surfaces: `/sessions` (renamed from `/list`), `/new`/`/clear`, `/resume <id|prefix|name>` ≈ `session/resume`, `/drop`. Over ACP a switch rebinds the conversation's store session behind its fixed wire handle (view rebinding — see [ADR-0051](../adr/0051-acp-conversation-view-rebinding.md)). Session management over ACP (`session/list`/`resume`/`close`/delete, the session slash commands, `/export [session <id|prefix>] [json|<path>]`) and standard chat-history replay are specified in [docs/reference/acp-integration.md](acp-integration.md).
+The TUI and `milk serve --acp` share one session model — one conversation per working directory — and one session store, so a conversation continues the same way whichever surface opens it: TUI `--continue` ≈ ACP `session/new` adopting (the `acp_resume` default), TUI `--new` ≈ `acp_resume: false` or a per-request `_meta.milk.fresh: true`, and the in-chat vocabulary is one set on both surfaces: `/sessions` (renamed from `/list`), `/new`/`/clear`, `/resume <id|prefix|name>` ≈ `session/resume`, `/drop`. Over ACP a switch rebinds the conversation's store session behind its fixed wire handle (view rebinding — see [ADR-0051](../adr/0051-acp-conversation-view-rebinding.md)). Session management over ACP (`session/list`/`resume`/`close`/delete, the session slash commands, `/export [--no-reasoning] [session <id|prefix>] [json|<path>]`) and standard chat-history replay are specified in [docs/reference/acp-integration.md](acp-integration.md).
 
 ### `experimental_lazy_history_management` field
 

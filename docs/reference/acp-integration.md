@@ -74,7 +74,7 @@ table (`cmd/milk/acp_commands.go`), so nothing is advertised that doesn't run.
 | `/learn <fact>` | store a persistent memory |
 | `/memory [global\|session\|<pattern>]` | list percepts |
 | `/usage`, `/metrics` | token usage / recent metrics |
-| `/export [json\|<path>]` | print the transcript, or write it to a file |
+| `/export [--no-reasoning] [json\|<path>]` | print the transcript (reasoning included by default — the flag strips it), or write it to a file |
 | `/sessions [all]` | list stored sessions for this directory (`all`: every directory), `*` marking this conversation's current binding |
 | `/new [name]`, `/clear [name]` | start a fresh (optionally named) session and rebind this conversation to it; the previous binding stays on disk, resumable (see "Session commands and view rebinding") |
 | `/resume <id\|prefix\|name>` | switch this conversation to a stored session — exact id, unambiguous id prefix, or cwd-scoped name; bare `/resume` lists what is resumable |
@@ -386,7 +386,7 @@ replay" below for the full semantics):
 
 // ← agent responds (commands come inline; an update-available notice, if
 //   any, follows as a session/update)
-{"jsonrpc":"2.0","id":5,"result":{"availableCommands":[{"name":"/export","description":"print the session transcript (or another session's), or write it to a file","input":{"type":"text","hint":"[json|<path>|session <id>]"}}]}}
+{"jsonrpc":"2.0","id":5,"result":{"availableCommands":[{"name":"/export","description":"print the session transcript (or another session's), or write it to a file","input":{"type":"text","hint":"[--no-reasoning] [json|<path>|session <id>]"}}]}}
 ```
 
 Trying an unimplemented method (the legacy v1 history-load — deliberately not
