@@ -255,7 +255,8 @@ and rebuilt when `/setup telegram` changes it:
 
 - **Turn and tool notifications** — turn start/response/done, slash-command
   output, and (gated by `notify_tools`) tool use/results forward to the
-  backend for both providers, plus workflow turns (`workflow:<role>`).
+  backend for both providers, plus workflow turns (`workflow:<role>`) and
+  the `typing…` busy indicator (gated by `busy_indicator`).
 - **Permission prompts race the client** — `session/request_permission`
   goes to the editor as always; the first real answer wins between the
   client and the remote surface (see the Tool permissions section above).

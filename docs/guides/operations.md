@@ -287,7 +287,8 @@ Forward agent activity and permission prompts to a mobile device.
     "telegram": { "token": "<bot-token-from-botfather>", "chat_id": "<your-numeric-chat-id>" },
     "perm_timeout_secs": 120,
     "timeout_action": "deny",
-    "notify_tools": true
+    "notify_tools": true,
+    "busy_indicator": true
   }
 }
 ```
@@ -300,8 +301,9 @@ Forward agent activity and permission prompts to a mobile device.
 | `perm_timeout_secs` | 120 | Wait time for a remote permission reply before `timeout_action` |
 | `timeout_action` | `"deny"` | `"allow"` or `"deny"` on timeout |
 | `notify_tools` | `true` | Forward tool-call notifications |
+| `busy_indicator` | `true` | Show Telegram's native "typing…" chat action while a turn runs |
 
-**Forwarded**: turn start (agent, target, prompt snippet — workflow turns labeled `workflow:<role>`), tool calls and results (summaries kept to ~500 chars), response text (relayed in full — long responses are split into ordered chunks under Telegram's 4096-character message limit, never trimmed; each chunk carries a `(n/m)` part marker), permission prompts with y/n reply (first response from either surface wins). Every permission ask reaches the remote surface in both hosts — the claude-cli escalation agent's tool prompts, the local agent's tool prompts and safety confirmations (e.g. the doom-loop gate's "allow it to continue?"), and background-job tool prompts — not just the ones a given provider path happens to render locally.
+**Forwarded**: turn start (agent, target, prompt snippet — workflow turns labeled `workflow:<role>`), tool calls and results (summaries kept to ~500 chars), response text (relayed in full — long responses are split into ordered chunks under Telegram's 4096-character message limit, never trimmed; each chunk carries a `(n/m)` part marker), permission prompts with y/n reply (first response from either surface wins). **Busy indicator** (`busy_indicator`, issue #284): while a turn runs — including long stretches with no tool chatter — Telegram's native `typing…` chat action is re-sent every ~4.5s as a liveness signal. It is *not a message*: nothing lands in history, and it is **paused while a remote ask waits for your reply** (the agent isn't working then — "typing…" would lie); non-turn notices (startup, `/setup telegram` confirmations) never engage it. Telegram's 429 `retry_after` is honored. Every permission ask reaches the remote surface in both hosts — the claude-cli escalation agent's tool prompts, the local agent's tool prompts and safety confirmations (e.g. the doom-loop gate's "allow it to continue?"), and background-job tool prompts — not just the ones a given provider path happens to render locally.
 
 **Background asks (timed answer)**: permission asks from background jobs, workflow steps, and safety confirmations like the doom-loop gate surface everywhere — the main TUI prompt queue (with a countdown and `a`/`d` bulk answers) and the remote surface — instead of failing closed. Each ask carries a **timed answer**: if neither surface replies before the deadline, the configured default applies (default `deny` after 360s). Configure it in `~/.milk/config.json`:
 
