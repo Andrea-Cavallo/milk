@@ -1,6 +1,9 @@
 package workflow
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // WorkflowVerdict is the structured outcome of an evaluator turn.
 type WorkflowVerdict int
@@ -23,6 +26,42 @@ func (v WorkflowVerdict) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// ParseVerdictKey extracts a verdict from response by matching the stage's
+// OWN declared rule keys — case-insensitively, scanning lines from the end
+// so the final verdict line wins (the same line discipline ParseVerdict
+// uses). The fallback key "unknown" is never searched for (prose contains
+// the word); callers use "unknown" when this returns "". The longest key
+// wins when one line matches several, so "all_done" beats "done".
+//
+// This is what makes declaration-defined verdicts real: ParseVerdict only
+// knows the three historical keywords, while a stage may declare any words
+// it prompts for (team's all_done / more_work, issue #197).
+func ParseVerdictKey(response string, rules map[string]VerdictRule) string {
+	keys := make([]string, 0, len(rules))
+	for k := range rules {
+		if k == "unknown" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(keys[i]) != len(keys[j]) {
+			return len(keys[i]) > len(keys[j])
+		}
+		return keys[i] < keys[j]
+	})
+	lines := strings.Split(response, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.ToLower(strings.TrimSpace(lines[i]))
+		for _, k := range keys {
+			if strings.Contains(line, strings.ToLower(k)) {
+				return k
+			}
+		}
+	}
+	return ""
 }
 
 // ParseVerdict extracts a structured verdict from the evaluator's text response.

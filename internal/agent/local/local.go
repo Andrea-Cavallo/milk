@@ -1729,6 +1729,18 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 		}
 	}
 	tools := schemas(mem, a.otelDir, sess, a.toolAgentEntries, a.taskStore, effLimits)
+	// Board tools are per-call (registered only when this turn's ctx carries
+	// a shared workflow board — Definition.Board, issue #197), assembled
+	// after filterTools like the other dynamic backing-store tools and
+	// pre-marked observed so ADR-0058 pruning keeps them for the run.
+	// Background jobs (RunBackgroundTask) deliberately don't call this path.
+	var boardRun bool
+	tools, boardRun = appendBoardToolsForCtx(tools, ctx)
+	if boardRun {
+		for _, n := range boardToolNames {
+			a.noteToolUsed(n)
+		}
+	}
 	if a.mcpToolSet != nil {
 		tools = append(tools, a.mcpToolSet.Schemas(ctx)...)
 	}
@@ -1764,6 +1776,9 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 	// the agent doesn't have (issue #172).
 	if hasToolNamed(tools, "get_memory") {
 		spb.guidance = append(spb.guidance, memoryToolGuidance)
+	}
+	if hasToolNamed(tools, "board_claim") {
+		spb.guidance = append(spb.guidance, boardToolGuidance)
 	}
 	systemPrompt := spb.render(contextreduce.LevelNone, a.reductionPolicy)
 	msgs := []Message{{Role: "system", Content: systemPrompt}}

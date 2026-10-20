@@ -27,6 +27,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/scoutme/milk/internal/textbudget"
 	"github.com/scoutme/milk/internal/workflow"
+	"github.com/scoutme/milk/internal/workflow/board"
 )
 
 // ExhaustedError is returned when an iteration-bounded loop stage retries
@@ -128,7 +129,15 @@ func (r *Runner) Run(ctx context.Context, cfg workflow.RunConfig) error {
 		}
 	}
 
-	ec := &execContext{ctx: ctx, cfg: cfg, vars: vars, replay: trace, maxIterOverrides: r.maxIterOverrides, defName: r.Def.Name, active: newActivePathTracker(), activePathID: 0, progressSend: cfg.Send}
+	var sharedBoard *board.Board
+	if r.Def.Board {
+		var err error
+		sharedBoard, err = loadBoard(r.checkpointPath, trace, r.Def.Stages)
+		if err != nil {
+			return err
+		}
+	}
+	ec := &execContext{ctx: ctx, cfg: cfg, vars: vars, replay: trace, maxIterOverrides: r.maxIterOverrides, defName: r.Def.Name, active: newActivePathTracker(), activePathID: 0, progressSend: cfg.Send, board: sharedBoard}
 	if r.checkpointPath != "" {
 		liveTrace := append([]TraceEntry{}, trace...)
 		ec.onLeafComplete = func(e TraceEntry) {
@@ -184,6 +193,16 @@ type execContext struct {
 	defName      string
 	active       *activePathTracker
 	activePathID int
+
+	// board is the run's shared coordination board (Definition.Board);
+	// nil for ordinary workflows. Parallel-group items inherit it — it is
+	// the one thing fan-out goroutines deliberately SHARE (mutex-protected,
+	// internal/workflow/board).
+	board *board.Board
+	// itemToken names the current parallel_group item ("Item-2") when this
+	// context belongs to one; execAgentTurn folds it into the board
+	// identity ("worker·Item-2") so claims and findings are attributable.
+	itemToken string
 
 	// progressSend is the Send func used for ProgressMsg reporting. It is
 	// always the parent's Send (never nil when the caller supplied one),
@@ -440,6 +459,8 @@ func executeStage(ec *execContext, s workflow.Stage) (string, error) {
 		return "", execUserCheckpoint(ec, s)
 	case workflow.StageKindParallelGroup:
 		return "", execParallelGroup(ec, s)
+	case workflow.StageKindBoardSeed:
+		return "", execBoardSeed(ec, s)
 	default:
 		return "", fmt.Errorf("workflow: stage %q: unknown kind %q", s.ID, s.Kind)
 	}
@@ -527,6 +548,16 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 	// (~12K chars); the tail is preserved since verdict instructions
 	// typically live at the end of the document.
 	truncatedVars := truncateLargeVarsWithBudget(ec.vars)
+	// Fresh per stage (fresh map from the truncator — the key never leaks
+	// into ec.vars): {{.board}} always shows the LIVE board at this stage's
+	// start (findings posted mid-fan-out reach the next stage's prompt),
+	// and board-less runs still bind the key to "" instead of the template
+	// engine's "<no value>".
+	if ec.board != nil {
+		truncatedVars["board"] = ec.board.Render()
+	} else {
+		truncatedVars["board"] = ""
+	}
 	prompt, err := renderTemplate(s.ID+".prompt", s.Prompt, truncatedVars)
 	if err != nil {
 		return "", fmt.Errorf("workflow: stage %q: %w", s.ID, err)
@@ -537,7 +568,19 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 	if mar, ok := runner.(workflow.MemoryAwareTurnRunner); ok {
 		mar.SetUseMemoryForNextCall(s.UseMemory)
 	}
-	out, err := workflow.Turn(ec.ctx, runner, prompt, ec.cfg.Send)
+	// Board runs carry the shared board (and who is acting) on the turn's
+	// ctx: local-agent schemas gate board_* tool registration on it and the
+	// handlers read it back — context values flow through the runner and
+	// the tool loop's derived contexts untouched.
+	turnCtx := ec.ctx
+	if ec.board != nil {
+		identity := s.Role
+		if ec.itemToken != "" {
+			identity = s.Role + "\u00b7" + ec.itemToken
+		}
+		turnCtx = board.WithIdentity(board.With(turnCtx, ec.board), identity)
+	}
+	out, err := workflow.Turn(turnCtx, runner, prompt, ec.cfg.Send)
 	if err != nil {
 		return "", fmt.Errorf("workflow: stage %q: %w", s.ID, err)
 	}
@@ -611,14 +654,25 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 		ec.recordLeaf(TraceEntry{StageID: s.ID, SaveAs: s.SaveAs, Value: out})
 		return "", nil
 	}
-	v := workflow.ParseVerdict(out)
-	rule, ok := s.Verdict[v.String()]
+	// The stage's own declared keys win (custom verdict words — team's
+	// all_done / more_work, issue #197); the three historical keywords stay
+	// a fallback so a stage that never declared what it saw still fails the
+	// way it always did ("no verdict rule for good_to_go").
+	key := workflow.ParseVerdictKey(out, s.Verdict)
+	if key == "" {
+		if v := workflow.ParseVerdict(out); v.String() != "unknown" {
+			key = v.String()
+		} else {
+			key = "unknown"
+		}
+	}
+	rule, ok := s.Verdict[key]
 	if !ok {
-		return "", fmt.Errorf("workflow: stage %q: no verdict rule for %q", s.ID, v.String())
+		return "", fmt.Errorf("workflow: stage %q: no verdict rule for %q", s.ID, key)
 	}
 	if rule.Warn && ec.cfg.Send != nil {
 		ec.cfg.Send(workflow.WorkflowChunkMsg{Text: fmt.Sprintf(
-			"\n[warning: unexpected verdict %q at stage %q, treating as %q]\n", v.String(), s.ID, rule.Action)})
+			"\n[warning: unexpected verdict %q at stage %q, treating as %q]\n", key, s.ID, rule.Action)})
 	}
 	ec.completeActivePath()
 	ec.reportProgress("")
@@ -885,6 +939,7 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 					ctx: ec.ctx, cfg: workerCfg, vars: itemVars, defName: ec.defName,
 					active: ec.active, activePathID: ec.forkActivePath(),
 					progressSend: ec.progressSend,
+					board:        ec.board, itemToken: fmt.Sprintf("%s-%d", s.Over, sec.Index),
 				}
 				defer itemEC.removeActivePath()
 				itemEC.pushPath(fmt.Sprintf("%s %s[%d]", s.ID, label, sec.Index))
