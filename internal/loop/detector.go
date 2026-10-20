@@ -61,10 +61,14 @@ type Config struct {
 	// answers do, so it needs more slack before it's treated as a stuck loop.
 	ReasoningChunkRepetitionThreshold int `json:"reasoning_chunk_repetition_threshold"` // default 10; used by scattered reasoning detection only
 
-	// Reasoning chunk flood (intra-turn): fires when the total number of
-	// reasoning chunks exceeds this threshold within a single turn, even if
-	// no individual chunk repeats. Catches "death by a thousand cuts" loops
-	// where the model cycles through many short, varied reasoning fragments.
+	// Reasoning chunk flood (intra-turn): fires when the number of
+	// reasoning chunks accumulated *since the last observable progress*
+	// exceeds this threshold, even if no individual chunk repeats. Catches
+	// "death by a thousand cuts" loops where the model cycles through many
+	// short, varied reasoning fragments. Progress — content output
+	// (FeedChunk) or a committed tool call (FeedProgress) — resets the
+	// accumulation, so a tool-heavy turn that keeps producing never builds
+	// toward the limit while a single runaway thinking burst still does.
 	ReasoningChunkFloodThreshold int `json:"reasoning_chunk_flood_threshold"` // default 5000
 
 	// Scattered chunk repetition (intra-turn): fires when the same chunk text
@@ -385,8 +389,15 @@ func (d *Detector) FeedChunk(text string) []Verdict {
 	if !d.cfg.Enabled {
 		return nil
 	}
-	// Skip empty or very short chunks — they're noise (newlines, spaces).
 	trimmed := strings.TrimSpace(text)
+	// Substantive content output is observable progress for the reasoning-
+	// chunk flood signal ("chunks without content output"): the model is
+	// producing, so the thinking accumulation resets. Whitespace-only and
+	// empty chunks are not.
+	if trimmed != "" {
+		d.FeedProgress()
+	}
+	// Skip empty or very short chunks — they're noise (newlines, spaces).
 	if len([]rune(trimmed)) < 5 {
 		// Whitespace-only chunks are transparent, but a short chunk with real
 		// content (e.g. the single bytes a tag writer emits between flushed
@@ -494,10 +505,13 @@ func (d *Detector) FeedReasoningChunk(text string) []Verdict {
 		}
 	}
 
-	// Reasoning chunk flood: total count of reasoning chunks per turn exceeds
-	// the threshold. Catches "death by a thousand cuts" loops where the model
-	// cycles through many short, varied reasoning fragments that individually
-	// evade both consecutive and scattered repetition detectors.
+	// Reasoning chunk flood: reasoning chunks accumulated since the last
+	// observable progress exceed the threshold. Catches "death by a thousand
+	// cuts" loops where the model cycles through many short, varied reasoning
+	// fragments that individually evade both consecutive and scattered
+	// repetition detectors. The counter resets on progress (FeedChunk /
+	// FeedProgress — content output or a committed tool call), so it measures
+	// one uninterrupted thinking burst, not the whole turn's budget.
 	d.reasonChunkCount++
 	logger.Debug("loop: FeedReasoningChunk flood_count",
 		"count", d.reasonChunkCount,
@@ -509,7 +523,7 @@ func (d *Detector) FeedReasoningChunk(text string) []Verdict {
 		v := Verdict{
 			Signal:     SignalReasoningChunkFlood,
 			Confidence: 0.85,
-			Message:    fmt.Sprintf("%d reasoning chunks this turn (limit %d)", d.reasonChunkCount, d.cfg.ReasoningChunkFloodThreshold),
+			Message:    fmt.Sprintf("%d reasoning chunks without output or tool calls (limit %d)", d.reasonChunkCount, d.cfg.ReasoningChunkFloodThreshold),
 			// Consumption threshold crossing — warn only, never an interrupt.
 			ShouldInterrupt: false,
 		}
@@ -518,6 +532,24 @@ func (d *Detector) FeedReasoningChunk(text string) []Verdict {
 	}
 
 	return verdicts
+}
+
+// FeedProgress marks observable progress in the current turn — the agent
+// produced content output (FeedChunk feeds it for every substantive chunk)
+// or committed to a tool call (hosts call this from their tool-use hooks).
+// It resets the reasoning-chunk flood accumulation: that signal's contract,
+// on every surface that describes it, is "too many reasoning chunks without
+// content output" — a counter of the burst, not of the turn. A long multi-
+// iteration turn keeps making progress, so its reasoning never accumulates
+// toward the threshold; a single runaway thinking stretch with no output and
+// no tool call still does. No-op when detection is disabled.
+func (d *Detector) FeedProgress() {
+	if !d.cfg.Enabled {
+		return
+	}
+	d.mu.Lock()
+	d.reasonChunkCount = 0
+	d.mu.Unlock()
 }
 
 // ── Signal: Token Velocity ───────────────────────────────────────────────────

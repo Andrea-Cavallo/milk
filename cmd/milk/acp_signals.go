@@ -97,6 +97,20 @@ func (as *acpSession) feedThinking(text string) {
 	as.surfaceVerdicts(vs)
 }
 
+// feedProgress marks observable progress — a committed tool call — for the
+// reasoning-chunk flood signal (its contract is reasoning *without* content
+// output or tool calls). ACP streams model content only at turn end, so the
+// tool-use hook is the intra-turn content-progress source on this host;
+// workflow steps are skipped like feedThinking above.
+func (as *acpSession) feedProgress() {
+	if as.loop == nil || as.workflowRunning.Load() {
+		return
+	}
+	as.loopMu.Lock()
+	as.loop.FeedProgress()
+	as.loopMu.Unlock()
+}
+
 // endTurnSignals feeds the finished turn to the cross-turn detectors
 // (token velocity, silent burn, turn flood, repetition across turns).
 func (as *acpSession) endTurnSignals(promptBefore, completionBefore int64) {

@@ -389,6 +389,7 @@ func (as *acpSession) emitToolCall(id, name string, status acp.ToolCallStatus, r
 }
 
 func (as *acpSession) onLocalToolUse(id, name, summary string, rawInput map[string]any) {
+	as.feedProgress() // tool call = observable progress for the reasoning flood
 	as.callsMu.Lock()
 	if as.openCalls == nil {
 		as.openCalls = map[string][]acp.ToolCallID{}
@@ -429,6 +430,7 @@ func (as *acpSession) onClaudeToolUse(id, name string) {
 }
 
 func (as *acpSession) onClaudeToolUseReady(id, name string, input map[string]any) {
+	as.feedProgress() // tool call = observable progress for the reasoning flood
 	as.emitToolCall(id, name, acp.ToolCallInProgress, input, nil)
 	if as.notifyTools() {
 		as.notifier().NotifyToolUse(context.Background(), name, cliToolArgSummary(input))

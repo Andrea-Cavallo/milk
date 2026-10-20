@@ -13,7 +13,7 @@ import (
 // constant, not a measured probability).
 
 func TestLoopSignalLine_SplitsConsumptionFromLoops(t *testing.T) {
-	consumption := loop.Verdict{Signal: loop.SignalReasoningChunkFlood, Message: "5000 reasoning chunks this turn (limit 5000)"}
+	consumption := loop.Verdict{Signal: loop.SignalReasoningChunkFlood, Message: "5000 reasoning chunks without output or tool calls (limit 5000)"}
 	rep := loop.Verdict{Signal: loop.SignalChunkRepetition, Message: `chunk repeating 5×: "foo"`}
 
 	got := loopSignalLine(consumption, consumption.Message)
@@ -33,7 +33,7 @@ func TestLoopSignalLine_SplitsConsumptionFromLoops(t *testing.T) {
 func TestLoopSignalLine_NoFakeConfidencePercentage(t *testing.T) {
 	for _, v := range []loop.Verdict{
 		{Signal: loop.SignalChunkRepetition, Message: "chunk repeating 5×"},
-		{Signal: loop.SignalReasoningChunkFlood, Message: "5000 reasoning chunks this turn (limit 5000)"},
+		{Signal: loop.SignalReasoningChunkFlood, Message: "5000 reasoning chunks without output or tool calls (limit 5000)"},
 		{Signal: loop.SignalTokenVelocity, Message: "token burn 300000 in 1m0s (limit 300000) — severity: high"},
 		{Signal: loop.Signal(100), Message: "try-best: edit repeat"},
 	} {

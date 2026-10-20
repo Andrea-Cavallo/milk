@@ -1326,8 +1326,9 @@ type LoopDetectionConfig struct {
 	ChunkWindowSize int `json:"chunk_window_size,omitempty"`
 
 	// ReasoningChunkFloodThreshold is how many reasoning chunks without any
-	// content output trigger the intra-turn reasoning-chunk-flood signal.
-	// Default: 5000.
+	// content output or tool call trigger the intra-turn reasoning-chunk-flood
+	// signal — both count as observable progress and reset the accumulation
+	// (FeedChunk / FeedProgress). Default: 5000.
 	ReasoningChunkFloodThreshold int `json:"reasoning_chunk_flood_threshold,omitempty"`
 
 	// ReasoningChunkRepetitionThreshold is how many consecutive identical

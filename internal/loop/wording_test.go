@@ -40,7 +40,7 @@ func TestConsumptionMessagesCarryCountAndLimit(t *testing.T) {
 	if flood == nil {
 		t.Fatal("expected reasoning_chunk_flood to fire")
 	}
-	if !strings.Contains(flood.Message, "3 reasoning chunks this turn (limit 3)") {
+	if !strings.Contains(flood.Message, "3 reasoning chunks without output or tool calls (limit 3)") {
 		t.Errorf("flood message should carry count and limit, got %q", flood.Message)
 	}
 
