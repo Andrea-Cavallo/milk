@@ -21,6 +21,23 @@ import (
 	"github.com/scoutme/milk/internal/tasks"
 )
 
+// handleInterruptCmd runs /interrupt: cancel the running turn — exactly
+// what Ctrl+C does in handleBusyKey (cancelTurn + the [interrupted]
+// completion note) — or report that nothing is running. It exists for
+// surfaces where Ctrl+C isn't available (Telegram remote input, ACP
+// prompts) but is a first-class TUI command too; busyEnter executes it via
+// busySafeCommands, remote input routes it around the busy queue.
+func (m model) handleInterruptCmd() (tea.Model, tea.Cmd) {
+	if m.cancelTurn != nil {
+		m.cancelTurn()
+		m.cancelTurn = nil
+		m.interrupted = true
+		return m, nil
+	}
+	m.appendTranscript(milkTag() + " nothing to interrupt — no agent turn running\n")
+	return m, nil
+}
+
 func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	oldSessionID := ""
 	if m.st != nil && m.st.sess != nil {
@@ -51,6 +68,9 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	}
 	if cmd == cmdThink {
 		return m.handleThinkCmd(strings.TrimSpace(rest))
+	}
+	if cmd == cmdInterrupt {
+		return m.handleInterruptCmd()
 	}
 	if cmd == cmdTips {
 		return m.handleTipsCmd(strings.TrimSpace(rest))

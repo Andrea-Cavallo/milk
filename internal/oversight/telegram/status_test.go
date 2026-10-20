@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -392,4 +393,31 @@ func TestBusyStatus_Edit429Backoff(t *testing.T) {
 		_, text := s.lastEdit()
 		return text == s.message(0)
 	})
+}
+
+// TestNotifyTurnDone_InterruptedRendersAsInterrupt: a cancelled turn (Ctrl+C,
+// /interrupt, session/cancel — plain or wrapped) reports "⏹ turn
+// interrupted", never the ❌ error rendering; other errors keep it.
+func TestNotifyTurnDone_InterruptedRendersAsInterrupt(t *testing.T) {
+	s := newStatusServer()
+	defer s.srv.Close()
+	n := statusNotifier(s, func(c *Config) { c.BusyIndicator = false })
+
+	n.NotifyTurnDone(context.Background(), "mimo", context.Canceled)
+	wrapped := fmt.Errorf("turn: %w", context.Canceled)
+	n.NotifyTurnDone(context.Background(), "mimo", wrapped)
+	n.NotifyTurnDone(context.Background(), "mimo", context.DeadlineExceeded)
+
+	waitForStatus(t, 2*time.Second, "all three done messages", func() bool {
+		return s.msgCount() == 3
+	})
+	for i := 0; i < 2; i++ {
+		msg := s.message(i)
+		if !strings.Contains(msg, "⏹ *mimo* turn interrupted") || strings.Contains(msg, "error:") {
+			t.Fatalf("message %d = %q, want ⏹ interrupted without error", i, msg)
+		}
+	}
+	if msg := s.message(2); !strings.Contains(msg, "❌") || !strings.Contains(msg, "deadline") {
+		t.Fatalf("non-cancel error lost its ❌ rendering: %q", msg)
+	}
 }

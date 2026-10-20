@@ -73,6 +73,7 @@ func acpCommandTable() []acpCommand {
 		{name: cmdSkipPerms, run: acpSkipPerms},
 		{name: cmdPermissions, run: acpPermissions},
 		{name: cmdThink, run: acpThink},
+		{name: cmdInterrupt, run: acpInterrupt},
 		{name: cmdConfig, run: acpConfig},
 		{name: cmdInit, run: acpInit},
 		{name: cmdSetup, run: acpSetup},
@@ -263,6 +264,13 @@ func wizardSwapPrompt(prompt string) bool {
 		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(rest)), "telegram")
 	}
 	return false
+}
+
+// acpInterrupt is /interrupt over ACP with no turn running — the busy case
+// is intercepted in prompt() before turnMu (it must not queue behind the
+// turn it exists to cancel).
+func acpInterrupt(_ *acpSession, _ string) (string, string) {
+	return milkTag() + " nothing to interrupt — no agent turn running\n", ""
 }
 
 // runSlashCommand executes prompt as a slash command if it is one. handled is
