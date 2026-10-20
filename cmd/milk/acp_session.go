@@ -507,6 +507,26 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 		}
 	}
 
+	// /interrupt while a turn is running: cancel it now instead of queueing
+	// behind turnMu — the command exists for surfaces where the client's
+	// own session/cancel (or Ctrl+C) isn't available, so it must not wait
+	// for the very turn it targets. Echoed to the client like any prompt;
+	// the cancelled turn's own completion carries the rest of the
+	// feedback. With no turn running it falls through to runSlashCommand's
+	// idle notice.
+	if prompt == cmdInterrupt && as.turnBusy() {
+		as.mu.Lock()
+		cancel := as.cancel
+		as.mu.Unlock()
+		if cancel != nil {
+			msgID := as.liveID("msg")
+			as.emitHistoryMessage(histUser, msgID, prompt)
+			cancel()
+			as.notify(acp.AgentMessageChunk(as.liveID("ask"), stripANSI(milkTag()+" ⏹ interrupting the running turn…")))
+			return acp.PromptResponse{MessageID: msgID}, nil
+		}
+	}
+
 	as.turnMu.Lock()
 	defer func() {
 		as.releaseTurn()

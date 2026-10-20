@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -291,7 +292,14 @@ func (n *Notifier) NotifyToolResult(_ context.Context, toolName, summary string,
 
 func (n *Notifier) NotifyTurnDone(_ context.Context, agent string, err error) {
 	n.stopStatus()
-	if err != nil {
+	switch {
+	case err == nil:
+		// Successful turns end silently, as before.
+	case errors.Is(err, context.Canceled):
+		// Interrupted by the user (Ctrl+C, /interrupt, session/cancel) —
+		// not a failure; say so plainly instead of ❌ error: …
+		n.sendAsync("⏹ *" + escMD(agent) + "* turn interrupted")
+	default:
 		n.sendAsync(fmt.Sprintf("❌ *%s* error: `%s`", escMD(agent), escMD(err.Error())))
 	}
 }

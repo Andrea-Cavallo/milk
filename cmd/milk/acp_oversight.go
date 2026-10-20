@@ -174,6 +174,12 @@ func (s *acpServer) handleRemoteInput(text string) {
 	if text == "" {
 		return
 	}
+	// /interrupt acts now instead of queueing behind the turn it targets —
+	// the remote counterpart of the TUI's remoteInputMsg bypass.
+	if cmd, _, found := extractSlashCommand(text); found && cmd == cmdInterrupt {
+		s.remoteInterrupt()
+		return
+	}
 	as := s.mostRecentSession()
 	if as == nil {
 		s.mu.Lock()
@@ -182,6 +188,35 @@ func (s *acpServer) handleRemoteInput(text string) {
 		return
 	}
 	as.requestRemoteInput(text)
+}
+
+// remoteInterrupt runs /interrupt from the remote surface (Telegram): the
+// ACP counterpart of the TUI's remoteInputMsg bypass. It cancels the most
+// recent session's running turn; with nothing to cancel the remote surface
+// is told so. Success feedback is the cancelled turn's own NotifyTurnDone
+// (⏹ interrupted) — deliberately no client-view writes here: the running
+// turn owns those until it unwinds.
+func (s *acpServer) remoteInterrupt() {
+	as := s.mostRecentSession()
+	if as == nil {
+		s.mu.Lock()
+		n := s.notifier
+		s.mu.Unlock()
+		if n != nil {
+			notifyAnnouncement(n, "milk", "interrupt", "no turn running — no session yet")
+		}
+		return
+	}
+	as.mu.Lock()
+	cancel := as.cancel
+	as.mu.Unlock()
+	if cancel == nil || !as.turnBusy() {
+		if n := as.notifier(); n != nil {
+			notifyAnnouncement(n, "milk", "interrupt", "no turn running")
+		}
+		return
+	}
+	cancel()
 }
 
 // mostRecentSession returns the live session with the latest prompt activity

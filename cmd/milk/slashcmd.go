@@ -196,6 +196,7 @@ var commandRegistry = []cmdSpec{
   /colorize fenced       highlight fenced code blocks only
   /colorize balanced     fenced blocks + inline markdown (default)
   /colorize full         full glamour markdown render (experimental)`},
+	{name: cmdInterrupt, hosts: hostBoth, desc: "interrupt the running turn — the Ctrl+C equivalent, usable from remote surfaces", help: `  /interrupt            cancel the running agent turn (same as Ctrl+C; works from Telegram too)`},
 	{name: cmdThink, hosts: hostBoth, desc: "inspect or fold model reasoning (ACP: toggle thought relay)", hint: "[on|off]", hintTUI: "[expand|collapse|view]", help: `  /think                 show thinking-block count and fold state
   /think expand          expand every thinking block
   /think collapse        fold every thinking block
@@ -338,7 +339,7 @@ var helpBlocks = []helpBlock{
 	{header: "── Server ────────────────────────────────────────────────────────────────", names: []string{cmdServer}},
 	{header: "── Setup ─────────────────────────────────────────────────────────────────", names: []string{cmdConfig, cmdInit, cmdReload, cmdOpen, cmdSetup}},
 	{header: "── Attachments ──────────────────────────────────────────────────────────", names: []string{cmdAttach, cmdPaste}},
-	{header: "── General ──────────────────────────────────────────────────────────────", names: []string{"/help", cmdUpdate, cmdRestart, "/exit"}},
+	{header: "── General ──────────────────────────────────────────────────────────────", names: []string{"/help", cmdUpdate, cmdRestart, cmdInterrupt, "/exit"}},
 	{header: "── Multi-value parameters ───────────────────────────────────────────────", note: `  The server and agent name parameters of /mcp assign|unassign (both
   sides of "for") and the "for <agent>|global" scope of
   /agent tool enable|disable|add|remove accept comma separated lists,

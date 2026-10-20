@@ -44,6 +44,7 @@ const cmdColorize = "/colorize"
 const cmdThink = "/think"
 const cmdTips = "/tips"
 const cmdRestart = "/restart"
+const cmdInterrupt = "/interrupt"
 const cmdSetup = "/setup"
 const cmdConfig = "/config"
 const cmdInit = "/init"
@@ -318,6 +319,7 @@ var busySafeCommands = map[string]bool{
 	cmdPanel:         true,
 	cmdHistory:       true,
 	cmdNotifications: true,
+	cmdInterrupt:     true,
 	cmdMemory:        true,
 	cmdUsage:         true,
 	cmdMetrics:       true,

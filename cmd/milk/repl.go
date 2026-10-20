@@ -2275,6 +2275,16 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.text == "" {
 			return m, nil
 		}
+		// /interrupt never queues: it exists to act on the turn that would
+		// otherwise swallow it (busy → pendingRemoteInputs), and an idle
+		// interrupt must not fall through to the model as prompt text.
+		// Echoed like any other remote input, then run as the command it is.
+		if trimmed := strings.TrimSpace(msg.text); trimmed != "" {
+			if cmd, rest, found := extractSlashCommand(trimmed); found && cmd == cmdInterrupt {
+				m.appendTranscript(dim("[telegram]") + " " + colorizeTokens(trimmed) + "\n")
+				return m.handleSlashInput(cmd, rest)
+			}
+		}
 		if m.busy {
 			m.st.pendingRemoteInputs = append(m.st.pendingRemoteInputs, msg.text)
 			return m, nil
