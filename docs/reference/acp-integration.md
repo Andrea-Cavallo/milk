@@ -81,7 +81,7 @@ table (`cmd/milk/acp_commands.go`), so nothing is advertised that doesn't run.
 | `/drop [<id\|prefix\|name>]` | delete the current session (the conversation lands on a fresh one), or exactly the referenced one (conversation untouched) |
 | `/skip-permissions [on\|off]` | approve every tool call without asking (seeded from `dangerously_skip_permissions`, like the TUI) |
 | `/think [on\|off]` | show or hide `agent_thought_chunk` updates for this session (default on, as before, unless `show_reasoning` is set to false) |
-| `/interrupt` | cancel the running turn — the typed equivalent of `session/cancel` for surfaces that only have the prompt channel. Intercepted **before** `turnMu`, so it never queues behind the turn it targets; with no turn running it reports "nothing to interrupt" |
+| `/interrupt` | cancel the running turn — the typed equivalent of `session/cancel` for surfaces that only have the prompt channel. Intercepted **before** `turnMu`, so it never queues behind the turn it targets; with no turn running it reports "nothing to interrupt". Recognized only as the input's **first token** (`/interrupt <words>` still counts, rest ignored) — an occurrence mid-input is ordinary prompt text, like every other slash command |
 | `/config` | print the merged config as fenced JSON |
 | `/config show` | the same, annotated per field `[global]`/`[local]`/`[default]` |
 | `/config open` | open the config file: launches the platform file opener (`xdg-open` / `open` / `start`) detached on the machine milk runs on and reports exactly what happened — an ACP agent is headless and never launches an interactive editor itself; when no opener is available it says so and falls back to the config path(s) for the client's editor |

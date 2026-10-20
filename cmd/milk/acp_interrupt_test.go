@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -153,4 +154,120 @@ func TestACPRemoteInterrupt_NoTurnAnnounces(t *testing.T) {
 	server.handleRemoteInput("/interrupt")
 
 	waitForOversightCall(t, fake, "start:milk:interrupt:no turn running")
+}
+
+// busySession holds a live turn (turnMu + turnCtx + cancel) for interrupt
+// tests and releases everything at cleanup. canceled fires at most once.
+func busyInterruptFixture(t *testing.T) (*acpServer, acp.SessionID, *acpSession, chan struct{}, func()) {
+	t.Helper()
+	server, _ := acpTestServer(t, "MUST NOT REACH THE MODEL")
+	id := acpNewSession(t, server)
+	as := server.session(id)
+	as.turnMu.Lock()
+	canceled := make(chan struct{})
+	var once sync.Once
+	as.mu.Lock()
+	as.turnCtx = context.Background()
+	as.cancel = func() { once.Do(func() { close(canceled) }) }
+	as.mu.Unlock()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			as.mu.Lock()
+			as.turnCtx = nil
+			as.cancel = nil
+			as.mu.Unlock()
+			as.turnMu.Unlock()
+		})
+	}
+	t.Cleanup(release)
+	return server, id, as, canceled, release
+}
+
+// The prompt form accepts trailing words: "/interrupt stop it" is still the
+// command (shared first-token rule) — cancels without queueing on turnMu.
+func TestACPInterrupt_BusyPromptWithArgsCancels(t *testing.T) {
+	server, id, _, canceled, _ := busyInterruptFixture(t)
+
+	done := make(chan any, 1)
+	go func() {
+		done <- acpRequest(t, server, "session/prompt", acp.PromptRequest{
+			SessionID: id,
+			Prompt:    []acp.ContentBlock{acp.TextBlock("/interrupt stop it now")},
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leading-args /interrupt blocked on the running turn's lock (turnMu)")
+	}
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("leading-args /interrupt did not cancel the running turn")
+	}
+}
+
+// Mid-input is plain prompt text on ACP too: it must NOT cancel, and
+// without the intercept it queues behind turnMu like any prompt (released
+// at cleanup, where it runs as an ordinary turn).
+func TestACPInterrupt_BusyPromptMidInputDoesNotCancel(t *testing.T) {
+	server, id, _, canceled, release := busyInterruptFixture(t)
+
+	done := make(chan any, 1)
+	go func() {
+		done <- acpRequest(t, server, "session/prompt", acp.PromptRequest{
+			SessionID: id,
+			Prompt:    []acp.ContentBlock{acp.TextBlock("please /interrupt this turn")},
+		})
+	}()
+	select {
+	case <-canceled:
+		t.Fatal("mid-input text cancelled the running turn")
+	case <-done:
+		t.Fatal("mid-input prompt was intercepted instead of queueing behind the turn")
+	case <-time.After(300 * time.Millisecond):
+	}
+	// Release the turn: the queued prompt then runs as a normal turn —
+	// waited for here so no request outlives the test.
+	release()
+	<-done
+}
+
+// Remote (Telegram) input follows the same rule: only a message starting
+// with /interrupt cancels; mid-input queues as an ordinary message.
+func TestACPRemoteInterrupt_FirstTokenOnly(t *testing.T) {
+	for _, c := range []struct {
+		text       string
+		wantCancel bool
+	}{
+		{"  /interrupt stop it  ", true},
+		{"please /interrupt now", false},
+		{"/interrupted", false},
+	} {
+		t.Run(c.text, func(t *testing.T) {
+			server, _, as, canceled, _ := busyInterruptFixture(t)
+			server.handleRemoteInput(c.text)
+			deadline := time.After(500 * time.Millisecond)
+			if !c.wantCancel {
+				select {
+				case <-canceled:
+					t.Fatal("mid-input/lookalike text cancelled the running turn")
+				case <-deadline:
+					as.mu.Lock()
+					pending := len(as.pendingRemoteInputs)
+					as.mu.Unlock()
+					if pending != 1 {
+						t.Fatalf("expected the text queued as an ordinary message, pending = %d", pending)
+					}
+				}
+				return
+			}
+			select {
+			case <-canceled:
+			case <-deadline:
+				t.Fatal("leading /interrupt did not cancel the running turn")
+			}
+		})
+	}
 }

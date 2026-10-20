@@ -101,3 +101,84 @@ func TestInterrupt_RemoteIdleNoDispatch(t *testing.T) {
 		t.Fatal("idle remote /interrupt started a turn")
 	}
 }
+
+// Remote messages honor the shared first-token rule: /interrupt only when
+// the message STARTS with it (exact or with trailing words) — mid-input
+// occurrences and lookalikes are ordinary text (queued while busy), exactly
+// like every other slash command.
+func TestInterrupt_RemoteRecognitionIsFirstTokenOnly(t *testing.T) {
+	cases := []struct {
+		name       string
+		text       string
+		wantCancel bool
+	}{
+		{"exact", "/interrupt", true},
+		{"leading with args", "/interrupt stop it now", true},
+		{"leading after whitespace", "   /interrupt  ", true},
+		{"mid-input", "please /interrupt now", false},
+		{"only mid-input tokens", "can you /interrupt this turn", false},
+		{"lookalike", "/interrupted", false},
+		{"lookalike with args", "/interrupt-me", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := layoutTestModel(t, 100, 30)
+			canceled := false
+			m.busy = true
+			m.cancelTurn = func() { canceled = true }
+
+			out, _ := m.Update(remoteInputMsg{text: c.text})
+			got := out.(model)
+			if canceled != c.wantCancel {
+				t.Fatalf("canceled = %v, want %v", canceled, c.wantCancel)
+			}
+			transcript := got.transcript.String()
+			if c.wantCancel {
+				if len(got.st.pendingRemoteInputs) != 0 {
+					t.Fatalf("command was queued (%v) — it must act immediately", got.st.pendingRemoteInputs)
+				}
+				if !strings.Contains(transcript, "/interrupt") {
+					t.Fatal("command not echoed to the transcript")
+				}
+				return
+			}
+			// Not the command: busy input queues as ordinary text (the
+			// documented remote rule) and never runs the command notice.
+			if len(got.st.pendingRemoteInputs) != 1 || got.st.pendingRemoteInputs[0] != c.text {
+				t.Fatalf("expected the text queued verbatim, got %v", got.st.pendingRemoteInputs)
+			}
+			if strings.Contains(transcript, "nothing to interrupt") {
+				t.Fatal("mid-input text was treated as the /interrupt command")
+			}
+		})
+	}
+}
+
+// The shared recognition rule itself: every surface routes through it
+// (submitInput, handleBusyKey's busy-Enter, both remote paths, ACP
+// prompts) — /interrupt matches only as the input's FIRST token, exact
+// or with trailing words; mid-input and lookalikes are never commands.
+func TestInterrupt_SharedRecognitionIsFirstTokenOnly(t *testing.T) {
+	cases := []struct {
+		input string
+		found bool
+	}{
+		{"/interrupt", true},
+		{"/interrupt stop it now", true},
+		{"   /interrupt   ", true},
+		{"please /interrupt now", false},
+		{"say /interrupt when ready", false},
+		{"/interrupted", false},
+		{"/interrupt-me", false},
+	}
+	for _, c := range cases {
+		cmd, _, found := extractSlashCommand(c.input)
+		if found != c.found {
+			t.Errorf("extractSlashCommand(%q) found = %v, want %v", c.input, found, c.found)
+			continue
+		}
+		if found && cmd != cmdInterrupt {
+			t.Errorf("extractSlashCommand(%q) = %q, want %q", c.input, cmd, cmdInterrupt)
+		}
+	}
+}

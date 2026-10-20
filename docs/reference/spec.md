@@ -263,7 +263,8 @@ Not available over ACP (the client cannot survive its server process being repla
 
 - **TUI** — typed like any command (also via busy-Enter; `busySafeCommands` keeps it executable while a turn runs, where other commands answer "unavailable while agent is responding"). With no turn running: `nothing to interrupt`.
 - **Remote input (Telegram)** — routed around the busy queue: it acts on the very turn that would otherwise swallow the message; an idle interrupt never reaches the model as prompt text.
-- **ACP** — a prompt of `/interrupt` is intercepted before `turnMu` (it must not queue behind the turn it targets), echoes to the client, cancels and answers immediately; idle it runs through `acp_commands.go` like every other command. Native `session/cancel` is unchanged.
+- **Recognition** — the shared first-token rule, exactly like every other slash command: the message/prompt must *start* with `/interrupt` (exact, or with trailing words like `/interrupt stop it` — rest ignored); an occurrence **mid-input** (`please /interrupt now`) or a lookalike (`/interrupted`) is ordinary text on every surface — it queues (busy) or reaches the model (idle), it never cancels.
+- **ACP** — an input whose **first token** is `/interrupt` is intercepted before `turnMu` (it must not queue behind the turn it targets), echoes to the client, cancels and answers immediately; mid-input stays plain prompt text, and idle it runs through `acp_commands.go` like every other command. Native `session/cancel` is unchanged.
 - Interrupted turns notify remote oversight as `⏹ *agent* turn interrupted` (a cancellation is not an error).
 
 **Multi-line input**: Shift+Enter/Alt+Enter inserts a newline; Enter submits. Bracketed paste is handled transparently.
