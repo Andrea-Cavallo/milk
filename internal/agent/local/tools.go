@@ -1211,7 +1211,10 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 	timeout := bashDefaultTimeout
 	if v, ok := args["timeout_seconds"]; ok {
 		if n, ok := v.(float64); ok && n > 0 {
-			d := time.Duration(n) * time.Second
+			// n * time.Second via float — time.Duration(n) truncates
+			// fractions to 0, silently killing fractional timeouts (0.3s
+			// became an already-expired deadline).
+			d := time.Duration(n * float64(time.Second))
 			if d > bashMaxTimeout {
 				d = bashMaxTimeout
 			}
@@ -1219,6 +1222,14 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 		}
 	}
 
+	// Issue #275: the kill message distinguishes who cut the run, so the
+	// configured limit is never presented as the time it actually ran.
+	// ourDeadline is what THIS call asked for — ctx.Deadline() can't be
+	// used for that: context.WithDeadline hands back the parent's context
+	// when the parent's deadline is earlier (the job hard-deadline shape),
+	// which would report the parent's deadline as our own.
+	start := time.Now()
+	ourDeadline := start.Add(timeout)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -1236,6 +1247,11 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 		// timeouts all report ExitCode -1: the exit code is the single
 		// failure signal for bash (issue #271) — a result with Error set but
 		// exit 0 is stderr output on a SUCCESSFUL run and fails nothing.
+		// A ctx already dead at launch gets the uniform kill message too
+		// (issue #275) instead of a bare "context deadline exceeded".
+		if ctx.Err() != nil {
+			return toolResult{Error: bashKilledMessage(ctx, start, ourDeadline, timeout), ExitCode: -1}.String(), false
+		}
 		return toolResult{Error: err.Error(), ExitCode: -1}.String(), false
 	}
 
@@ -1244,13 +1260,28 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 
 	select {
 	case err := <-done:
+		// A ctx kill can win the race on either channel: Wait may return
+		// before the select takes the ctx.Done arm (ExitError "signal:
+		// killed", or the context error itself). A real finish still wins —
+		// err==nil — but anything else cut by ctx reports the killed
+		// message (issue #275), never "signal: killed" or a bare
+		// "context deadline exceeded".
+		if err == nil {
+			return toolResult{
+				Output:   stdout.String(),
+				Error:    stderr.String(),
+				ExitCode: 0,
+			}.String(), false
+		}
+		if ctx.Err() != nil {
+			killProcGroup(cmd)
+			return toolResult{Error: bashKilledMessage(ctx, start, ourDeadline, timeout), ExitCode: -1}.String(), false
+		}
 		code := 0
-		if err != nil {
-			if exit, ok := err.(*exec.ExitError); ok {
-				code = exit.ExitCode() // -1 when a signal killed the process
-			} else {
-				return toolResult{Error: err.Error(), ExitCode: -1}.String(), false
-			}
+		if exit, ok := err.(*exec.ExitError); ok {
+			code = exit.ExitCode() // -1 when a signal killed the process
+		} else {
+			return toolResult{Error: err.Error(), ExitCode: -1}.String(), false
 		}
 		return toolResult{
 			Output:   stdout.String(),
@@ -1260,8 +1291,27 @@ func runBash(ctx context.Context, args map[string]any, cwd string) (string, bool
 	case <-ctx.Done():
 		killProcGroup(cmd)
 		<-done
-		return toolResult{Error: fmt.Sprintf("bash: command timed out after %s", timeout), ExitCode: -1}.String(), false
+		return toolResult{Error: bashKilledMessage(ctx, start, ourDeadline, timeout), ExitCode: -1}.String(), false
 	}
+}
+
+// bashKilledMessage explains a ctx-killed bash run (issue #275). A kill from
+// outside — a cancelled turn, a background job's hard deadline, a parent
+// deadline — reports the time the command actually ran alongside the
+// configured limit ("killed by context after 1m59s (limit 5m0s)"), so a
+// 2-minute job cut never claims the 5-minute bash limit as its duration. A
+// run that consumed its own configured timeout keeps the plain wording —
+// there the elapsed time IS the limit. ourDeadline is this call's own
+// deadline (see runBash), not ctx's: a parent deadline earlier than ours
+// makes WithDeadline return the parent, so ctx.Deadline() would misreport
+// whose deadline fired.
+func bashKilledMessage(ctx context.Context, start, ourDeadline time.Time, limit time.Duration) string {
+	elapsed := time.Since(start).Round(time.Millisecond)
+	external := ctx.Err() == context.Canceled || time.Now().Before(ourDeadline)
+	if external {
+		return fmt.Sprintf("bash: command killed by context after %s (limit %s)", elapsed, limit)
+	}
+	return fmt.Sprintf("bash: command timed out after %s", limit)
 }
 
 // expandTilde replaces a leading "~" with the user's home directory.
