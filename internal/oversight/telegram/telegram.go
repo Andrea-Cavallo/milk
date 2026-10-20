@@ -29,13 +29,26 @@ const (
 	// sendQueueSize bounds the outbound queue; the single worker goroutine
 	// drains it in FIFO order so multi-chunk messages arrive in order.
 	sendQueueSize = 256
-	// defaultBusyInterval re-sends the "typing…" chat action while a turn
-	// runs. Telegram chat actions expire after ~5s and are rate-limited to
-	// about one per 5s per chat, so stay just under both.
-	defaultBusyInterval = 4500 * time.Millisecond
+	// defaultStatusInterval is how often the status line on the turn-start
+	// message re-renders (elapsed counters tick; state changes render
+	// immediately instead of waiting for the next tick).
+	defaultStatusInterval = 2 * time.Second
+	// defaultChatActionInterval re-sends sendChatAction("typing") while a
+	// response streams. Telegram expires chat actions after ~5s and limits
+	// them to roughly one per 5s per chat — 5.2s sits just above both so
+	// refreshes don't 429 themselves (the pre-status-line 4.5s cadence did).
+	defaultChatActionInterval = 5200 * time.Millisecond
 	// maxBusyBackoff caps the exponential send-failure backoff so a broken
 	// endpoint is retried at most once a minute.
 	maxBusyBackoff = time.Minute
+)
+
+// Busy-status states for the indicator line (issue #286) — what the agent is
+// actually doing, not a blanket "typing…".
+const (
+	statusThinking = iota // turn running, no response text streaming yet
+	statusTyping          // response segments are streaming out
+	statusWaiting         // a remote ask is waiting for the human
 )
 
 // Config holds the Telegram-specific configuration.
@@ -45,14 +58,19 @@ type Config struct {
 	PermTimeout   time.Duration // how long AskPermission waits for a reply
 	TimeoutAction string        // "allow" or "deny" when PermTimeout expires
 	APIBase       string        // override for testing; defaults to https://api.telegram.org
-	// BusyIndicator engages sendChatAction("typing") while a turn runs
-	// (issue #284). Production wires it from remote_oversight.
-	// busy_indicator (default on); the zero value here is off so tests that
-	// don't ask for it see no extra requests.
+	// BusyIndicator shows the agent's business status while a turn runs
+	// (issue #286): a status line (💭 thinking… / ⌨️ typing… / ⏳ waiting
+	// for you…) edited in place on the turn-start message, plus the native
+	// "typing…" chat action while response text streams. Production wires
+	// it from remote_oversight.busy_indicator (default on); the zero value
+	// here is off so tests that don't ask for it see no extra requests.
 	BusyIndicator bool
-	// BusyInterval is the chat-action refresh period (0 →
-	// defaultBusyInterval). Tests shrink it to keep suites fast.
-	BusyInterval time.Duration
+	// StatusInterval is the status-line re-render period (0 →
+	// defaultStatusInterval). Tests shrink it to keep suites fast.
+	StatusInterval time.Duration
+	// ChatActionInterval is the typing-chat-action refresh period (0 →
+	// defaultChatActionInterval).
+	ChatActionInterval time.Duration
 }
 
 // Notifier sends notifications and forwards permission prompts via Telegram.
@@ -68,18 +86,19 @@ type Notifier struct {
 	permCh     chan string  // non-nil when AskPermission is waiting
 	onInput    func(string) // called for non-permission messages when set
 
-	outCh   chan string // outbound FIFO, drained by one worker goroutine
+	outCh   chan outItem // outbound FIFO, drained by one worker goroutine
 	outOnce sync.Once
 
-	// busyLoop state (issue #284): depth-counted so overlapping turns keep
-	// the indicator alive until the last NotifyTurnDone; paused for the
-	// duration of a remote ask — while milk waits for the human the agent
-	// isn't working. Both hosts (TUI runTurn, ACP dispatch) and the
-	// workflow runner pair NotifyTurnStart/NotifyTurnDone on every path.
-	busyMu     sync.Mutex
-	busyDepth  int
-	busyCancel context.CancelFunc
-	busyPaused bool
+	// Busy-status state (issue #286): a stack of active turns' status
+	// entries — top is the most recent — with one render loop for all of
+	// them. Both hosts (TUI runTurn, ACP dispatch) and the workflow runner
+	// pair NotifyTurnStart/NotifyTurnDone on every path; overlapping turns
+	// restore in LIFO order (worst case for a rare out-of-order end: an
+	// early pop silences a still-running turn's line — never a wrong
+	// restore, since each entry restores only its own message).
+	statusMu     sync.Mutex
+	statuses     []*turnStatus
+	statusCancel context.CancelFunc
 }
 
 // New creates a Notifier. Call StartPolling to begin receiving messages.
@@ -93,13 +112,16 @@ func New(cfg Config) *Notifier {
 	if cfg.TimeoutAction == "" {
 		cfg.TimeoutAction = "deny"
 	}
-	if cfg.BusyInterval <= 0 {
-		cfg.BusyInterval = defaultBusyInterval
+	if cfg.StatusInterval <= 0 {
+		cfg.StatusInterval = defaultStatusInterval
+	}
+	if cfg.ChatActionInterval <= 0 {
+		cfg.ChatActionInterval = defaultChatActionInterval
 	}
 	return &Notifier{
 		cfg:    cfg,
 		client: &http.Client{Timeout: 30 * time.Second},
-		outCh:  make(chan string, sendQueueSize),
+		outCh:  make(chan outItem, sendQueueSize),
 	}
 }
 
@@ -217,8 +239,15 @@ func turnStartMessage(agent, target, prompt string) string {
 // NotifyTurnDone. The indicator stops on its own when the turn context is
 // cancelled as well.
 func (n *Notifier) NotifyTurnStart(_ context.Context, agent, target, prompt string) {
-	n.sendAsync(turnStartMessage(agent, target, prompt))
-	n.startBusy()
+	base := turnStartMessage(agent, target, prompt)
+	ts := n.startStatus(base)
+	if ts == nil {
+		n.sendAsync(base)
+		return
+	}
+	// The status line lives on this message — bind its id once the send
+	// queue reports it (attach renders the first 💭 thinking… immediately).
+	n.sendAsyncWithID(base, func(msgID int64) { n.attachStatus(ts, msgID) })
 }
 
 // Announce sends a turn-start-style notice for events that are not turns
@@ -231,6 +260,10 @@ func (n *Notifier) Announce(agent, target, prompt string) {
 }
 
 func (n *Notifier) NotifyToolUse(_ context.Context, toolName, summary string) {
+	// Tool traffic means the agent is working between outputs. The state
+	// flips even when notify_tools gates the message itself (the gate sits
+	// in cmd/milk's callers), so the status line stays truthful either way.
+	n.setStatus(statusThinking)
 	var msg string
 	if summary != "" {
 		msg = fmt.Sprintf("⚙ *%s*: `%s`", escMD(toolName), escMD(summary))
@@ -241,6 +274,8 @@ func (n *Notifier) NotifyToolUse(_ context.Context, toolName, summary string) {
 }
 
 func (n *Notifier) NotifyToolResult(_ context.Context, toolName, summary string, isError bool) {
+	// State first: an empty summary still means a tool ran.
+	n.setStatus(statusThinking)
 	if summary == "" {
 		return
 	}
@@ -255,78 +290,267 @@ func (n *Notifier) NotifyToolResult(_ context.Context, toolName, summary string,
 }
 
 func (n *Notifier) NotifyTurnDone(_ context.Context, agent string, err error) {
-	n.stopBusy()
+	n.stopStatus()
 	if err != nil {
 		n.sendAsync(fmt.Sprintf("❌ *%s* error: `%s`", escMD(agent), escMD(err.Error())))
 	}
 }
 
-// --- busy indicator (issue #284) ---
+// --- busy indicator (issue #286) ---
+//
+// While a turn runs, the turn-start message carries a status line —
+// 💭 thinking… / ⌨️ typing… / ⏳ waiting for you… with an elapsed counter —
+// updated in place by editMessageText. No extra chat rows: the line lives
+// on the existing 🔄 message and is stripped again when the turn ends.
+// The native sendChatAction("typing") runs only while response text
+// streams, where its fixed label is accurate (and works even if the
+// turn-start message id never arrives).
 
-// startBusy counts a turn in flight and, when this is the first one, spawns
-// the chat-action loop. Idempotent when the indicator is disabled.
-func (n *Notifier) startBusy() {
-	if !n.cfg.BusyIndicator {
-		return
-	}
-	n.busyMu.Lock()
-	defer n.busyMu.Unlock()
-	n.busyDepth++
-	if n.busyDepth == 1 {
-		ctx, cancel := context.WithCancel(context.Background())
-		n.busyCancel = cancel
-		go n.busyLoop(ctx)
-	}
+// turnStatus is one active turn's indicator state.
+type turnStatus struct {
+	mu       sync.Mutex
+	msgID    int64     // 0 until the send queue reports the message id (forever, if the send failed)
+	base     string    // turn-start message without the status line; restore target
+	state    int       // statusThinking | statusTyping | statusWaiting
+	prev     int       // state to return to after a wait
+	waitFrom time.Time // when the current wait began (waiting-line elapsed)
+	t0       time.Time // turn start (thinking/typing elapsed)
+	last     string    // last rendered full text (dedupe + restore guard)
+	nextEdit time.Time // 429 backoff: no edits before this
+	dead     bool      // edit failed irrecoverably (message deleted) — stop touching it
+	done     bool      // turn ended — renders are refused, restore wins
 }
 
-// stopBusy counts a finished turn; the loop stops when the last one ends.
-// Unbalanced calls (never started) are ignored.
-func (n *Notifier) stopBusy() {
-	n.busyMu.Lock()
-	defer n.busyMu.Unlock()
-	if n.busyDepth > 0 {
-		n.busyDepth--
-	}
-	if n.busyDepth == 0 && n.busyCancel != nil {
-		n.busyCancel()
-		n.busyCancel = nil
-	}
-}
-
-// pauseBusy suspends chat-action sends for the duration of a remote ask;
-// resumeBusy re-arms them (both are no-ops when the loop isn't running).
-func (n *Notifier) pauseBusy() {
-	n.busyMu.Lock()
-	n.busyPaused = true
-	n.busyMu.Unlock()
-}
-
-func (n *Notifier) resumeBusy() {
-	n.busyMu.Lock()
-	n.busyPaused = false
-	n.busyMu.Unlock()
-}
-
-func (n *Notifier) busyIsPaused() bool {
-	n.busyMu.Lock()
-	defer n.busyMu.Unlock()
-	return n.busyPaused
-}
-
-// Chat-action send outcomes for busyLoop's backoff bookkeeping.
+// sendTyping outcomes.
 const (
-	typingOK          = iota
-	typingRateLimited // 429: retry after the server's retry_after
-	typingFailed      // transport or API error: exponential backoff
+	typingOK          = iota // accepted
+	typingRateLimited        // 429: retry after the server's retry_after
+	typingFailed             // transport or API error: exponential backoff
 )
 
-// busyLoop keeps the chat action alive while a turn runs: one send
-// immediately, then every BusyInterval (chat actions expire after ~5s).
-// It exits when stopBusy cancels the context — depth zero.
-func (n *Notifier) busyLoop(ctx context.Context) {
-	interval := n.cfg.BusyInterval
+// startStatus pushes a turn's status entry and spawns the render loop for
+// the first one. Returns nil when the indicator is disabled.
+func (n *Notifier) startStatus(base string) *turnStatus {
+	if !n.cfg.BusyIndicator {
+		return nil
+	}
+	ts := &turnStatus{base: base, t0: time.Now(), waitFrom: time.Now()}
+	n.statusMu.Lock()
+	n.statuses = append(n.statuses, ts)
+	if len(n.statuses) == 1 {
+		ctx, cancel := context.WithCancel(context.Background())
+		n.statusCancel = cancel
+		go n.statusLoop(ctx)
+	}
+	n.statusMu.Unlock()
+	return ts
+}
+
+// stopStatus pops the most recent turn's entry (LIFO — see the field
+// comment), refuses its further renders, strips its status line, and stops
+// the render loop with the last entry.
+func (n *Notifier) stopStatus() {
+	n.statusMu.Lock()
+	var done *turnStatus
+	if last := len(n.statuses) - 1; last >= 0 {
+		done = n.statuses[last]
+		n.statuses = n.statuses[:last]
+	}
+	if len(n.statuses) == 0 && n.statusCancel != nil {
+		n.statusCancel()
+		n.statusCancel = nil
+	}
+	n.statusMu.Unlock()
+	if done == nil {
+		return
+	}
+	done.mu.Lock()
+	done.done = true
+	msgID, base, last := done.msgID, done.base, done.last
+	need := msgID != 0 && !done.dead && last != "" && last != base
+	if need {
+		done.last = base
+	}
+	done.mu.Unlock()
+	if need {
+		// Async: a slow Telegram must not stall turn end. done already
+		// blocks every later render, so no status line can reappear.
+		go n.editRaw(msgID, base)
+	}
+}
+
+// topStatus returns the most recent active turn's entry, or nil.
+func (n *Notifier) topStatus() *turnStatus {
+	n.statusMu.Lock()
+	defer n.statusMu.Unlock()
+	if len(n.statuses) == 0 {
+		return nil
+	}
+	return n.statuses[len(n.statuses)-1]
+}
+
+// setStatus moves the active turn's indicator to a new business state and
+// renders it immediately (no waiting for the next tick). No-op with no
+// turn in flight (e.g. background-job asks, which have no turn-start
+// message) or when the indicator is disabled.
+func (n *Notifier) setStatus(state int) {
+	ts := n.topStatus()
+	if ts == nil {
+		return
+	}
+	ts.mu.Lock()
+	ts.state = state
+	ts.mu.Unlock()
+	n.renderStatus(ts)
+}
+
+// attachStatus binds the turn-start message id (reported by the send
+// queue) and renders the first status line right away.
+func (n *Notifier) attachStatus(ts *turnStatus, msgID int64) {
+	ts.mu.Lock()
+	ts.msgID = msgID
+	ts.mu.Unlock()
+	n.renderStatus(ts)
+}
+
+// beginWait/endWait bracket a remote ask: the status line switches to
+// "⏳ waiting for you…" while milk waits for the human — the agent isn't
+// working then — and returns to the previous state when the answer
+// arrives (or the ask times out).
+func (ts *turnStatus) beginWait(n *Notifier) {
+	ts.mu.Lock()
+	ts.prev = ts.state
+	ts.state = statusWaiting
+	ts.waitFrom = time.Now()
+	ts.mu.Unlock()
+	n.renderStatus(ts)
+}
+
+func (ts *turnStatus) endWait(n *Notifier) {
+	ts.mu.Lock()
+	ts.state = ts.prev
+	ts.mu.Unlock()
+	n.renderStatus(ts)
+}
+
+// currentState reads the entry's state for the loop's chat-action gate.
+func (ts *turnStatus) currentState() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.state
+}
+
+// renderStatus renders the entry's status line now, skipping entries that
+// are unattached, dead, done, in 429 backoff, or unchanged.
+func (n *Notifier) renderStatus(ts *turnStatus) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	n.renderLocked(ts)
+}
+
+// renderLocked renders the status line; caller holds ts.mu.
+func (n *Notifier) renderLocked(ts *turnStatus) {
+	if ts.done || ts.dead || ts.msgID == 0 {
+		return
+	}
+	now := time.Now()
+	if now.Before(ts.nextEdit) {
+		return
+	}
+	since := ts.t0
+	if ts.state == statusWaiting {
+		since = ts.waitFrom
+	}
+	elapsed := int(now.Sub(since).Seconds())
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	var line string
+	switch ts.state {
+	case statusTyping:
+		line = fmt.Sprintf("⌨️ typing… %d:%02d", elapsed/60, elapsed%60)
+	case statusWaiting:
+		line = fmt.Sprintf("⏳ waiting for you… %d:%02d", elapsed/60, elapsed%60)
+	default:
+		line = fmt.Sprintf("💭 thinking… %d:%02d", elapsed/60, elapsed%60)
+	}
+	full := ts.base + "\n" + line
+	if full == ts.last {
+		return
+	}
+	if n.editStatus(ts, ts.msgID, full) {
+		ts.last = full
+	}
+}
+
+// editStatus edits the turn-start message to text. Mutates the entry's
+// backoff/dead state on failure; caller holds ts.mu.
+func (n *Notifier) editStatus(ts *turnStatus, msgID int64, text string) bool {
+	ok, retry, dead := n.editRawResult(msgID, text)
+	if dead {
+		ts.dead = true
+		return false
+	}
+	if retry > 0 {
+		ts.nextEdit = time.Now().Add(retry)
+		return false
+	}
+	return ok
+}
+
+// editRaw edits without any entry state (fire-and-forget restore path).
+func (n *Notifier) editRaw(msgID int64, text string) {
+	_, _, _ = n.editRawResult(msgID, text)
+}
+
+// editRawResult performs editMessageText. retry > 0 requests backoff
+// (429 retry_after + slack); dead marks the message uneditable (deleted,
+// wrong chat, …). "message is not modified" is benign and counts as ok.
+func (n *Notifier) editRawResult(msgID int64, text string) (ok bool, retry time.Duration, dead bool) {
+	params := url.Values{
+		"chat_id":    []string{strconv.FormatInt(n.cfg.ChatID, 10)},
+		"message_id": []string{strconv.FormatInt(msgID, 10)},
+		"text":       []string{text},
+		"parse_mode": []string{"MarkdownV2"},
+	}
+	var res struct {
+		OK          bool   `json:"ok"`
+		ErrorCode   int    `json:"error_code"`
+		Description string `json:"description"`
+		Parameters  struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := n.apiGet(ctx, "editMessageText", params, &res); err != nil {
+		return false, 0, false // transport: the next tick retries
+	}
+	if res.OK {
+		return true, 0, false
+	}
+	if res.ErrorCode == 429 {
+		r := time.Duration(res.Parameters.RetryAfter)*time.Second + 200*time.Millisecond
+		if res.Parameters.RetryAfter <= 0 {
+			r = time.Second
+		}
+		return false, r, false
+	}
+	if res.ErrorCode == 400 && strings.Contains(res.Description, "not modified") {
+		return true, 0, false
+	}
+	return false, 0, true
+}
+
+// statusLoop is the single render/chat-action goroutine for all active
+// turns: re-renders the top entry's status line every StatusInterval and,
+// while that entry streams response text, refreshes the native typing
+// chat action on its own (slower) cadence with429/error backoff.
+func (n *Notifier) statusLoop(ctx context.Context) {
+	next := time.Duration(0) // first pass immediately
+	actionWait := n.cfg.ChatActionInterval
+	lastAction := time.Time{}
 	fails := 0
-	next := time.Duration(0) // first action immediately
 	for {
 		if next > 0 {
 			select {
@@ -334,32 +558,39 @@ func (n *Notifier) busyLoop(ctx context.Context) {
 				return
 			case <-time.After(next):
 			}
+		} else if ctx.Err() != nil {
+			return
 		}
-		next = interval
-		if n.busyIsPaused() {
-			fails = 0
+		next = n.cfg.StatusInterval
+		entry := n.topStatus()
+		if entry == nil {
 			continue
 		}
-		state, retry := n.sendTyping(ctx)
-		switch state {
+		n.renderStatus(entry)
+		if entry.currentState() != statusTyping || time.Since(lastAction) < actionWait {
+			continue
+		}
+		lastAction = time.Now()
+		switch kind, retry := n.sendTyping(ctx); kind {
 		case typingOK:
 			fails = 0
+			actionWait = n.cfg.ChatActionInterval
 		case typingRateLimited:
-			if retry > next {
-				next = retry
+			fails = 0
+			actionWait = retry + 200*time.Millisecond
+			if actionWait < n.cfg.ChatActionInterval {
+				actionWait = n.cfg.ChatActionInterval
 			}
 		case typingFailed:
 			fails++
-			backoff := interval
+			backoff := n.cfg.ChatActionInterval
 			for i := 1; i < fails && backoff < maxBusyBackoff; i++ {
 				backoff *= 2
 			}
 			if backoff > maxBusyBackoff {
 				backoff = maxBusyBackoff
 			}
-			if backoff > next {
-				next = backoff
-			}
+			actionWait = backoff
 		}
 	}
 }
@@ -398,6 +629,9 @@ func (n *Notifier) NotifyResponse(_ context.Context, agent, text string) {
 	if text == "" {
 		return
 	}
+	// Response text is streaming out — the status line says so (and only
+	// then does the native "typing…" chat action run).
+	n.setStatus(statusTyping)
 	header := "💬 *" + escMD(agent) + "*"
 	// Reserve room for the worst-case header suffix " (n/m)" on chunked sends
 	// so that header + escaped chunk always fits the Telegram limit.
@@ -422,9 +656,12 @@ func (n *Notifier) NotifyResponse(_ context.Context, agent, text string) {
 // decides whether that resolves the ask (foreground) or keeps it open until
 // its own deadline (background asks — see ADR-0052).
 func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest) (oversight.PermDecision, bool) {
-	// No "typing…" while waiting on the human — the agent isn't working.
-	n.pauseBusy()
-	defer n.resumeBusy()
+	// ⏳ waiting for the human — the agent isn't working while the ask is
+	// open, so the status line says that instead of "typing…".
+	if ts := n.topStatus(); ts != nil {
+		ts.beginWait(n)
+		defer ts.endWait(n)
+	}
 
 	lines := []string{fmt.Sprintf("🔐 Permission request — *%s*", escMD(req.ToolName))}
 	if req.Input != "" {
@@ -485,10 +722,12 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 // surfaces or the timed answer — unlike permissions, questions have no
 // timeout action.
 func (n *Notifier) AskInput(ctx context.Context, req oversight.InputRequest) (string, bool) {
-	// Same as AskPermission: the indicator must say "waiting for the human",
-	// not "typing…", for the whole ask.
-	n.pauseBusy()
-	defer n.resumeBusy()
+	// Same as AskPermission: the indicator must say "waiting for you", not
+	// "typing…", for the whole ask.
+	if ts := n.topStatus(); ts != nil {
+		ts.beginWait(n)
+		defer ts.endWait(n)
+	}
 
 	lines := []string{fmt.Sprintf("❓ *%s*", escMD(req.Question))}
 	if len(req.Options) > 0 {
@@ -527,7 +766,17 @@ func (n *Notifier) AskInput(ctx context.Context, req oversight.InputRequest) (st
 }
 
 // send sends a MarkdownV2-formatted message synchronously, ignoring errors.
-func (n *Notifier) send(text string) {
+// outItem is one queued outbound message. onID, when set, receives the
+// new message's id after a successful send — the busy indicator binds it
+// to edit the turn-start message later (issue #286).
+type outItem struct {
+	text string
+	onID func(int64)
+}
+
+// send delivers one message synchronously and returns its message_id (0 on
+// failure).
+func (n *Notifier) send(text string) int64 {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	payload := map[string]any{
@@ -540,14 +789,24 @@ func (n *Notifier) send(text string) {
 		n.cfg.APIBase+"/bot"+n.cfg.Token+"/sendMessage",
 		bytes.NewReader(body))
 	if err != nil {
-		return
+		return 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return
+		return 0
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	var out struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || !out.OK {
+		return 0
+	}
+	return out.Result.MessageID
 }
 
 // sendAsync enqueues text on the FIFO outbound queue, started lazily. A single
@@ -555,19 +814,37 @@ func (n *Notifier) send(text string) {
 // notifications always arrive in send order (a goroutine per message — the
 // pre-#253 behavior — could reorder chunks).
 func (n *Notifier) sendAsync(text string) {
+	n.enqueue(outItem{text: text})
+}
+
+// sendAsyncWithID is sendAsync, reporting the sent message's id to onID
+// (from the queue worker; onID is not called when the send fails).
+func (n *Notifier) sendAsyncWithID(text string, onID func(int64)) {
+	n.enqueue(outItem{text: text, onID: onID})
+}
+
+func (n *Notifier) enqueue(item outItem) {
 	n.outOnce.Do(func() {
 		go func() {
 			for msg := range n.outCh {
-				n.send(msg)
+				id := n.send(msg.text)
+				if msg.onID != nil && id != 0 {
+					msg.onID(id)
+				}
 			}
 		}()
 	})
 	select {
-	case n.outCh <- text:
+	case n.outCh <- item:
 	default:
 		// Queue full: deliver best-effort out of band rather than dropping
 		// content (order may interleave only in this overflow case).
-		go n.send(text)
+		go func() {
+			id := n.send(item.text)
+			if item.onID != nil && id != 0 {
+				item.onID(id)
+			}
+		}()
 	}
 }
 
