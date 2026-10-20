@@ -32,6 +32,22 @@ type MemoryAwareTurnRunner interface {
 	SetUseMemoryForNextCall(bool)
 }
 
+// CloneableTurnRunner is an optional capability a TurnRunner may implement
+// when it carries per-call mutable state (session ID, lazy nonce, one-shot
+// injection flags). The interpreter hands every parallel_group item its own
+// clone, so concurrent items never share that state — issue #297: items of
+// one role otherwise run through a single adapter instance, racing on its
+// fields and interleaving their turns into one scratch session. Runners that
+// do not implement it keep the shared-instance behavior they had before.
+// Same optional-capability pattern as MemoryAwareTurnRunner.
+type CloneableTurnRunner interface {
+	TurnRunner
+	// CloneTurnRunner returns an independent adapter for one parallel item.
+	// Read-only wiring (config, memory store, notifier) may stay shared —
+	// it is concurrency-safe by contract; per-call/session state must not.
+	CloneTurnRunner() TurnRunner
+}
+
 // Workflow is a named multi-agent pipeline.
 type Workflow interface {
 	Name() string

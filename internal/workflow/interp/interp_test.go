@@ -3,6 +3,7 @@ package interp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -906,5 +907,98 @@ func TestExecParallelGroup_ReportsItemStartAndFinishWithoutWorkerOutput(t *testi
 	}
 	if strings.Contains(got, "SECRET") {
 		t.Errorf("worker output must stay out of the live stream:\n%s", got)
+	}
+}
+
+// ── issue #297: per-item runner clones ──────────────────────────────────────
+
+// cloneGroup records which cloneableRunner instances actually ran, so the
+// test can prove concurrent fan-out items never shared one adapter.
+type cloneGroup struct {
+	mu  sync.Mutex
+	ran map[*cloneableRunner]int
+}
+
+// cloneableRunner simulates a real workflow adapter: it carries per-call
+// mutable state (nonce/calls) that Run writes like sessionID/nonce. If two
+// goroutines shared one instance, -race would flag those writes — cloning
+// gives each item its own, so the suite stays clean.
+type cloneableRunner struct {
+	group *cloneGroup
+	nonce string
+	calls int
+}
+
+func (c *cloneableRunner) Name() string { return "cloneable" }
+
+func (c *cloneableRunner) CloneTurnRunner() workflow.TurnRunner {
+	return &cloneableRunner{group: c.group}
+}
+
+func (c *cloneableRunner) Run(_ context.Context, prompt string, _ io.Writer) (string, error) {
+	c.nonce = fmt.Sprintf("n-%d", time.Now().UnixNano())
+	c.calls++
+	c.group.mu.Lock()
+	c.group.ran[c]++
+	c.group.mu.Unlock()
+	time.Sleep(5 * time.Millisecond) // widen the overlap window
+	return "done: " + prompt, nil
+}
+
+// A parallel_group fan-out hands each item its own clone of a cloneable
+// runner (issue #297): three items must produce three distinct instances,
+// each running exactly once, and the original (shared) instance must never
+// run at all.
+func TestParallelGroup_ClonesRunnerPerItem(t *testing.T) {
+	group := &cloneGroup{ran: map[*cloneableRunner]int{}}
+	runner := &cloneableRunner{group: group}
+	def := workflow.Definition{
+		Name: "t",
+		Vars: map[string]string{"plan": "## Item 1\none\n## Item 2\ntwo\n## Item 3\nthree"},
+		Stages: []workflow.Stage{{
+			ID: "fanout", Kind: workflow.StageKindParallelGroup, Over: "Item", From: "plan",
+			Body: []workflow.Stage{
+				{ID: "work", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "work {{.item_section}}"},
+			},
+		}},
+	}
+	r := New(def, "task")
+	if err := r.Run(context.Background(), runCfg(map[string]workflow.TurnRunner{"w": runner})); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(group.ran) != 3 {
+		t.Errorf("expected 3 distinct clone instances (one per item), got %d", len(group.ran))
+	}
+	for inst, n := range group.ran {
+		if n != 1 {
+			t.Errorf("clone %p ran %d times, want exactly 1", inst, n)
+		}
+	}
+	if runner.calls != 0 {
+		t.Errorf("the shared original instance must never run itself, ran %d times", runner.calls)
+	}
+}
+
+// Runners that do not implement workflow.CloneableTurnRunner keep the
+// previous shared-instance behavior — cloning is an optional capability,
+// not a requirement.
+func TestParallelGroup_NonCloneableRunnerStaysShared(t *testing.T) {
+	shared := &fakeRunner{name: "w", responses: []string{"ok"}}
+	def := workflow.Definition{
+		Name: "t",
+		Vars: map[string]string{"plan": "## Item 1\none\n## Item 2\ntwo"},
+		Stages: []workflow.Stage{{
+			ID: "fanout", Kind: workflow.StageKindParallelGroup, Over: "Item", From: "plan",
+			Body: []workflow.Stage{
+				{ID: "work", Kind: workflow.StageKindAgentTurn, Role: "w", Prompt: "work {{.item_section}}"},
+			},
+		}},
+	}
+	r := New(def, "task")
+	if err := r.Run(context.Background(), runCfg(map[string]workflow.TurnRunner{"w": shared})); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := shared.callCount(); got != 2 {
+		t.Errorf("shared runner ran %d times, want 2 (both items through the one instance)", got)
 	}
 }

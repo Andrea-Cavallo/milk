@@ -3864,17 +3864,15 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 	ir0 := &tuiInputReader{send: send}
 	tuiAgents, _ := m.buildTUIAgents(send, ir0)
 
-	// Wire image parts into both local agents so whichever one the router picks
-	// this turn sends a multipart vision payload — routing isn't decided until
-	// runTurn below, and only escalationLocal's own pendingImageParts (not
-	// primary's) reaches a local escalation agent's Run() call.
+	// Wire image parts into THIS turn's context so whichever local agent the
+	// router picks sends a multipart vision payload — routing isn't decided
+	// until runTurn below. Per-call ctx, not the agents' pending-image field
+	// (issue #297): both local agents are shared with any background
+	// workflow running concurrently, and writing the field would race their
+	// concurrent reads. local.Run prefers ctx parts; the vision gate and
+	// @path CLI path behave exactly as before.
 	if len(imageParts) > 0 {
-		if tuiAgents.local != nil {
-			tuiAgents.local.SetPendingImageParts(imageParts)
-		}
-		if tuiAgents.escalationLocal != nil {
-			tuiAgents.escalationLocal.SetPendingImageParts(imageParts)
-		}
+		turnCtx = local.WithImageParts(turnCtx, imageParts)
 	}
 
 	// Capture input chars for the live token estimate in the status bar.
