@@ -78,8 +78,13 @@ func TestExecuteToolCalls_PerToolTimeout(t *testing.T) {
 			fastResult = m.Content
 		}
 	}
-	if !strings.Contains(slowResult, "timed out") {
-		t.Errorf("slow tool: expected timeout error, got %q", slowResult)
+	// The killed message names the elapsed time and the bash limit
+	// separately (issue #275) — the old generic "timed out" wording is
+	// what this test used to pin. The agent-level "tool %q timed out"
+	// fallback only fills EMPTY results (local.go), so bash's own message
+	// is what surfaces here.
+	if !strings.Contains(slowResult, "killed by context after") || !strings.Contains(slowResult, `"exit_code":-1`) {
+		t.Errorf("slow tool: expected ctx-kill error with exit -1, got %q", slowResult)
 	}
 	if !strings.Contains(fastResult, "skipped") || !strings.Contains(fastResult, "cancelled") {
 		t.Errorf("fast tool: expected a skipped/cancelled result, got %q", fastResult)
