@@ -37,6 +37,13 @@ type Definition struct {
 	Vars map[string]string `yaml:"vars,omitempty" json:"vars,omitempty"`
 	// Stages are executed in order. See Stage.Kind for the supported shapes.
 	Stages []Stage `yaml:"stages" json:"stages"`
+	// Board opts the run into a shared coordination board (issue #197,
+	// internal/workflow/board): roles read it as {{.board}}, local-provider
+	// roles get the board_get/claim/update/post tools, and mutations are
+	// written through to a "<checkpoint>.board.json" sidecar so resume
+	// restores live claims. Purely declarative — any workflow can set it;
+	// the interpreter never special-cases a definition by name.
+	Board bool `yaml:"board,omitempty" json:"board,omitempty"`
 }
 
 // Stage is one node in a Definition's stage tree. Kind selects which fields
@@ -56,6 +63,10 @@ type Definition struct {
 //   - "parallel_group": like "loop" with Over, but Body runs concurrently
 //     per item (bounded by MaxConcurrency) instead of sequentially; per-item
 //     failures do not abort siblings. Results aggregate into SaveAs.
+//   - "board_seed": populate the shared board (Definition.Board) from the
+//     plan document named by From — its Over sections become items
+//     (label, depends_on), added idempotently so replay never resets live
+//     statuses. Deterministic: no agent turn.
 type Stage struct {
 	ID   string `yaml:"id" json:"id"`
 	Kind string `yaml:"kind" json:"kind"`
@@ -139,6 +150,7 @@ const (
 	StageKindLoop           = "loop"
 	StageKindUserCheckpoint = "user_checkpoint"
 	StageKindParallelGroup  = "parallel_group"
+	StageKindBoardSeed      = "board_seed"
 )
 
 // Validate reports structural problems that would otherwise surface as a
@@ -151,7 +163,27 @@ func (d Definition) Validate() error {
 	if len(d.Stages) == 0 {
 		return fmt.Errorf("workflow definition %q: at least one stage is required", d.Name)
 	}
-	return validateStages(d.Name, d.Stages)
+	if err := validateStages(d.Name, d.Stages); err != nil {
+		return err
+	}
+	if !d.Board && stagesHaveBoardSeed(d.Stages) {
+		return fmt.Errorf("workflow definition %q: board_seed stage requires \"board: true\" on the definition", d.Name)
+	}
+	return nil
+}
+
+// stagesHaveBoardSeed reports whether any stage (or nested body) is a
+// board_seed stage.
+func stagesHaveBoardSeed(stages []Stage) bool {
+	for _, s := range stages {
+		if s.Kind == StageKindBoardSeed {
+			return true
+		}
+		if stagesHaveBoardSeed(s.Body) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateStages(defName string, stages []Stage) error {
@@ -201,6 +233,10 @@ func (s Stage) validate(defName string) error {
 		}
 		if err := validateStages(defName, s.Body); err != nil {
 			return err
+		}
+	case StageKindBoardSeed:
+		if s.Over == "" || s.From == "" {
+			return fmt.Errorf("workflow definition %q: stage %q (board_seed) needs both over and from", defName, s.ID)
 		}
 	case StageKindParallelGroup:
 		if len(s.Body) == 0 {

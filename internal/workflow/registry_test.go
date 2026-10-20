@@ -58,6 +58,23 @@ func TestLoadRegistry_BuiltinSwarm(t *testing.T) {
 	}
 }
 
+// team is the board-backed built-in (issue #197): registered, validated
+// (LoadRegistry validates every definition) and carrying its board flag.
+func TestLoadRegistry_BuiltinTeam(t *testing.T) {
+	withTempMilkHome(t)
+	reg, errs := LoadRegistry()
+	if len(errs) != 0 {
+		t.Fatalf("LoadRegistry errors: %v", errs)
+	}
+	def, ok := reg.Lookup("team")
+	if !ok {
+		t.Fatal("expected built-in \"team\" definition to be registered")
+	}
+	if !def.Board {
+		t.Error("team must declare board: true")
+	}
+}
+
 func TestLoadRegistry_UserOverride(t *testing.T) {
 	home := withTempMilkHome(t)
 	dir := filepath.Join(home, ".milk", "workflows")

@@ -18,7 +18,7 @@ var testAgents = map[string][]string{
 	nsMCP:      {"db", "wiki"},
 	nsTool:     {"helper"},
 	nsPanel:    {"memory", "tasks", "background", "workflow", "project", "git"},
-	nsWorkflow: {"dev", "pair", "swarm"},
+	nsWorkflow: {"dev", "pair", "swarm", "team"},
 }
 
 func TestBuildTabMatches_ValueAgentSwitch(t *testing.T) {

@@ -162,6 +162,7 @@ Workflows are **data, not code**: each one is a YAML (or JSON) *definition* — 
 | `dev` | designer, generator, evaluator | Designer plans sprints → generator implements each sprint → evaluator verdicts `good_to_go` / `needs_refinement` (retry) / `sprint_done` (advance). |
 | `pair` | designer, generator, evaluator | Same shape as `dev`, but the evaluator pauses after writing findings for a **user checkpoint** — you can add context or say "continue" — before it decides the verdict. A human-in-the-loop variant of `dev`. |
 | `swarm` | designer, worker, evaluator, implementer | Designer splits the task into independent (or dependency-ordered) items; a worker+evaluator retry loop runs **per item, concurrently** (bounded fan-out); a final evaluator checks cross-item integration; an optional implementer pass fixes integration issues, skipped entirely if the final evaluator found none. |
+| `team` | designer, worker, evaluator, coordinator, implementer | Like `swarm`, but for **loosely coupled** work over a shared board (issue #197): items are claimed (`board_claim` — first claimer wins) instead of assumed-disjoint, every stage sees the live board (`{{.board}}`), findings (`board_post`) unblock teammates mid-flight, and a **coordinator stand-up** between passes reconciles, re-queues blocked items and verdicts `all_done` / `more_work` (ADR-0071). |
 
 All three separate ambiguity resolution from execution: the designer either asks clarifying questions up front (paused for a user reply, with the design proceeding on stated defaults if you don't answer) or proceeds straight to planning when the task is already clear.
 
@@ -181,7 +182,7 @@ All three separate ambiguity resolution from execution: the designer either asks
 /workflow clear                                    # delete saved state for this session (type "clear" to confirm)
 ```
 
-The role flags are whatever the chosen definition declares (`dev`/`pair`: `--designer`/`--generator`/`--evaluator`; `swarm`: `--designer`/`--worker`/`--evaluator`/`--implementer`) — the wizard asks for any role you didn't pass inline. Each role accepts any configured agent name, or the aliases `primary`/`escalation`, resolved once at workflow start.
+The role flags are whatever the chosen definition declares (`dev`/`pair`: `--designer`/`--generator`/`--evaluator`; `swarm`: `--designer`/`--worker`/`--evaluator`/`--implementer`; `team`: `--designer`/`--worker`/`--evaluator`/`--coordinator`/`--implementer`) — the wizard asks for any role you didn't pass inline. Each role accepts any configured agent name, or the aliases `primary`/`escalation`, resolved once at workflow start.
 
 A workflow always runs in the background, whether you start it with `/workflow` or the model starts it with the `start_workflow` tool: the status bar shows `[⚙ workflow <name> running · <role>]`, and you keep a free prompt — chat, run commands, spawn background agents. Only one workflow runs per session at a time, and while it runs `/workflow <name>`, `resume`, `reconfigure`, `clear` and the session-switching commands (`/new`, `/clear`, `/resume`, `/drop`) are refused with a pointer to `/workflow cancel` (the checkpoint and the completion notice belong to the session). `/workflow status` and `/workflow cancel` work even mid-turn. **Ctrl+C** cancels the agent turn in flight if there is one; with an idle prompt it arms the usual "press again to exit" confirmation (quitting cancels the workflow) rather than cancelling the workflow, so stopping only the workflow is always the explicit `/workflow cancel`. If the designer asks clarifying questions, your next Enter answers them even if a turn is running, and Ctrl+C at that point cancels the workflow. When it ends, the outcome is queued and delivered with your next prompt, so the model knows how it went.
 
@@ -210,13 +211,32 @@ stages:
 
 | Kind | Purpose | Key fields |
 |---|---|---|
-| `agent_turn` | Run one turn on a role's agent | `role`, `prompt` (Go template), `save_as`; optional `verdict` (map of outcome → `{action: break\|retry, warn}`, read from the turn's output for an enclosing `loop`), `skip_user_checkpoint_marker`/`on_answer_prompt` (treat output as clarifying questions unless a marker line is present), `empty_output_fallback: git_diff`, `run_unless_marker_in`/`run_unless_contains` (skip this stage based on a prior stage's output), `use_memory: true` (opt this stage into the same percept injection primary/escalation turns get — off by default, since workflow roles are otherwise fully isolated: a fresh scratch session per role, no session-orientation context) |
+| `agent_turn` | Run one turn on a role's agent | `role`, `prompt` (Go template), `save_as`; optional `verdict` (map of outcome → `{action: break\|retry, warn}`, read from the turn's output for an enclosing `loop` — the map's **keys are the response words to match**, scanned from the end of the output, longest first, so a stage can prompt for its own vocabulary; the historical `good_to_go` / `needs_refinement` / `sprint_done` are still recognized when no declared key matches, and `unknown` is the no-match fallback — ADR-0071), `skip_user_checkpoint_marker`/`on_answer_prompt` (treat output as clarifying questions unless a marker line is present), `empty_output_fallback: git_diff`, `run_unless_marker_in`/`run_unless_contains` (skip this stage based on a prior stage's output), `use_memory: true` (opt this stage into the same percept injection primary/escalation turns get — off by default, since workflow roles are otherwise fully isolated: a fresh scratch session per role, no session-orientation context) |
 | `loop` | Repeat its `body` | Either `over`+`from` (iterate a declared collection parsed out of another stage's saved output — see below) or `max_iterations`/`max_iterations_from` (a bounded retry loop; the last body stage must declare `verdict`) |
 | `user_checkpoint` | Pause for a real user reply | `prompt` (rendered from current vars), `save_as` |
 | `parallel_group` | Like `loop over`, but each item's `body` runs **concurrently** | `over`, `from`, `max_concurrency`, `save_as` (aggregated per-item results) |
+| `board_seed` | Populate the shared board from the plan document (deterministic, no agent turn; requires `board: true` — see below) | `over`, `from` |
 
 **Per-item isolation (issue #297)**: each fan-out item gets its own clone of the role's runner adapter (`workflow.CloneableTurnRunner` — own scratch session, session ID, nonce and one-shot flags), so concurrent items never share or interleave session state; an item's passes resume within *that item's* session. Vision attachments for workflow turns ride the call's context (`local.WithImageParts`) rather than any shared agent field, so a background workflow running concurrently with a REPL turn touches no shared mutable state either. Runners that don't implement the optional clone interface keep the previous shared-instance behavior.
 
 **Declared collections**: a designer-style stage's saved output can declare structure the interpreter parses automatically — numbered sections (`## Sprint 1`, or `## Item 2 (depends_on: 1)` for dependency-ordered `parallel_group` items) and scalar limits (`max_passes: 4` on its own line). `dev.yaml`'s `plan_instructions` var is the exact text instructing the designer agent to produce this format — reuse or adapt it in a custom definition rather than inventing a new plan syntax from scratch.
 
-All workflows — including the built-in `dev`, `pair`, and `swarm` — run through the YAML-driven interpreter. Legacy dev-format checkpoints (pre-migration) can be cleared with `/workflow clear` and restarted.
+### Shared board (`board: true`)
+
+A definition can opt into a shared, file-backed coordination board — the single source of truth
+every role of the run reads and writes (ADR-0071, issue #197; `team` is the built-in consumer):
+
+- **`board: true`** on the definition. Seeds via a `board_seed` stage (`over` + `from` parse the
+  plan's `## Item N (depends_on: …)` sections into items), or start empty.
+- **Read**: `{{.board}}` renders into every stage prompt at stage start (a compact status table
+  plus latest findings), and `board_get` reads the live picture mid-turn.
+- **Write** (tools, local-provider roles only — CLI roles get the snapshot): `board_claim`
+  (compare-and-set: first claimer wins, idempotent for the same identity), `board_update`
+  (`todo`/`in_progress`/`blocked`/`done` + notes; `claimed` only via claim), `board_post`
+  (short cross-role findings). Claims and findings are attributed to the acting identity
+  (`worker·Item-2`) threaded on the turn's context.
+- **Persistence**: every mutation is written through atomically to
+  `<checkpoint>.board.json` next to the workflow checkpoint — resume restores live claims;
+  caps (200 findings, trimmed notes) keep long runs bounded.
+
+All workflows — including the built-in `dev`, `pair`, `swarm`, and `team` — run through the YAML-driven interpreter. Legacy dev-format checkpoints (pre-migration) can be cleared with `/workflow clear` and restarted.

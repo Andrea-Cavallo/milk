@@ -1,6 +1,9 @@
 package workflow
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefinition_Validate_MissingName(t *testing.T) {
 	d := Definition{Stages: []Stage{{ID: "a", Kind: StageKindAgentTurn, Role: "r", Prompt: "p"}}}
@@ -113,5 +116,39 @@ func TestDefinitionHasParallelGroup(t *testing.T) {
 	nested := Definition{Stages: []Stage{{ID: "l", Kind: StageKindLoop, Body: []Stage{{ID: "pg", Kind: StageKindParallelGroup}}}}}
 	if plain.HasParallelGroup() || !nested.HasParallelGroup() {
 		t.Errorf("plain=%v nested=%v", plain.HasParallelGroup(), nested.HasParallelGroup())
+	}
+}
+
+// Issue #197: board_seed is a real stage kind whose contract is bound to
+// the definition-level board flag — the interpreter never special-cases a
+// workflow by name, so validation is where the pairing is enforced.
+func TestValidate_BoardSeedContract(t *testing.T) {
+	seed := Stage{ID: "seed", Kind: StageKindBoardSeed, Over: "Item", From: "plan"}
+
+	// board_seed without board: true → error.
+	d := Definition{Name: "t", Stages: []Stage{seed}}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "board: true") {
+		t.Errorf("seed without board flag: err = %v, want the board: true hint", err)
+	}
+
+	// With the flag → valid.
+	d = Definition{Name: "t", Board: true, Stages: []Stage{seed}}
+	if err := d.Validate(); err != nil {
+		t.Errorf("seed with board flag: %v", err)
+	}
+
+	// Missing over/from → error even with the flag.
+	d = Definition{Name: "t", Board: true, Stages: []Stage{{ID: "s", Kind: StageKindBoardSeed}}}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "over and from") {
+		t.Errorf("incomplete seed: err = %v, want over/from requirement", err)
+	}
+
+	// Nested body also counts toward the pairing.
+	d = Definition{Name: "t", Stages: []Stage{{
+		ID: "l", Kind: StageKindLoop, Over: "Item", From: "plan",
+		Body: []Stage{seed},
+	}}}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "board: true") {
+		t.Errorf("nested seed without board flag: err = %v", err)
 	}
 }
