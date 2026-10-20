@@ -9,16 +9,21 @@ import (
 // drift found in production: /help once documented only /panel memory and
 // /panel tasks and no F-keys at all, even though /panel background,
 // /panel workflow, and the F1-F4 shortcuts were all fully wired (repl.go's
-// F-key switch, panelShortcut). Checks against panelShortcut directly so a
-// future fifth panel with no shortcut text fails here instead of silently
-// shipping undocumented, the same way this one did.
+// F-key switch, panelShortcut). Checks against panelRenderOrder,
+// panelShortcut and panelSubName directly so a future panel added to the
+// render order with no /panel help line or F-key hint fails here instead of
+// silently shipping undocumented, the same way this one did. (The stale-tip
+// companion of this drift — the curated F-key tip naming only F1-F4 while
+// F5/F6 existed — is pinned by TestCuratedPanelTip_CoversEveryPanel.)
 func TestInteractiveHelp_MentionsAllPanelsAndShortcuts(t *testing.T) {
-	for _, panel := range []string{"/panel memory", "/panel tasks", "/panel background", "/panel workflow"} {
-		if !strings.Contains(interactiveHelp, panel) {
-			t.Errorf("interactiveHelp missing %q", panel)
+	for _, region := range panelRenderOrder {
+		name := panelSubName(region)
+		if name == "" {
+			t.Fatalf("panelSubName(%v) returned no name — update this test alongside the region", region)
 		}
-	}
-	for _, region := range []panelRegion{regionMemory, regionTasks, regionBackground, regionWorkflow} {
+		if want := "/panel " + name; !strings.Contains(interactiveHelp, want) {
+			t.Errorf("interactiveHelp missing %q", want)
+		}
 		hint := panelShortcut(region)
 		if hint == "" {
 			t.Fatalf("panelShortcut(%v) returned no hint — update this test alongside the region", region)

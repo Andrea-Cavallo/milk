@@ -60,7 +60,7 @@ var curatedTips = []string{
 	`Type {@} followed by a filename to fuzzy-find and reference it — {Tab} cycles the candidates`,
 	`Start a line with {!} to run a shell command directly, e.g. {!git status}`,
 	`{Ctrl+R} searches your input history — {Ctrl+S} searches forward`,
-	`{F1}–{F4} toggle the memory / tasks / background / workflow panels (same as {/panel <name>})`,
+	`{F1}–{F6} toggle the memory / tasks / background / workflow / project / git panels (same as {/panel <name>})`,
 	`{/think view} shows the model's reasoning on its own — {Ctrl+T} toggles the last thinking block`,
 	`{/escalate <msg>} forces one turn to the escalation agent — bare {/escalate} pins every turn`,
 	`{/learn <fact>} stores a persistent memory — {/memory} lists them, {/forget} deletes one`,

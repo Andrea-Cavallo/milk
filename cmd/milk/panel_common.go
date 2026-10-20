@@ -61,7 +61,7 @@ func panelShortcut(region panelRegion) string {
 }
 
 // panelTitleLine renders a side panel's title row: the title left-aligned
-// (styled via stylePanelTitle) and its F1-F4 shortcut right-aligned within
+// (styled via stylePanelTitle) and its F1-F6 shortcut right-aligned within
 // inner columns, dimmed — so the toggle key is visible without opening
 // /panel or memorizing it. Title is truncated, not the hint, if both
 // together would overflow inner.
@@ -83,7 +83,7 @@ func panelTitleLine(title string, region panelRegion, inner int) string {
 // autoOpenPanel opens the given panel because its content just became
 // active (a workflow started, a background job was spawned, a task was
 // saved, ...) — unless the user has explicitly shown or hidden that panel
-// via /panel or its F1-F4 shortcut this session (see panelManualOverride),
+// via /panel or its F1-F6 shortcut this session (see panelManualOverride),
 // in which case their choice sticks and this is a no-op. A manual override
 // is not permanent: it is dropped again as soon as the panel's content
 // finalizes (see resetManualOverrideIfFinalized), so the *next* active

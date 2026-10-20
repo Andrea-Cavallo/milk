@@ -431,12 +431,12 @@ func teaKeyEnter() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyEnter}
 }
 
-// TestF4TogglesBackgroundPanel verifies the global F1-F4 panel shortcuts:
+// TestF4TogglesBackgroundPanel verifies the global F1-F6 panel shortcuts:
 // F3 toggles the background-agents panel the same way /panel background
 // does, and works regardless of busy state (toggling how much screen space
-// a panel takes doesn't conflict with an in-flight turn). F1-F4 follow the
+// a panel takes doesn't conflict with an in-flight turn). F1-F6 follow the
 // same left-to-right order panels are joined in View(): memory, tasks,
-// background, workflow.
+// background, workflow, project, git.
 func TestF3TogglesBackgroundPanel(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sess, err := session.New("/repo", "")

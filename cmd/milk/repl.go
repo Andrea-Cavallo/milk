@@ -829,7 +829,7 @@ type model struct {
 	activeToolUse string
 
 	// panelManualOverride tracks which panels the user has explicitly
-	// shown/hidden (via /panel or its F1-F4 shortcut) this session. Once a
+	// shown/hidden (via /panel or its F1-F6 shortcut) this session. Once a
 	// region is in here, automatic "this panel's content just became
 	// active" opens (see autoOpenPanel) skip it — the user's own choice
 	// sticks over automatic management. The stickiness only lasts while
@@ -2052,7 +2052,7 @@ func (m *model) welcomeScreen() string {
 			dim("type a message and press Enter to start"),
 			"",
 			dim("routing: "+primaryName+" ↔ "+escName+"  ·  /escalate to pin  ·  /primary to unpin"),
-			dim("/need — set current goal  ·  F1-F4 — memory/tasks/agents/workflow panels  ·  /think view — reasoning stream"),
+			dim("/need — set current goal  ·  F1-F6 — memory/tasks/background/workflow/project/git  ·  /think view — reasoning stream"),
 			dim("/config — view config  ·  /config init — reconfigure  ·  /config open — edit in $EDITOR"),
 			dim("--new — fresh session  ·  --resume — resume last session  ·  /help for all commands"),
 		)
@@ -2170,13 +2170,14 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ptyPane != nil {
 			return m.handlePTYKey(msg)
 		}
-		// F1-F4: global panel show/hide shortcuts, available in any other
+		// F1-F6: global panel show/hide shortcuts, available in any other
 		// mode (busy, permission prompt, wizards, ...) — none of them
 		// otherwise use function keys, and toggling how much of the
 		// screen a panel takes doesn't conflict with anything in-progress.
-		// Same effect as /panel <name>; having three-plus panels
-		// (memory/tasks/background, plus workflow) competing for space
-		// makes a quick toggle worth more than typing the command out.
+		// Same effect as /panel <name>; having six panels
+		// (memory/tasks/background/workflow/project/git)
+		// competing for space makes a quick toggle worth more than typing
+		// the command out.
 		//
 		// Alt+Up / Alt+Down: step through the idle tips (same as /tips
 		// prev|next) — global for the same reason, and one of the few
@@ -2206,7 +2207,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		// Ctrl+G: dismiss all open notification toasts (issue #162) — global
-		// like F1-F4 so it works in any mode (busy, prompt, attached…);
+		// like F1-F6 so it works in any mode (busy, prompt, attached…);
 		// bubbles' textarea doesn't bind ctrl+g, so nothing else wants it.
 		// Falls through untouched when no toast is open.
 		if msg.String() == "ctrl+g" && m.dismissToasts() {
