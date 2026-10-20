@@ -69,3 +69,4 @@
 * [68. Background jobs get a soft deadline before the hard timeout](0068-background-job-soft-deadline.md)
 * [69. Full-row diff backgrounds: the surface painter reused for +/- rows](0069-full-row-diff-backgrounds.md)
 * [70. Quiet tool styling: italic + code, no bold, in the Telegram view](0070-quiet-tool-styling.md)
+* [71. Shared workflow board + the `team` workflow](0071-shared-workflow-board.md)
