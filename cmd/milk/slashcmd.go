@@ -157,10 +157,11 @@ var commandRegistry = []cmdSpec{
   /memory stale          global percepts by idle session time, and which are due for archiving
   /memory archive        list archived (stale) global percepts
   /memory restore <id>   bring an archived percept back to the global store`},
-	{name: cmdExport, hosts: hostBoth, desc: "print the session transcript (or another session's), or write it to a file", hint: "[json|<path>|session <id>]", help: `  /export                print session transcript (text)
+	{name: cmdExport, hosts: hostBoth, desc: "print the session transcript (or another session's), or write it to a file", hint: "[--no-reasoning] [json|<path>|session <id>]", help: `  /export                print session transcript (text)
   /export json           print session transcript as JSON
   /export <path>         write session transcript to file
-  /export session <id>   export another session (id or unambiguous prefix)`},
+  /export session <id>   export another session (id or unambiguous prefix)
+  /export --no-reasoning omit reasoning blocks (text fences / JSON thinking) — they are included by default`},
 	{name: cmdHistory, hosts: hostTUI, desc: "show or set the input history navigation mode", hint: "[global|session]", help: `  /history               show current history navigation mode
   /history global        navigate global input history
   /history session       navigate session input history (default)`},
