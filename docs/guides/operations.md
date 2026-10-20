@@ -332,7 +332,7 @@ When an agent calls `edit_file`/`write_file` (primary) or `Edit`/`Write` (Claude
 
 ## Idle tips
 
-Below the input area, milk shows a one-line **idle tip** (`tip: …`) while you work — short one-liners for features and key bindings you might not know about (`@`-path references, `!` direct bash, `ctrl+r` history search, the F1-F4 panels, `ctrl+enter` background agents, …). The line rotates every 20 seconds while nothing is running, freezing while a turn executes or a prompt is pending. It sits in the same slot as the tab-completion hints and yields to them whenever they are up.
+Below the input area, milk shows a one-line **idle tip** (`tip: …`) while you work — short one-liners for features and key bindings you might not know about (`@`-path references, `!` direct bash, `ctrl+r` history search, the F1-F6 panels, `ctrl+enter` background agents, …). The line rotates every 20 seconds while nothing is running, freezing while a turn executes or a prompt is pending. It sits in the same slot as the tab-completion hints and yields to them whenever they are up.
 
 Three content sources, in precedence order (see ADR-0061):
 

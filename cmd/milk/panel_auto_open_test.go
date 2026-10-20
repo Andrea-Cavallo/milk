@@ -16,7 +16,7 @@ import (
 )
 
 // newTestModelForPanels builds a minimal model for panel auto-open tests,
-// following the same pattern as background_ui_test.go's F1-F4 tests.
+// following the same pattern as background_ui_test.go's F-key panel-toggle tests.
 func newTestModelForPanels(t *testing.T) model {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -93,8 +93,8 @@ func TestAutoOpenPanel_OpensWhenNotOverridden(t *testing.T) {
 }
 
 // TestAutoOpenPanel_RespectsExplicitClose verifies that once the user
-// explicitly closes a panel while its content is still active (F1-F4 or
-// /panel), automatic "content became active" opens no longer override that
+// explicitly closes a panel while its content is still active (an F-key
+// or /panel), automatic "content became active" opens no longer override that
 // choice — the sticky rule holds for as long as the content stays live.
 func TestAutoOpenPanel_RespectsExplicitClose(t *testing.T) {
 	m := newTestModelForPanels(t)

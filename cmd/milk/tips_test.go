@@ -540,3 +540,40 @@ func TestHelpDocumentsTipBrowsing(t *testing.T) {
 		}
 	}
 }
+
+// TestCuratedPanelTip_CoversEveryPanel pins the F-key panel toggle tip
+// against the drift that hit it in production: the tip said "{F1}–{F4}"
+// long after F5 (project) and F6 (git) shipped, so the idle tip line kept
+// teaching users a four-panel keyboard. Derived from panelRenderOrder,
+// panelShortcut and panelSubName — a future panel fails here until the tip
+// names its key and its name too. The tip writes keys as a range
+// ({F1}–{F6}), so the key check pins both range endpoints against the
+// first and last render-order regions — the original F1–F4 drift fails it
+// immediately; every panel name is checked individually.
+func TestCuratedPanelTip_CoversEveryPanel(t *testing.T) {
+	var tip string
+	for _, c := range curatedTips {
+		if strings.Contains(c, "toggle the memory") {
+			tip = c
+			break
+		}
+	}
+	if tip == "" {
+		t.Fatal("curated panel toggle tip not found — renamed? (update this test alongside it)")
+	}
+	if len(panelRenderOrder) == 0 {
+		t.Fatal("panelRenderOrder is empty")
+	}
+	first := panelRenderOrder[0]
+	last := panelRenderOrder[len(panelRenderOrder)-1]
+	for _, region := range []panelRegion{first, last} {
+		if key := panelShortcut(region); key == "" || !strings.Contains(tip, key) {
+			t.Errorf("panel tip missing F-key range endpoint %q for region %v (tip: %s)", key, region, tip)
+		}
+	}
+	for _, region := range panelRenderOrder {
+		if name := panelSubName(region); name == "" || !strings.Contains(tip, name) {
+			t.Errorf("panel tip missing panel name %q for region %v (tip: %s)", name, region, tip)
+		}
+	}
+}
