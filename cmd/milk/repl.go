@@ -730,10 +730,12 @@ type model struct {
 	thinkBlocksTurnStart int
 	// thinkFoldOpen is the session's current think-block fold status: a new
 	// reasoning block is created in this state (it keeps the folding status
-	// the previous block was left in). Updated only by explicit fold actions
-	// (header click, Ctrl+T, /think expand|collapse); the turn-boundary tidy
-	// that collapses previous turns' blocks does not change it — and does
-	// not run while it is open (/think expand defines the current default).
+	// the previous block was left in). Seeded from config
+	// think_fold_default at session start (folded unless "expanded" —
+	// issue #278); updated only by explicit fold actions (header click,
+	// Ctrl+T, /think expand|collapse); the turn-boundary tidy that
+	// collapses previous turns' blocks does not change it — and does not
+	// run while it is open (/think expand defines the current default).
 	thinkFoldOpen bool
 
 	// showTips toggles the idle tip line below the input (ADR-0061, /tips).
@@ -1215,6 +1217,7 @@ func newModel(ctx context.Context, st *interactiveState, rtr *router.Router, age
 		currentTurnThinking: &strings.Builder{},
 		searchQuery:         &strings.Builder{},
 		showTips:            st.cfg.ShowTipsEnabled(),
+		thinkFoldOpen:       st.cfg.ThinkFoldExpanded(), // starting fold status (issue #278)
 		mem:                 mem,
 		panelMemory:         true,
 		panelManualOverride: map[panelRegion]bool{},

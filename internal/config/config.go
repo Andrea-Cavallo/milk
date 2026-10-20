@@ -174,6 +174,11 @@ func DeepMerge(dst, src Config) Config {
 		dst.DirectBash = true
 	}
 
+	// String overrides ("" = unset — never clobbers the base it merges into)
+	if src.ThinkFoldDefault != "" {
+		dst.ThinkFoldDefault = src.ThinkFoldDefault
+	}
+
 	// Pointer overrides
 	if src.ShowReasoning != nil {
 		dst.ShowReasoning = src.ShowReasoning
@@ -1055,6 +1060,17 @@ type Config struct {
 	// reasoning as foldable think blocks (ADR-0067) — its fold state is
 	// independent of this field.
 	ShowReasoning *bool `json:"show_reasoning,omitempty"`
+
+	// ThinkFoldDefault seeds the TUI's starting fold status for thinking
+	// blocks (issue #278, ADR-0067): "" (unset) or "folded" is the default
+	// and behaves exactly as before — blocks arrive folded, the
+	// turn-boundary tidy runs; "expanded" makes blocks arrive open and
+	// opts the tidy out from the start. It is a STARTING status only:
+	// per-session fold actions (header click, Ctrl+T, /think expand|collapse)
+	// still win for the rest of the session. Deliberately independent of
+	// ShowReasoning — that stays the data-plane relay toggle and never
+	// seeds TUI display.
+	ThinkFoldDefault string `json:"think_fold_default,omitempty"`
 
 	// ShowTips controls whether the TUI's idle tip line below the input is
 	// shown (ADR-0061). Can be toggled live with /tips on|off.
@@ -2161,6 +2177,14 @@ func intOr(v, def int) int {
 // "show_tips": false turns them off).
 func (c Config) ShowTipsEnabled() bool {
 	return c.ShowTips == nil || *c.ShowTips
+}
+
+// ThinkFoldExpanded reports whether new thinking blocks in a session start
+// expanded ("think_fold_default": "expanded"). Unset, "folded", or any
+// other value is the folded default — blocks arrive folded, exactly as
+// before (issue #278).
+func (c Config) ThinkFoldExpanded() bool {
+	return c.ThinkFoldDefault == "expanded"
 }
 
 // CopyOnSelectEnabled reports whether a finished mouse selection is copied
