@@ -70,6 +70,39 @@ func dimLines(s string) string { return colorize(s, ansiDim) }
 // milkTag returns the dimmed [milk] system prefix.
 func milkTag() string { return dim("[milk]") }
 
+// legacyAnnotationPrefix is the pre-#270 tool-activity manifest header —
+// still present in sessions persisted before the [milk] standard landed.
+const legacyAnnotationPrefix = "[Tool activity in that turn:"
+
+// dimMilkAnnotationRows gives platform-annotation lines that arrive as PLAIN
+// text the standard tag treatment. Milk writes its own [milk] annotations
+// with the tag already dimmed (milkTag), but a model can echo the
+// tool-activity manifest format into a reply — it sits in the model's
+// replayed context (local.formatOwnTurn folds it onto old turns), so it
+// reproduces the shape — and that echo lands in the transcript with a bright
+// tag, glaring next to every real [milk] line. Rows here are the
+// already-wrapped render (called from tintFullRows): a row that literally
+// starts with an annotation gets its tag wrapped in the exact dim run
+// milkTag emits, so the two are indistinguishable; rows carrying any other
+// styling — including already-dim milkTag rows — are left untouched. Render
+// only: the transcript buffer, /export and model context never see these
+// escapes, and transcriptPlainLines strips them for selection and copy.
+func dimMilkAnnotationRows(content string) string {
+	if !strings.Contains(content, "[milk] ") && !strings.Contains(content, legacyAnnotationPrefix) {
+		return content
+	}
+	rows := strings.Split(content, "\n")
+	for i, row := range rows {
+		switch {
+		case strings.HasPrefix(row, "[milk] "):
+			rows[i] = milkTag() + row[len("[milk]"):]
+		case strings.HasPrefix(row, legacyAnnotationPrefix):
+			rows[i] = dim(legacyAnnotationPrefix) + row[len(legacyAnnotationPrefix):]
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // pulseColors is a 16-step cosine-eased yellow breathing gradient using truecolor.

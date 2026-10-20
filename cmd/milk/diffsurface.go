@@ -173,10 +173,12 @@ func tintDiffSurface(content string, width int) string {
 }
 
 // tintFullRows applies the full-row painters to an already-wrapped render:
-// the thinking surface (ADR-0067) first, then the diff backgrounds (issue
-// #273). Both recognise their rows by SGR state, leave every other row
-// untouched, and are width-dependent — so the single call site convention
-// holds: applied to the returned render, never to the cached wrap.
+// the platform-annotation tag first (dimMilkAnnotationRows — plain echoed
+// [milk]/legacy manifest lines get the standard dim tag), then the thinking
+// surface (ADR-0067), then the diff backgrounds (issue #273). All three
+// recognise their rows locally, leave every other row untouched, and are
+// render-only — so the single call-site convention holds: applied to the
+// returned render, never to the cached wrap.
 func tintFullRows(content string, width int) string {
-	return tintDiffSurface(tintThinkSurface(content, width), width)
+	return tintDiffSurface(tintThinkSurface(dimMilkAnnotationRows(content), width), width)
 }
