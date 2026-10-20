@@ -853,7 +853,7 @@ func (m model) commitTelegramSetup(token string, chatID int64) model {
 	}
 
 	m.appendTranscript(fmt.Sprintf("%s Telegram configured (chat_id: %d) — sending test message…\n", milkTag(), chatID))
-	m.st.notifier.NotifyTurnStart(context.Background(), "milk", "setup", "Telegram oversight configured successfully ✓")
+	notifyAnnouncement(m.st.notifier, "milk", "setup", "Telegram oversight configured successfully ✓")
 	return m
 }
 

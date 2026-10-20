@@ -164,7 +164,7 @@ func (as *acpSession) resolveAndCommit(b *strings.Builder) (string, bool) {
 	as.applyOversight(cfg)
 	if oversightRemote(as.notifier()) {
 		fmt.Fprintf(b, "%s Telegram configured (chat_id: %d) — sending test message…\n", milkTag(), chatID)
-		as.notifier().NotifyTurnStart(context.Background(), "milk", "setup", "Telegram oversight configured successfully ✓")
+		notifyAnnouncement(as.notifier(), "milk", "setup", "Telegram oversight configured successfully ✓")
 	} else {
 		// Never claim a test message that was not sent: newNotifier
 		// degrades to Noop when the backend doesn't answer its ping.

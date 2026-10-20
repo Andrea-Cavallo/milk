@@ -2019,3 +2019,19 @@ func TestContextReductionModeValidation(t *testing.T) {
 		t.Fatal("expected LoadFrom to reject unknown context_reduction.mode")
 	}
 }
+
+func TestBusyIndicatorEnabled(t *testing.T) {
+	if !((*RemoteOversightConfig)(nil)).BusyIndicatorEnabled() {
+		t.Error("nil config: want default true")
+	}
+	if !(&RemoteOversightConfig{}).BusyIndicatorEnabled() {
+		t.Error("unset: want default true")
+	}
+	on, off := true, false
+	if !(&RemoteOversightConfig{BusyIndicator: &on}).BusyIndicatorEnabled() {
+		t.Error("explicit true: want true")
+	}
+	if (&RemoteOversightConfig{BusyIndicator: &off}).BusyIndicatorEnabled() {
+		t.Error("explicit false: want false")
+	}
+}
