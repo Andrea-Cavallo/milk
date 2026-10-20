@@ -173,7 +173,7 @@ and, for ACP integration specifically, [docs/reference/acp-integration.md](acp-i
 
 `milk` with no prompt argument starts a REPL built on charmbracelet/bubbletea. The input prompt uses `❯` as the prefix. The status bar reflects the current routing state and active agent.
 
-**Slash commands:** `/escalate`, `/primary`, `/sessions`, `/new`, `/clear`, `/resume`, `/drop`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/init`, `/open`, `/update`, `/restart`, `/notifications`, `/help`, `/exit` (`/list` is a deprecated hidden alias of `/sessions`, kept one release)
+**Slash commands:** `/escalate`, `/primary`, `/sessions`, `/new`, `/clear`, `/resume`, `/drop`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/init`, `/open`, `/update`, `/restart`, `/interrupt`, `/notifications`, `/help`, `/exit` (`/list` is a deprecated hidden alias of `/sessions`, kept one release)
 
 **Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [session <id|prefix>] [json|<path>]` — see [docs/guides/operations.md — Memory](../guides/operations.md#memory).
 
@@ -258,6 +258,13 @@ The CLI equivalent is `milk update check` and `milk update install` (non-interac
 - **Safety** — the relaunch argv comes only from the process's own startup capture (argv, binary path, parent process), never from config or a model-provided string. The terminal is restored (alt-screen left) before the exec.
 
 Not available over ACP (the client cannot survive its server process being replaced) or in one-shot CLI mode. A `go run ./cmd/milk` launch is not restartable (the temporary binary is gone after exit) — use `task run` or an installed binary.
+
+**/interrupt** (issue #288) cancels the running turn — the Ctrl+C equivalent (`handleBusyKey`'s action: `cancelTurn` + the `[interrupted]` completion note) — on every surface:
+
+- **TUI** — typed like any command (also via busy-Enter; `busySafeCommands` keeps it executable while a turn runs, where other commands answer "unavailable while agent is responding"). With no turn running: `nothing to interrupt`.
+- **Remote input (Telegram)** — routed around the busy queue: it acts on the very turn that would otherwise swallow the message; an idle interrupt never reaches the model as prompt text.
+- **ACP** — a prompt of `/interrupt` is intercepted before `turnMu` (it must not queue behind the turn it targets), echoes to the client, cancels and answers immediately; idle it runs through `acp_commands.go` like every other command. Native `session/cancel` is unchanged.
+- Interrupted turns notify remote oversight as `⏹ *agent* turn interrupted` (a cancellation is not an error).
 
 **Multi-line input**: Shift+Enter/Alt+Enter inserts a newline; Enter submits. Bracketed paste is handled transparently.
 
