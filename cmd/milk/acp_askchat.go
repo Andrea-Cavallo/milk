@@ -29,6 +29,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/transport/acp"
 )
 
@@ -70,7 +72,7 @@ func (as *acpSession) typedAskAnswer(question string, options []string, note str
 		// text the TUI shows) minus its trailing "your answer: " input
 		// marker, plus the typed-chat instructions ACP needs spelled out
 		// because chat has no esc key.
-		msg := strings.TrimSuffix(stripANSI(userAskPrompt(question, options, note)), "your answer: ")
+		msg := strings.TrimSuffix(ansi.Strip(userAskPrompt(question, options, note)), "your answer: ")
 		msg += "type your answer here as a new message ('cancel' skips the question; a /command aborts it and runs instead)"
 		as.notify(acp.AgentMessageChunk(as.liveID("ask"), msg))
 

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/transport/acp"
 )
@@ -286,10 +288,10 @@ func (as *acpSession) runSlashCommand(t *acpTurn, prompt string) (handled bool, 
 		if c.name == cmd {
 			if c.runTurn != nil {
 				out, dispatch := c.runTurn(t, rest)
-				return true, stripANSI(out), dispatch
+				return true, ansi.Strip(out), dispatch
 			}
 			out, dispatch := c.run(as, rest)
-			return true, stripANSI(out), dispatch
+			return true, ansi.Strip(out), dispatch
 		}
 	}
 	return true, fmt.Sprintf("%s is only available in the milk TUI. Available over ACP: %s", cmd, acpCommandNames()), ""

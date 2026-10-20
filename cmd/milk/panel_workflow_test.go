@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/workflow"
 )
 
@@ -28,7 +30,7 @@ func TestTruncatePanel_ExactWidthUnchanged(t *testing.T) {
 func TestTruncatePanel_PlainStringTruncated(t *testing.T) {
 	s := "hello world"
 	got := truncatePanel(s, 6)
-	stripped := stripANSI(got)
+	stripped := ansi.Strip(got)
 	runes := []rune(stripped)
 	if len(runes) > 6 {
 		t.Errorf("truncatePanel: visual length %d > maxWidth 6 (result %q)", len(runes), got)
@@ -54,7 +56,7 @@ func TestTruncatePanel_ANSIStringNoGarbage(t *testing.T) {
 	// The result must not contain a naked ESC byte that is not part of a
 	// recognised CSI/SGR sequence. The simplest proxy: after stripping ANSI the
 	// result should be ≤ maxWidth visual runes.
-	stripped := stripANSI(got)
+	stripped := ansi.Strip(got)
 	runes := []rune(stripped)
 	if len(runes) > maxWidth {
 		t.Errorf("visual length %d > maxWidth %d; result=%q", len(runes), maxWidth, got)
@@ -73,7 +75,7 @@ func TestTruncatePanel_ANSIVisualLengthExact(t *testing.T) {
 	s := dim("abcdefghijklmnopqrstuvwxyz")
 	maxWidth := 8
 	got := truncatePanel(s, maxWidth)
-	stripped := []rune(stripANSI(got))
+	stripped := []rune(ansi.Strip(got))
 	if len(stripped) != maxWidth {
 		t.Errorf("visual length = %d, want exactly %d; result=%q", len(stripped), maxWidth, got)
 	}
@@ -135,7 +137,7 @@ func TestBuildWorkflowPanelLines_GenericShowsFullStageTreeWithActiveMarker(t *te
 		ActiveStageTree: &workflow.StageNode{Label: "review"},
 		Generic:         true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 60), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 60), "\n"))
 	for _, stage := range []string{"design", "impl", "eval"} {
 		if !strings.Contains(joined, stage) {
 			t.Fatalf("expected generic panel to show stage %q, got:\n%s", stage, joined)
@@ -157,7 +159,7 @@ func TestBuildWorkflowPanelLines_GenericMarksStaticRoleNodeActive(t *testing.T) 
 		ActiveStageTree: &workflow.StageNode{Label: "designer"},
 		Generic:         true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	if !strings.Contains(joined, "▸   design") {
 		t.Fatalf("expected active marker on static designer node, got:\n%s", joined)
 	}
@@ -173,7 +175,7 @@ func TestBuildWorkflowPanelLines_GenericMarksStaticRoleNodeActiveFromRoleFallbac
 		}},
 		Generic: true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	if !strings.Contains(joined, "▸   design") {
 		t.Fatalf("expected role fallback to mark static designer node active, got:\n%s", joined)
 	}
@@ -189,7 +191,7 @@ func TestBuildWorkflowPanelLines_GenericMarksStaticRoleSuffixActive(t *testing.T
 		ActiveStageTree: &workflow.StageNode{Label: "implementer"},
 		Generic:         true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	if !strings.Contains(joined, "▸   final impl") {
 		t.Fatalf("expected active marker on static role-suffix node, got:\n%s", joined)
 	}
@@ -215,7 +217,7 @@ func TestBuildWorkflowPanelLines_GenericShowsConcurrentFanoutBranches(t *testing
 		}},
 		Generic: true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	for _, label := range []string{"item 1", "item 2", "pass 1", "work", "final eval"} {
 		if !strings.Contains(joined, label) {
 			t.Fatalf("expected panel to show %q, got:\n%s", label, joined)
@@ -246,7 +248,7 @@ func TestBuildWorkflowPanelLines_GenericKeepsCompletedFanoutItemsAtDone(t *testi
 		}},
 		Generic: true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	for _, label := range []string{"✓     item 1", "✓     item 2"} {
 		if !strings.Contains(joined, label) {
 			t.Fatalf("expected completed fanout item %q, got:\n%s", label, joined)
@@ -275,7 +277,7 @@ func TestBuildWorkflowPanelLines_GenericDevShowsDynamicSprintAndPass(t *testing.
 		}},
 		Generic: true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	for _, label := range []string{"▸   sprint 2", "▸     pass 3", "▸       generator"} {
 		if !strings.Contains(joined, label) {
 			t.Fatalf("expected dynamic dev label %q, got:\n%s", label, joined)
@@ -307,7 +309,7 @@ func TestBuildWorkflowPanelLines_GenericDevShowsCompletedGeneratorAndActiveEvalu
 		}},
 		Generic: true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	for _, label := range []string{"▸   sprint 1", "▸     pass 1", "✓       generator", "▸       evaluator"} {
 		if !strings.Contains(joined, label) {
 			t.Fatalf("expected panel to show %q, got:\n%s", label, joined)
@@ -334,7 +336,7 @@ func TestBuildWorkflowPanelLines_GenericDevKeepsCompletedSprintsAtDone(t *testin
 		}},
 		Generic: true,
 	}
-	joined := stripANSI(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
+	joined := ansi.Strip(strings.Join(buildWorkflowPanelLines(st, 80), "\n"))
 	for _, label := range []string{"✓   sprint 1", "✓   sprint 2"} {
 		if !strings.Contains(joined, label) {
 			t.Fatalf("expected completed dev sprint %q, got:\n%s", label, joined)

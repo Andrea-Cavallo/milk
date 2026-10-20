@@ -7,13 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/session"
 )
 
 func treePlain(lines []string) []string {
 	out := make([]string, len(lines))
 	for i, l := range lines {
-		out[i] = stripANSI(l)
+		out[i] = ansi.Strip(l)
 	}
 	return out
 }

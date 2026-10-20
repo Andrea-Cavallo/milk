@@ -21,8 +21,8 @@ func layoutTestModel(t *testing.T, width, height int) model {
 	m.st = &interactiveState{sess: &session.Session{}}
 	m.ta = textarea.New()
 	// A zero-value model would read as a live selection on line 0 (anchor and
-	// end both 0) and applySelectionHighlight would rebuild that row from
-	// stripped plain text — start with no selection, like newModel does.
+	// end both 0) and applySelectionHighlight would highlight that row —
+	// start with no selection, like newModel does.
 	m.clearSelection()
 	nm, _ := m.handleResize(tea.WindowSizeMsg{Width: width, Height: height})
 	return nm.(model)

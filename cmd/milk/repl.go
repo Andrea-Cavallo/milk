@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/agent/aider"
 	"github.com/scoutme/milk/internal/agent/claude"
@@ -1257,7 +1258,7 @@ func (m *model) refreshPrompt() {
 	} else {
 		label = promptLabel(m.st)
 	}
-	plain := stripANSI(label)
+	plain := ansi.Strip(label)
 	m.promptWidth = rw.StringWidth(plain)
 
 	m.ta.SetPromptFunc(m.promptWidth, func(lineIdx int) string {
@@ -1919,7 +1920,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.setViewportContent()
 			}
 			if m.panelSelText == "" && m.panelSelAnchorLine >= 0 && m.panelSelDragging {
-				m.panelSelText = panelSelectionText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
+				m.panelSelText = selectedText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
 			}
 			if m.attachSelText == "" && m.attachActive() && m.attachSelAnchorLine >= 0 && m.attachSelDragging {
 				m.attachSelText = m.attachSelectionText()
@@ -4907,7 +4908,7 @@ func visibleChars(s string) int64 {
 	if !strings.Contains(s, "\x1b") {
 		return int64(len(s))
 	}
-	return int64(len(stripANSI(s)))
+	return int64(len(ansi.Strip(s)))
 }
 
 func (m *model) markOutput() {

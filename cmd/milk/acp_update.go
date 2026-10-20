@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/transport/acp"
 	"github.com/scoutme/milk/internal/updater"
 )
@@ -89,7 +91,7 @@ func acpUpdateInstall(t *acpTurn) (string, string) {
 		return fmt.Sprintf("%s no update available (%s)", milkTag(), version), ""
 	}
 
-	t.say(stripANSI(milkTag()) + " installing " + rel.Tag + "…")
+	t.say(ansi.Strip(milkTag()) + " installing " + rel.Tag + "…")
 	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Minute)
 	defer cancel()
 	err := updateInstall(ctx, rel, nil)
@@ -203,7 +205,7 @@ func (s *acpServer) announceUpdate(rel *updater.Release) {
 	for _, as := range targets {
 		as.notify(acp.AgentMessageChunk(
 			as.liveID("update"),
-			stripANSI(updateAvailableNotice(rel))))
+			ansi.Strip(updateAvailableNotice(rel))))
 	}
 }
 
@@ -222,5 +224,5 @@ func (s *acpServer) announceUpdateTo(as *acpSession) {
 	s.mu.Unlock()
 	as.notify(acp.AgentMessageChunk(
 		as.liveID("update"),
-		stripANSI(updateAvailableNotice(rel))))
+		ansi.Strip(updateAvailableNotice(rel))))
 }

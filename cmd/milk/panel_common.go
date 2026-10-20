@@ -6,8 +6,10 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/memory"
+	"github.com/scoutme/milk/internal/sgr"
 	"github.com/scoutme/milk/internal/tasks"
 )
 
@@ -304,24 +306,6 @@ func panelAltBackgroundCode() string {
 	return "\033[48;2;236;236;239m"
 }
 
-// withPanelBackground re-applies bg immediately after every full SGR reset
-// embedded in line so previously-colored spans (status badges, dim text,
-// panel titles, ...) don't cut the background back to the terminal default
-// midway through a line — both this file's colorize-based helpers (ansi.go)
-// and lipgloss's own Render calls close a styled span with the identical
-// "\x1b[0m", so one substitution covers both. The one gap: staleContentColor
-// (memory panel only) opens its truecolor spans with a combined reset+set
-// code rather than a plain reset, so the background briefly drops out for
-// just those tinted characters — accepted rather than special-cased, since
-// it's a single existing call site and the effect is barely visible.
-func withPanelBackground(line, bg string) string {
-	if bg == "" || line == "" {
-		return line
-	}
-	line = strings.ReplaceAll(line, ansiReset, ansiReset+bg)
-	return bg + line + ansiReset
-}
-
 // panelOffsetPtr returns a pointer to the model's persisted scroll offset for
 // the given side-panel region, or nil for regionNone/an unknown region.
 // Returning a pointer (rather than a value + a separate setter) lets wheel
@@ -365,7 +349,7 @@ func (m *model) renderSidePanel(region panelRegion, h int) string {
 	}
 
 	if m.panelSelRegion == region {
-		all = applyPanelSelectionHighlight(all, m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
+		all = highlightSelection(all, m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
 	}
 
 	lines := all[*offset:]
@@ -386,10 +370,10 @@ func (m *model) renderSidePanel(region panelRegion, h int) string {
 		// wrap/truncate their own content — this clamp is the guarantee that
 		// the frame holds even if one of them ever doesn't.
 		line = ansi.Truncate(line, inner, "…")
-		if lineW := ansi.StringWidth(stripANSI(line)); lineW < inner {
+		if lineW := ansi.StringWidth(ansi.Strip(line)); lineW < inner {
 			line += strings.Repeat(" ", inner-lineW)
 		}
-		rows = append(rows, withPanelBackground(line, bg))
+		rows = append(rows, sgr.WithBackground(line, bg))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -410,7 +394,7 @@ func (m *model) renderSidePanelScrollbar(region panelRegion, h int) string {
 	var rows []string
 	if !needsBar {
 		for range h {
-			rows = append(rows, withPanelBackground(" ", bg))
+			rows = append(rows, sgr.WithBackground(" ", bg))
 		}
 		return strings.Join(rows, "\n")
 	}
@@ -418,9 +402,9 @@ func (m *model) renderSidePanelScrollbar(region panelRegion, h int) string {
 	thumbTop, thumbBot := scrollThumb(h, total, *m.panelOffsetPtr(region))
 	for i := range h {
 		if i >= thumbTop && i <= thumbBot {
-			rows = append(rows, withPanelBackground(dim("▌"), bg))
+			rows = append(rows, sgr.WithBackground(dim("▌"), bg))
 		} else {
-			rows = append(rows, withPanelBackground(dim("│"), bg))
+			rows = append(rows, sgr.WithBackground(dim("│"), bg))
 		}
 	}
 	return strings.Join(rows, "\n")

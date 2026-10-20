@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"github.com/vito/midterm"
 )
@@ -133,7 +134,7 @@ func (m *model) ptySnapshot() string {
 		parts = append(parts, s)
 	}
 	raw := strings.Join(parts, "\n")
-	clean := stripANSI(raw)
+	clean := ansi.Strip(raw)
 	clean = strings.ReplaceAll(clean, "\r\n", "\n")
 	clean = strings.ReplaceAll(clean, "\r", "\n")
 	// Drop trailing blank lines produced by the fixed-size VT screen.

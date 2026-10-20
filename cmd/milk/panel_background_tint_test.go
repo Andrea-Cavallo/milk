@@ -5,7 +5,10 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/session"
+	"github.com/scoutme/milk/internal/sgr"
 	"github.com/scoutme/milk/internal/workflow"
 )
 
@@ -64,7 +67,7 @@ func TestWithPanelBackground_SurvivesEmbeddedResets(t *testing.T) {
 
 	bg := "\033[48;2;10;10;10m"
 	line := "plain " + dim("dimmed") + " more"
-	out := withPanelBackground(line, bg)
+	out := sgr.WithBackground(line, bg)
 
 	if !strings.HasPrefix(out, bg) {
 		t.Fatalf("expected line to start with the background code, got %q", out)
@@ -83,7 +86,7 @@ func TestWithPanelBackground_SurvivesEmbeddedResets(t *testing.T) {
 // panel that isn't in the alternating slot) leaves the line untouched.
 func TestWithPanelBackground_EmptyBgIsNoop(t *testing.T) {
 	line := "hello " + dim("world")
-	if got := withPanelBackground(line, ""); got != line {
+	if got := sgr.WithBackground(line, ""); got != line {
 		t.Errorf("expected no-op with empty bg, got %q want %q", got, line)
 	}
 }
@@ -106,7 +109,7 @@ func TestRenderSidePanel_BackgroundTintPreservesWidth(t *testing.T) {
 		t.Fatal("expected the tasks panel (second open panel) to carry a background tint")
 	}
 	for i, line := range strings.Split(out, "\n") {
-		if w := utf8.RuneCountInString(stripANSI(line)); w != tasksPanelInner {
+		if w := utf8.RuneCountInString(ansi.Strip(line)); w != tasksPanelInner {
 			t.Errorf("line %d: width %d, want %d", i, w, tasksPanelInner)
 		}
 	}

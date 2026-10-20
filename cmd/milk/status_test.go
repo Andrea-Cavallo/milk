@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/session"
@@ -34,7 +36,7 @@ func TestHeaderBar_ShowsCachePercentage(t *testing.T) {
 		},
 	}
 
-	bar := stripANSI(m.headerBar())
+	bar := ansi.Strip(m.headerBar())
 	if !strings.Contains(bar, "cache:21%") {
 		t.Errorf("want headerBar to contain %q, got %q", "cache:21%", bar)
 	}
@@ -56,7 +58,7 @@ func TestHeaderBar_NoCacheSegmentWhenZero(t *testing.T) {
 		},
 	}
 
-	bar := stripANSI(m.headerBar())
+	bar := ansi.Strip(m.headerBar())
 	if strings.Contains(bar, "cache:") {
 		t.Errorf("want no cache segment when cache tokens are zero, got %q", bar)
 	}
@@ -79,7 +81,7 @@ func TestHeaderBar_SubagentWorkflowTokens(t *testing.T) {
 		},
 	}
 
-	bar := stripANSI(m.headerBar())
+	bar := ansi.Strip(m.headerBar())
 	// Total prompt tokens: 1000 + 300 + 100 = 1400
 	// Total completion tokens: 200 + 50 + 20 = 270
 	// Cache read: 500 + 150 + 50 = 700
@@ -112,7 +114,7 @@ func TestStatusTokens_CacheWithCreation(t *testing.T) {
 	}
 	m.st.activeFallbackTarget = "escalation"
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	// cache:500/100(25%) — 500 read, 100 creation, hit rate = 500/(1000+500+100) = 31%
 	// Actually: 500 / (1000 + 600) = 31.25% -> 31%
 	if !strings.Contains(bar, "cache:") {
@@ -146,7 +148,7 @@ func TestStatusTokens_BusyShowsInputAndOutputTokens(t *testing.T) {
 	}
 	// Default role is primary (no sticky/force escalation)
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	// Should contain ↑~200 (input estimate) and ↓~300 (output estimate)
 	if !strings.Contains(bar, "↑~200") {
 		t.Errorf("want input estimate ↑~200 in status bar, got %q", bar)
@@ -172,7 +174,7 @@ func TestStatusTokens_BusyZeroInputTokens(t *testing.T) {
 		primaryCompletion:     50,
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "↑~0") {
 		t.Errorf("want input estimate ↑~0, got %q", bar)
 	}
@@ -202,7 +204,7 @@ func TestStatusTokens_CacheZeroCreation(t *testing.T) {
 	}
 	m.st.activeFallbackTarget = "escalation"
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	// cache:800(28%) — no /0 since creation is zero
 	if !strings.Contains(bar, "cache:") {
 		t.Errorf("want cache segment, got %q", bar)
@@ -234,7 +236,7 @@ func TestStatusTokens_ContextPressure_AbsoluteSizeWithoutContextWindow(t *testin
 		lastTokenRole:      "primary",
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "ctx:1.0k") {
 		t.Errorf("want ctx:1.0k (absolute size, 1000 tokens, no configured window), got %q", bar)
 	}
@@ -261,7 +263,7 @@ func TestStatusTokens_ContextPressure_IdleShowsLastTurnUsage(t *testing.T) {
 		lastTokenRole:      "primary",
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "ctx:8.0k/10.0k") {
 		t.Errorf("want ctx:8.0k/10.0k (8000/10000), got %q", bar)
 	}
@@ -287,7 +289,7 @@ func TestStatusTokens_ContextPressure_BusyUsesLiveEstimate(t *testing.T) {
 		lastTurnCompletion:    map[string]int64{"primary": 0, "escalation": 0},
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "ctx:3.0k/4.0k") {
 		t.Errorf("want ctx:3.0k/4.0k (3000/4000 estimated), got %q", bar)
 	}
@@ -343,7 +345,7 @@ func TestStatusTokens_ContextPressure_LargeWindowStillShowsBothSides(t *testing.
 		lastTokenRole:      "primary",
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "ctx:4.8k/1.0M") {
 		t.Errorf("want ctx:4.8k/1.0M (4800/1000000), got %q", bar)
 	}
@@ -389,7 +391,7 @@ func TestStatusTokens_ThroughputIdle(t *testing.T) {
 		seenTiming: map[string]turnTiming{"primary": {}, "escalation": {}},
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "85 tok/s") {
 		t.Errorf("want 85 tok/s in status bar, got %q", bar)
 	}
@@ -416,7 +418,7 @@ func TestStatusTokens_ThroughputMissingTiming(t *testing.T) {
 		seenTiming:          map[string]turnTiming{"primary": {}, "escalation": {}},
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if strings.Contains(bar, "tok/s") || strings.Contains(bar, "ttft") {
 		t.Errorf("want no throughput fragment without timing, got %q", bar)
 	}
@@ -446,7 +448,7 @@ func TestStatusTokens_ThroughputBusyLiveEstimate(t *testing.T) {
 		seenTiming:          map[string]turnTiming{"primary": {}, "escalation": {}},
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "50 tok/s") {
 		t.Errorf("want live 50 tok/s estimate in status bar, got %q", bar)
 	}
@@ -472,7 +474,7 @@ func TestStatusTokens_ThroughputBusyNoEstimateDuringPrefill(t *testing.T) {
 		seenTiming:          map[string]turnTiming{"primary": {}, "escalation": {}},
 	}
 
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if strings.Contains(bar, "tok/s") {
 		t.Errorf("want no tok/s during prefill, got %q", bar)
 	}
@@ -501,7 +503,7 @@ func TestStatusTokens_ContextPressure_UsesSingleRequestNotTurnSum(t *testing.T) 
 		lastTurnCompletion: map[string]int64{"primary": 200},
 		lastTokenRole:      "primary",
 	}
-	bar := stripANSI(m.statusTokens())
+	bar := ansi.Strip(m.statusTokens())
 	if !strings.Contains(bar, "ctx:90.0k/100.0k") {
 		t.Errorf("want ctx:90.0k/100.0k from the single request, got %q", bar)
 	}

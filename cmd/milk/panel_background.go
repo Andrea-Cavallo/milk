@@ -6,6 +6,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/agent/local"
 )
 
@@ -106,7 +108,7 @@ func fitBackgroundRowLine(badge, label, elapsed string, inner int) string {
 	suffix := fmt.Sprintf(" %s", dim(elapsed))
 	suffixW := utf8.RuneCountInString(elapsed) + 1
 	prefix := fmt.Sprintf("  %s ", badge)
-	prefixW := utf8.RuneCountInString(stripANSI(prefix))
+	prefixW := utf8.RuneCountInString(ansi.Strip(prefix))
 	maxLabelW := inner - prefixW - suffixW
 	if maxLabelW < 4 {
 		maxLabelW = 4
@@ -116,7 +118,7 @@ func fitBackgroundRowLine(badge, label, elapsed string, inner int) string {
 		label = string(labelRunes[:maxLabelW-1]) + "…"
 	}
 	line := prefix + label
-	lineW := utf8.RuneCountInString(stripANSI(line))
+	lineW := utf8.RuneCountInString(ansi.Strip(line))
 	// suffix (the elapsed badge) already starts with its own leading space,
 	// so pad may legitimately be 0 when the label fills its entire budget —
 	// only clamp the negative case (shouldn't happen given maxLabelW above,

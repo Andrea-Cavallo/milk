@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/tasks"
 )
 
@@ -34,7 +36,7 @@ func TestBuildTasksPanelLines_EmptyStore(t *testing.T) {
 
 	for _, want := range []string{"SESSION", "GLOBAL", "(none)"} {
 		// Strip ANSI before checking so terminal colour codes don't interfere.
-		plain := stripANSI(joined)
+		plain := ansi.Strip(joined)
 		if !strings.Contains(plain, want) {
 			t.Errorf("expected %q in panel output; got:\n%s", want, plain)
 		}
@@ -56,7 +58,7 @@ func TestBuildTasksPanelLines_WithTasks(t *testing.T) {
 
 	lines := buildTasksPanelLines(ts, 32)
 	joined := strings.Join(lines, "\n")
-	plain := stripANSI(joined)
+	plain := ansi.Strip(joined)
 
 	if !strings.Contains(plain, "implement login") {
 		t.Errorf("title 'implement login' not found in panel output:\n%s", plain)
@@ -79,7 +81,7 @@ func TestBuildTasksPanelLines_GlobalTask(t *testing.T) {
 	ts2, _ := tasks.New(dir, "sess2")
 	lines := buildTasksPanelLines(ts2, 32)
 	joined := strings.Join(lines, "\n")
-	plain := stripANSI(joined)
+	plain := ansi.Strip(joined)
 
 	if !strings.Contains(plain, "global plan item") {
 		t.Errorf("global task not shown in panel from different session:\n%s", plain)

@@ -53,7 +53,7 @@ func (m *model) headerBar() string {
 	rightShort := dim(sessLabel + "  /help")
 	rightShortPlain := sessLabel + "  /help"
 
-	logoPlain := stripANSI(logo)
+	logoPlain := ansi.Strip(logo)
 	available := m.width - 2
 	rightPart, rightPlain := rightFull, rightFulPlain
 	if available < len(logoPlain)+2+len(taglinePlain)+2+len(rightFulPlain) {

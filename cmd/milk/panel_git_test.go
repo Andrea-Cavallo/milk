@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // --- buildGitPanelLines ---
@@ -70,7 +72,7 @@ func TestBuildGitPanelLines_CleanAndErrorStates(t *testing.T) {
 
 func TestGitRowLine_LongSubjectTruncated(t *testing.T) {
 	r := gitGraphLine{Prefix: "●", Commit: gitCommit{Short: "abc1234", Subject: strings.Repeat("x", 100)}}
-	line := stripANSI(gitRowLine(r, gitPanelInner))
+	line := ansi.Strip(gitRowLine(r, gitPanelInner))
 	if w := len([]rune(line)); w > gitPanelInner {
 		t.Errorf("row overflows inner: %d > %d (%q)", w, gitPanelInner, line)
 	}

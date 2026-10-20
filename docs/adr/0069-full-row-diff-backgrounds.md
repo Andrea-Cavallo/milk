@@ -66,3 +66,10 @@ Reuse that technique for diff rows via a second, tightly-scoped painter:
   stored content and break the cache/plain-trim/export story. Alternative
   rejected: generalising to *any* background colour would pad styling milk
   doesn't own (markdown tables, model-emitted ANSI).
+
+## Update (2026-10-20, ADR-0072)
+
+Wrapped rows are now self-contained (`wrapRows`), so the painter no longer
+carries background state between rows: every row of a wrapped +/- line starts
+by re-opening its colours, ends with a reset, and gets the same
+close-then-reopen pad. The "open at the row end" branch described above is gone.

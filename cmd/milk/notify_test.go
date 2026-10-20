@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/oversight"
 	"github.com/scoutme/milk/internal/session"
@@ -288,7 +289,7 @@ func TestView_ToastOverlayFloating(t *testing.T) {
 func TestPadToastRow_StartsContentAtLeftPad(t *testing.T) {
 	content, plainW := toastContent(toastEvent{at: time.Now(), text: "hi"}, 50)
 	row := padToastRow(content, plainW, 50, 10)
-	plain := stripANSI(row)
+	plain := ansi.Strip(row)
 	if w := utf8.RuneCountInString(plain); w != 50 {
 		t.Fatalf("width = %d, want 50", w)
 	}
@@ -326,16 +327,16 @@ func TestOverlayToasts_DismissGetsOwnRow(t *testing.T) {
 	dismissRow := lines[2]
 
 	if strings.Contains(messageRow, "ctrl+g dismiss") {
-		t.Errorf("dismiss affordance must not be folded into the message row, got %q", stripANSI(messageRow))
+		t.Errorf("dismiss affordance must not be folded into the message row, got %q", ansi.Strip(messageRow))
 	}
 	if !strings.Contains(messageRow, "short") {
-		t.Errorf("expected the message on its own row, got %q", stripANSI(messageRow))
+		t.Errorf("expected the message on its own row, got %q", ansi.Strip(messageRow))
 	}
 	if !strings.Contains(dismissRow, "ctrl+g dismiss") {
-		t.Errorf("expected the dismiss affordance on its own footer row, got %q", stripANSI(dismissRow))
+		t.Errorf("expected the dismiss affordance on its own footer row, got %q", ansi.Strip(dismissRow))
 	}
 
-	plain := []rune(stripANSI(dismissRow))
+	plain := []rune(ansi.Strip(dismissRow))
 	if firstNonSpace(plain[toastSideMargin:]) <= 0 {
 		t.Errorf("expected leading padding before the dismiss row's content (right-aligned, not flush left), got %q", string(plain))
 	}
@@ -360,7 +361,7 @@ func TestOverlayToasts_PendingCountOnDismissRow(t *testing.T) {
 	dismissRow := lines[limit+1] // messages occupy rows 1..limit, footer is next
 
 	if !strings.Contains(dismissRow, "2 more pending · ctrl+g dismiss") {
-		t.Errorf("expected the pending count dot-separated before the dismiss affordance, got %q", stripANSI(dismissRow))
+		t.Errorf("expected the pending count dot-separated before the dismiss affordance, got %q", ansi.Strip(dismissRow))
 	}
 }
 
@@ -407,8 +408,8 @@ func TestOverlayToasts_RowsShareStartColumn(t *testing.T) {
 	for i := 0; i <= len(m.toastVisible); i++ {
 		row := lines[i+1]
 		atContent := ansi.Cut(row, contentStart, contentStart+1)
-		if stripANSI(atContent) == " " || stripANSI(atContent) == "" {
-			t.Errorf("row %d: expected content starting exactly at column %d, got blank there in %q", i, contentStart, stripANSI(row))
+		if ansi.Strip(atContent) == " " || ansi.Strip(atContent) == "" {
+			t.Errorf("row %d: expected content starting exactly at column %d, got blank there in %q", i, contentStart, ansi.Strip(row))
 		}
 	}
 }
@@ -429,20 +430,20 @@ func TestOverlayToasts_PreservesSideMargins(t *testing.T) {
 	after := m.View()
 	afterRow := strings.Split(after, "\n")[1]
 
-	beforeLeft := stripANSI(ansi.Truncate(beforeRow, toastSideMargin, ""))
-	afterLeft := stripANSI(ansi.Truncate(afterRow, toastSideMargin, ""))
+	beforeLeft := ansi.Strip(ansi.Truncate(beforeRow, toastSideMargin, ""))
+	afterLeft := ansi.Strip(ansi.Truncate(afterRow, toastSideMargin, ""))
 	if beforeLeft != afterLeft {
 		t.Errorf("left margin changed: %q -> %q", beforeLeft, afterLeft)
 	}
 
-	beforeRight := stripANSI(ansi.Cut(beforeRow, width-toastSideMargin, width))
-	afterRight := stripANSI(ansi.Cut(afterRow, width-toastSideMargin, width))
+	beforeRight := ansi.Strip(ansi.Cut(beforeRow, width-toastSideMargin, width))
+	afterRight := ansi.Strip(ansi.Cut(afterRow, width-toastSideMargin, width))
 	if beforeRight != afterRight {
 		t.Errorf("right margin changed: %q -> %q", beforeRight, afterRight)
 	}
 
 	if !strings.Contains(afterRow, "margin check") {
-		t.Errorf("expected toast text in the overlaid row, got %q", stripANSI(afterRow))
+		t.Errorf("expected toast text in the overlaid row, got %q", ansi.Strip(afterRow))
 	}
 }
 
@@ -479,7 +480,7 @@ func TestOverlayToasts_BandStartsAtSharedColumn(t *testing.T) {
 		t.Errorf("expected everything before the shared column to stay untouched by the toast:\nbefore=%q\nafter=%q", beforePrefix, afterPrefix)
 	}
 	if !strings.Contains(afterRow, "hi") {
-		t.Errorf("expected the toast text within the painted band, got %q", stripANSI(afterRow))
+		t.Errorf("expected the toast text within the painted band, got %q", ansi.Strip(afterRow))
 	}
 }
 
@@ -505,15 +506,15 @@ func TestOverlayToasts_ContentHasPaddingColumns(t *testing.T) {
 	row := strings.Split(m.View(), "\n")[rowIdx]
 
 	leading := ansi.Cut(row, bandStart, bandStart+toastContentPadding)
-	if stripANSI(leading) != strings.Repeat(" ", toastContentPadding) {
-		t.Errorf("expected %d blank column(s) at the start of the band, got %q", toastContentPadding, stripANSI(leading))
+	if ansi.Strip(leading) != strings.Repeat(" ", toastContentPadding) {
+		t.Errorf("expected %d blank column(s) at the start of the band, got %q", toastContentPadding, ansi.Strip(leading))
 	}
 
 	// The message row defines maxLen here (longer than the dismiss footer's
 	// fixed "ctrl+g dismiss"), so its own trailing gap is exactly one column.
 	trailing := ansi.Cut(row, bandEnd-toastContentPadding, bandEnd)
-	if stripANSI(trailing) != strings.Repeat(" ", toastContentPadding) {
-		t.Errorf("expected %d trailing blank column(s) before the band's right edge, got %q", toastContentPadding, stripANSI(trailing))
+	if ansi.Strip(trailing) != strings.Repeat(" ", toastContentPadding) {
+		t.Errorf("expected %d trailing blank column(s) before the band's right edge, got %q", toastContentPadding, ansi.Strip(trailing))
 	}
 }
 
@@ -554,8 +555,8 @@ func TestView_ToastOverlayPreservesPanelHeader(t *testing.T) {
 		t.Fatalf("line count changed: %d -> %d", len(beforeLines), len(afterLines))
 	}
 	for i := range beforeLines {
-		bw := utf8.RuneCountInString(stripANSI(beforeLines[i]))
-		aw := utf8.RuneCountInString(stripANSI(afterLines[i]))
+		bw := utf8.RuneCountInString(ansi.Strip(beforeLines[i]))
+		aw := utf8.RuneCountInString(ansi.Strip(afterLines[i]))
 		if bw != aw {
 			t.Errorf("line %d width changed from %d to %d cells — toast overlay must not shrink a row that has a side panel", i, bw, aw)
 		}

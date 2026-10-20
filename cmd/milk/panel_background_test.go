@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/agent/local"
 )
 
@@ -38,5 +40,5 @@ func TestBuildBackgroundPanelLines_ShowsEachJobWithinWidthBudget(t *testing.T) {
 }
 
 func runeWidthNoANSI(s string) int {
-	return len([]rune(stripANSI(s)))
+	return len([]rune(ansi.Strip(s)))
 }

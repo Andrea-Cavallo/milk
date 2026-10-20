@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/tasks"
 )
 
@@ -76,7 +78,7 @@ func renderTaskLine(t tasks.Task, inner int) string {
 	badge := taskStatusBadge(t.Status)
 	title := t.Title
 	prefix := fmt.Sprintf("  %s ", badge)
-	prefixW := utf8.RuneCountInString(stripANSI(prefix))
+	prefixW := utf8.RuneCountInString(ansi.Strip(prefix))
 	maxTitleW := inner - prefixW
 	if maxTitleW < 4 {
 		maxTitleW = 4

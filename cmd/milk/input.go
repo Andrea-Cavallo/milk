@@ -4,10 +4,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
 	rw "github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 
-	"github.com/charmbracelet/x/ansi"
+	"github.com/scoutme/milk/internal/sgr"
 )
 
 func (m *model) colorizeInput(view string) string {
@@ -272,38 +273,25 @@ func wrapLineIntoRows(runes []rune, width int) [][]rune {
 	return rows
 }
 
-// applyInputHighlight applies reverse-video highlight to rune positions [selLo, selHi)
-// of the inputPart section of a colorized display line (after indentVisual prefix chars).
+// Input selection uses a background colour rather than reverse video so it
+// doesn't conflict with the cursor, which is also reverse video.
+const (
+	inputSelectionOn  = "\x1b[48;5;240m"
+	inputSelectionOff = "\x1b[49m"
+)
+
+// applyInputHighlight highlights rune positions [selLo, selHi) of the input
+// part of a colorized display line (the runes after its indentVisual prefix
+// columns), keeping the line's own styling — the prompt and the coloured
+// tokens — intact.
 func applyInputHighlight(line string, indentVisual, selLo, selHi int) string {
-	// Re-split at indentVisual to isolate the input part.
-	// Work exclusively in runes: indentVisual is a visual column count, not a
-	// byte offset. Using plainLine[indentVisual:] would slice mid-rune for
-	// multi-byte prompt characters (e.g. ❯ is 3 bytes but 1 column/rune).
-	plainRunes := []rune(ansi.Strip(line))
-	if len(plainRunes) <= indentVisual {
+	inputLen := len([]rune(ansi.Strip(line))) - indentVisual
+	if inputLen <= 0 || selLo >= inputLen || selHi <= 0 {
 		return line
 	}
-	inputRunes := plainRunes[indentVisual:]
-	if selLo >= len(inputRunes) || selHi <= 0 {
-		return line
-	}
-	if selLo < 0 {
-		selLo = 0
-	}
-	if selHi > len(inputRunes) {
-		selHi = len(inputRunes)
-	}
-	// Build the highlighted version of the plain input part.
-	// Use a background-color highlight (not \x1b[7m reverse-video) so it doesn't
-	// conflict with the cursor which also uses \x1b[7m.
-	var sb strings.Builder
-	sb.WriteString(string(inputRunes[:selLo]))
-	sb.WriteString("\x1b[48;5;240m") // dark-gray bg for selection
-	sb.WriteString(string(inputRunes[selLo:selHi]))
-	sb.WriteString("\x1b[49m") // reset background only
-	sb.WriteString(string(inputRunes[selHi:]))
-	// Reconstruct with original prefix (rune-safe).
-	return string(plainRunes[:indentVisual]) + sb.String()
+	selLo = max(selLo, 0)
+	selHi = min(selHi, inputLen)
+	return sgr.Highlight(line, indentVisual+selLo, indentVisual+selHi, inputSelectionOn, inputSelectionOff)
 }
 
 // highlightMatch bolds and yellows the first occurrence of query inside s.
@@ -354,23 +342,4 @@ func colorizeTokenLine(s string) string {
 		i = j
 	}
 	return out.String()
-}
-
-func stripANSI(s string) string {
-	var b strings.Builder
-	inEsc := false
-	for _, r := range s {
-		if inEsc {
-			if r == 'm' {
-				inEsc = false
-			}
-			continue
-		}
-		if r == '\033' {
-			inEsc = true
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
