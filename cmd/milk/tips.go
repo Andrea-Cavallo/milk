@@ -108,6 +108,10 @@ func tipCoveredCmds() map[string]bool {
 // the day it lands, and a renamed or re-described command cannot leave a
 // stale tip behind — the issue #226 single-source invariant, applied to
 // tips. Hidden commands (/list's deprecation window) are not advertised.
+//
+// The rendered hint is host-aware: registryTip uses hintFor(hostTUI), so a
+// command whose TUI vocabulary diverges from ACP's (/think) shows its TUI
+// form here while ACP keeps advertising the base hint.
 func registryTips() []string {
 	covered := tipCoveredCmds()
 	var tips []string
@@ -115,13 +119,20 @@ func registryTips() []string {
 		if s.hidden || !s.in(hostTUI) || covered[s.name] {
 			continue
 		}
-		name := s.name
-		if s.hint != "" {
-			name += " " + s.hint
-		}
-		tips = append(tips, "{"+name+"} — "+s.desc)
+		tips = append(tips, registryTip(s))
 	}
 	return tips
+}
+
+// registryTip renders one registry-derived tip line: the command name with
+// its TUI-host display hint (TUI overrides like /think's fold vocabulary
+// apply), then the registry desc.
+func registryTip(s cmdSpec) string {
+	name := s.name
+	if h := s.hintFor(hostTUI); h != "" {
+		name += " " + h
+	}
+	return "{" + name + "} — " + s.desc
 }
 
 // buildTipList is the full rotation pool: curated tips first (priority
