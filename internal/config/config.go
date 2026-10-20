@@ -1273,6 +1273,12 @@ type RemoteOversightConfig struct {
 	// NotifyTools controls whether tool-use events are forwarded.
 	// Default: true.
 	NotifyTools *bool `json:"notify_tools,omitempty"`
+
+	// BusyIndicator controls the remote busy status — Telegram's native
+	// "typing…" chat action, re-sent while a turn runs and paused during
+	// remote asks (issue #284). Not a message: nothing lands in history.
+	// Default: true.
+	BusyIndicator *bool `json:"busy_indicator,omitempty"`
 }
 
 // TelegramConfig holds Telegram Bot API settings.
@@ -1615,6 +1621,15 @@ func (r *RemoteOversightConfig) NotifyToolsEnabled() bool {
 		return true
 	}
 	return *r.NotifyTools
+}
+
+// BusyIndicatorEnabled returns whether the remote busy indicator (Telegram's
+// "typing…" chat action while a turn runs) is enabled. Defaults to true.
+func (r *RemoteOversightConfig) BusyIndicatorEnabled() bool {
+	if r == nil || r.BusyIndicator == nil {
+		return true
+	}
+	return *r.BusyIndicator
 }
 
 // PermissionsConfig tunes how permission asks are answered (ADR-0052): the

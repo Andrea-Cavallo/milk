@@ -29,6 +29,13 @@ const (
 	// sendQueueSize bounds the outbound queue; the single worker goroutine
 	// drains it in FIFO order so multi-chunk messages arrive in order.
 	sendQueueSize = 256
+	// defaultBusyInterval re-sends the "typing…" chat action while a turn
+	// runs. Telegram chat actions expire after ~5s and are rate-limited to
+	// about one per 5s per chat, so stay just under both.
+	defaultBusyInterval = 4500 * time.Millisecond
+	// maxBusyBackoff caps the exponential send-failure backoff so a broken
+	// endpoint is retried at most once a minute.
+	maxBusyBackoff = time.Minute
 )
 
 // Config holds the Telegram-specific configuration.
@@ -38,6 +45,14 @@ type Config struct {
 	PermTimeout   time.Duration // how long AskPermission waits for a reply
 	TimeoutAction string        // "allow" or "deny" when PermTimeout expires
 	APIBase       string        // override for testing; defaults to https://api.telegram.org
+	// BusyIndicator engages sendChatAction("typing") while a turn runs
+	// (issue #284). Production wires it from remote_oversight.
+	// busy_indicator (default on); the zero value here is off so tests that
+	// don't ask for it see no extra requests.
+	BusyIndicator bool
+	// BusyInterval is the chat-action refresh period (0 →
+	// defaultBusyInterval). Tests shrink it to keep suites fast.
+	BusyInterval time.Duration
 }
 
 // Notifier sends notifications and forwards permission prompts via Telegram.
@@ -55,6 +70,16 @@ type Notifier struct {
 
 	outCh   chan string // outbound FIFO, drained by one worker goroutine
 	outOnce sync.Once
+
+	// busyLoop state (issue #284): depth-counted so overlapping turns keep
+	// the indicator alive until the last NotifyTurnDone; paused for the
+	// duration of a remote ask — while milk waits for the human the agent
+	// isn't working. Both hosts (TUI runTurn, ACP dispatch) and the
+	// workflow runner pair NotifyTurnStart/NotifyTurnDone on every path.
+	busyMu     sync.Mutex
+	busyDepth  int
+	busyCancel context.CancelFunc
+	busyPaused bool
 }
 
 // New creates a Notifier. Call StartPolling to begin receiving messages.
@@ -67,6 +92,9 @@ func New(cfg Config) *Notifier {
 	}
 	if cfg.TimeoutAction == "" {
 		cfg.TimeoutAction = "deny"
+	}
+	if cfg.BusyInterval <= 0 {
+		cfg.BusyInterval = defaultBusyInterval
 	}
 	return &Notifier{
 		cfg:    cfg,
@@ -178,10 +206,28 @@ func (n *Notifier) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (n *Notifier) NotifyTurnStart(_ context.Context, agent, target, prompt string) {
+// turnStartMessage renders the shared 🔄 turn-start notice.
+func turnStartMessage(agent, target, prompt string) string {
 	short := trimPreview(prompt, 117, "...")
-	msg := fmt.Sprintf("🔄 *%s* → %s\n`%s`", escMD(agent), escMD(target), escMD(short))
-	n.sendAsync(msg)
+	return fmt.Sprintf("🔄 *%s* → %s\n`%s`", escMD(agent), escMD(target), escMD(short))
+}
+
+// NotifyTurnStart relays the turn-start notice and engages the busy
+// indicator (issue #284): a "typing…" chat action re-sent every ~4.5s until
+// NotifyTurnDone. The indicator stops on its own when the turn context is
+// cancelled as well.
+func (n *Notifier) NotifyTurnStart(_ context.Context, agent, target, prompt string) {
+	n.sendAsync(turnStartMessage(agent, target, prompt))
+	n.startBusy()
+}
+
+// Announce sends a turn-start-style notice for events that are not turns
+// (startup, /setup confirmations): the same 🔄 message, without engaging
+// the busy indicator — no NotifyTurnDone ever follows these, so pairing
+// busy state with them would leave "typing…" running forever. cmd/milk
+// routes non-turn notices through notifyAnnouncement's optional interface.
+func (n *Notifier) Announce(agent, target, prompt string) {
+	n.sendAsync(turnStartMessage(agent, target, prompt))
 }
 
 func (n *Notifier) NotifyToolUse(_ context.Context, toolName, summary string) {
@@ -209,9 +255,139 @@ func (n *Notifier) NotifyToolResult(_ context.Context, toolName, summary string,
 }
 
 func (n *Notifier) NotifyTurnDone(_ context.Context, agent string, err error) {
+	n.stopBusy()
 	if err != nil {
 		n.sendAsync(fmt.Sprintf("❌ *%s* error: `%s`", escMD(agent), escMD(err.Error())))
 	}
+}
+
+// --- busy indicator (issue #284) ---
+
+// startBusy counts a turn in flight and, when this is the first one, spawns
+// the chat-action loop. Idempotent when the indicator is disabled.
+func (n *Notifier) startBusy() {
+	if !n.cfg.BusyIndicator {
+		return
+	}
+	n.busyMu.Lock()
+	defer n.busyMu.Unlock()
+	n.busyDepth++
+	if n.busyDepth == 1 {
+		ctx, cancel := context.WithCancel(context.Background())
+		n.busyCancel = cancel
+		go n.busyLoop(ctx)
+	}
+}
+
+// stopBusy counts a finished turn; the loop stops when the last one ends.
+// Unbalanced calls (never started) are ignored.
+func (n *Notifier) stopBusy() {
+	n.busyMu.Lock()
+	defer n.busyMu.Unlock()
+	if n.busyDepth > 0 {
+		n.busyDepth--
+	}
+	if n.busyDepth == 0 && n.busyCancel != nil {
+		n.busyCancel()
+		n.busyCancel = nil
+	}
+}
+
+// pauseBusy suspends chat-action sends for the duration of a remote ask;
+// resumeBusy re-arms them (both are no-ops when the loop isn't running).
+func (n *Notifier) pauseBusy() {
+	n.busyMu.Lock()
+	n.busyPaused = true
+	n.busyMu.Unlock()
+}
+
+func (n *Notifier) resumeBusy() {
+	n.busyMu.Lock()
+	n.busyPaused = false
+	n.busyMu.Unlock()
+}
+
+func (n *Notifier) busyIsPaused() bool {
+	n.busyMu.Lock()
+	defer n.busyMu.Unlock()
+	return n.busyPaused
+}
+
+// Chat-action send outcomes for busyLoop's backoff bookkeeping.
+const (
+	typingOK          = iota
+	typingRateLimited // 429: retry after the server's retry_after
+	typingFailed      // transport or API error: exponential backoff
+)
+
+// busyLoop keeps the chat action alive while a turn runs: one send
+// immediately, then every BusyInterval (chat actions expire after ~5s).
+// It exits when stopBusy cancels the context — depth zero.
+func (n *Notifier) busyLoop(ctx context.Context) {
+	interval := n.cfg.BusyInterval
+	fails := 0
+	next := time.Duration(0) // first action immediately
+	for {
+		if next > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(next):
+			}
+		}
+		next = interval
+		if n.busyIsPaused() {
+			fails = 0
+			continue
+		}
+		state, retry := n.sendTyping(ctx)
+		switch state {
+		case typingOK:
+			fails = 0
+		case typingRateLimited:
+			if retry > next {
+				next = retry
+			}
+		case typingFailed:
+			fails++
+			backoff := interval
+			for i := 1; i < fails && backoff < maxBusyBackoff; i++ {
+				backoff *= 2
+			}
+			if backoff > maxBusyBackoff {
+				backoff = maxBusyBackoff
+			}
+			if backoff > next {
+				next = backoff
+			}
+		}
+	}
+}
+
+// sendTyping issues one sendChatAction("typing"). Returns the outcome plus,
+// for a rate limit, how long Telegram asked us to wait (≥ 0).
+func (n *Notifier) sendTyping(ctx context.Context) (int, time.Duration) {
+	params := url.Values{
+		"chat_id": []string{strconv.FormatInt(n.cfg.ChatID, 10)},
+		"action":  []string{"typing"},
+	}
+	var res struct {
+		OK         bool `json:"ok"`
+		ErrorCode  int  `json:"error_code"`
+		Parameters struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
+	}
+	if err := n.apiGet(ctx, "sendChatAction", params, &res); err != nil {
+		return typingFailed, 0
+	}
+	if res.OK {
+		return typingOK, 0
+	}
+	if res.ErrorCode == 429 && res.Parameters.RetryAfter > 0 {
+		return typingRateLimited, time.Duration(res.Parameters.RetryAfter) * time.Second
+	}
+	return typingFailed, 0
 }
 
 // NotifyResponse relays the agent's response in full. Text longer than one
@@ -246,6 +422,10 @@ func (n *Notifier) NotifyResponse(_ context.Context, agent, text string) {
 // decides whether that resolves the ask (foreground) or keeps it open until
 // its own deadline (background asks — see ADR-0052).
 func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest) (oversight.PermDecision, bool) {
+	// No "typing…" while waiting on the human — the agent isn't working.
+	n.pauseBusy()
+	defer n.resumeBusy()
+
 	lines := []string{fmt.Sprintf("🔐 Permission request — *%s*", escMD(req.ToolName))}
 	if req.Input != "" {
 		lines = append(lines, fmt.Sprintf("`%s`", escMD(req.Input)))
@@ -305,6 +485,11 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 // surfaces or the timed answer — unlike permissions, questions have no
 // timeout action.
 func (n *Notifier) AskInput(ctx context.Context, req oversight.InputRequest) (string, bool) {
+	// Same as AskPermission: the indicator must say "waiting for the human",
+	// not "typing…", for the whole ask.
+	n.pauseBusy()
+	defer n.resumeBusy()
+
 	lines := []string{fmt.Sprintf("❓ *%s*", escMD(req.Question))}
 	if len(req.Options) > 0 {
 		opts := make([]string, len(req.Options))
