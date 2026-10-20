@@ -23,12 +23,22 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/scoutme/milk/internal/obs"
 	"github.com/scoutme/milk/internal/textbudget"
 	"github.com/scoutme/milk/internal/workflow"
 	"github.com/scoutme/milk/internal/workflow/board"
 )
+
+// errString renders an error for a log attribute ("" for nil).
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
 
 // ExhaustedError is returned when an iteration-bounded loop stage retries
 // MaxIterations times without its body reporting "break". Mirrors dev.go's
@@ -137,7 +147,7 @@ func (r *Runner) Run(ctx context.Context, cfg workflow.RunConfig) error {
 			return err
 		}
 	}
-	ec := &execContext{ctx: ctx, cfg: cfg, vars: vars, replay: trace, maxIterOverrides: r.maxIterOverrides, defName: r.Def.Name, active: newActivePathTracker(), activePathID: 0, progressSend: cfg.Send, board: sharedBoard}
+	ec := &execContext{ctx: ctx, cfg: cfg, vars: vars, replay: trace, maxIterOverrides: r.maxIterOverrides, defName: r.Def.Name, active: newActivePathTracker(snapshotRoot(r.Def.Stages)), activePathID: 0, progressSend: cfg.Send, board: sharedBoard}
 	if r.checkpointPath != "" {
 		liveTrace := append([]TraceEntry{}, trace...)
 		ec.onLeafComplete = func(e TraceEntry) {
@@ -151,7 +161,14 @@ func (r *Runner) Run(ctx context.Context, cfg workflow.RunConfig) error {
 		}
 	}
 
+	runStart := time.Now()
+	obs.Info("workflow.run.start", ec.logAttrs("stages", len(r.Def.Stages), "resumed_entries", len(trace), "board", r.Def.Board)...)
 	_, err := executeStages(ec, r.Def.Stages)
+	if err != nil {
+		obs.Warn("workflow.run.error", ec.logAttrs("elapsed_ms", time.Since(runStart).Milliseconds(), "err", err.Error())...)
+	} else {
+		obs.Info("workflow.run.done", ec.logAttrs("elapsed_ms", time.Since(runStart).Milliseconds())...)
+	}
 	if err == nil && r.checkpointPath != "" {
 		final, loadErr := LoadCheckpoint(r.checkpointPath)
 		if loadErr != nil || final == nil {
@@ -213,14 +230,37 @@ type execContext struct {
 }
 
 type activePathTracker struct {
+	// root, when set, prefixes every reported path so the active and
+	// completed snapshots share the static stage tree's root (see
+	// snapshotRoot).
+	root      string
 	mu        sync.Mutex
 	nextID    int
 	paths     map[int][]string
 	completed [][]string
 }
 
-func newActivePathTracker() *activePathTracker {
-	return &activePathTracker{paths: map[int][]string{0: {}}}
+func newActivePathTracker(root string) *activePathTracker {
+	return &activePathTracker{root: root, paths: map[int][]string{0: {}}}
+}
+
+// snapshotRootLabel is the synthetic root label the panel's static stage tree
+// gives a definition with several top-level stages.
+const snapshotRootLabel = "workflow"
+
+// snapshotRoot returns the label every path snapshot of a run over stages is
+// rooted at: the synthetic "workflow" container when there are several
+// top-level stages (matching the static tree a host builds from the
+// definition), none when a single stage is its own root. Without it the
+// snapshots took whatever shape their own paths implied — a completed tree
+// holding both the designer and the pass loop was rooted "workflow" while the
+// active tree, holding only the pass loop, was rooted at the loop — so hosts
+// matching by path from the root lost the active branch entirely.
+func snapshotRoot(stages []workflow.Stage) string {
+	if len(stages) == 1 {
+		return ""
+	}
+	return snapshotRootLabel
 }
 
 // pushPath appends a segment to the shared activePaths list.
@@ -305,19 +345,22 @@ func (ec *execContext) completedPathSnapshot() [][]string {
 // buildPathTree constructs a PathSnapshot from the current activePaths.
 // Concurrent siblings under a parallel group each form their own branch.
 func (ec *execContext) buildPathTree() *workflow.PathSnapshot {
-	return pathSnapshotFromPaths(ec.activePathSnapshot())
+	return pathSnapshotFromPaths(ec.active.root, ec.activePathSnapshot())
 }
 
 func (ec *execContext) buildCompletedPathTree() *workflow.PathSnapshot {
-	return pathSnapshotFromPaths(ec.completedPathSnapshot())
+	return pathSnapshotFromPaths(ec.active.root, ec.completedPathSnapshot())
 }
 
-func pathSnapshotFromPaths(paths [][]string) *workflow.PathSnapshot {
+func pathSnapshotFromPaths(rootLabel string, paths [][]string) *workflow.PathSnapshot {
 	if len(paths) == 0 {
 		return nil
 	}
 	var root *workflow.StageNode
 	for _, path := range paths {
+		if rootLabel != "" {
+			path = append([]string{rootLabel}, path...)
+		}
 		root = insertPath(root, path)
 	}
 	return &workflow.PathSnapshot{Root: root}
@@ -370,6 +413,17 @@ func insertPath(root *workflow.StageNode, path []string) *workflow.StageNode {
 	return root
 }
 
+// logAttrs are the attributes every workflow log line carries: the
+// definition, the parallel_group item this context belongs to (if any) and any
+// extra key/values.
+func (ec *execContext) logAttrs(kv ...any) []any {
+	attrs := []any{"workflow", ec.defName}
+	if ec.itemToken != "" {
+		attrs = append(attrs, "item", ec.itemToken)
+	}
+	return append(attrs, kv...)
+}
+
 // reportProgress sends a workflow.ProgressMsg reflecting the current
 // activePaths tree and the role about to run (or "" if none — e.g. a
 // user_checkpoint pause, or a parallel_group announcing its own start).
@@ -381,6 +435,7 @@ func (ec *execContext) reportProgress(role string) {
 		return
 	}
 	task, _ := ec.vars["task"].(string)
+	obs.Debug("workflow.progress", ec.logAttrs("role", role, "active_paths", len(ec.activePathSnapshot()), "completed_paths", len(ec.completedPathSnapshot()))...)
 	ec.progressSend(workflow.ProgressMsg{
 		WorkflowName:   ec.defName,
 		Task:           task,
@@ -580,10 +635,14 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 		}
 		turnCtx = board.WithIdentity(board.With(turnCtx, ec.board), identity)
 	}
+	turnStart := time.Now()
+	obs.Debug("workflow.stage.start", ec.logAttrs("stage", s.ID, "role", s.Role, "runner", runner.Name(), "prompt_chars", len(prompt))...)
 	out, err := workflow.Turn(turnCtx, runner, prompt, ec.cfg.Send)
 	if err != nil {
+		obs.Warn("workflow.stage.error", ec.logAttrs("stage", s.ID, "role", s.Role, "elapsed_ms", time.Since(turnStart).Milliseconds(), "err", err.Error())...)
 		return "", fmt.Errorf("workflow: stage %q: %w", s.ID, err)
 	}
+	obs.Debug("workflow.stage.done", ec.logAttrs("stage", s.ID, "role", s.Role, "elapsed_ms", time.Since(turnStart).Milliseconds(), "output_chars", len(out))...)
 
 	// Budget exhaustion (checked first — see isBudgetExhaustedTurn's doc
 	// comment for why it must precede isTerminatedTurn): the step simply
@@ -825,10 +884,12 @@ func execBoundedLoop(ec *execContext, s workflow.Stage) (string, error) {
 			ec.vars[s.IterationVar] = iter
 		}
 		ec.pushPath(fmt.Sprintf("%s[%d]", s.ID, iter))
+		obs.Debug("workflow.loop.iteration", ec.logAttrs("stage", s.ID, "iteration", iter, "of", maxIter)...)
 		outcome, err := executeStages(ec, s.Body)
 		ec.completeActivePath()
 		ec.reportProgress("")
 		ec.popPath()
+		obs.Debug("workflow.loop.outcome", ec.logAttrs("stage", s.ID, "iteration", iter, "of", maxIter, "outcome", outcome, "err", errString(err))...)
 		if err != nil {
 			return "", err
 		}
@@ -898,8 +959,14 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 		}
 	}
 	note("\n[%s: %d %ss, up to %d at a time — workers run without live output]\n", s.ID, len(sections), label, maxConcurrency)
+	obs.Info("workflow.fanout.start", ec.logAttrs("stage", s.ID, "items", len(sections), "waves", len(waves), "max_concurrency", maxConcurrency)...)
 
-	for _, wave := range waves {
+	for waveIdx, wave := range waves {
+		indexes := make([]int, len(wave))
+		for i, sec := range wave {
+			indexes[i] = sec.Index
+		}
+		obs.Info("workflow.fanout.wave", ec.logAttrs("stage", s.ID, "wave", waveIdx+1, "of", len(waves), "items", fmt.Sprint(indexes))...)
 		sem := make(chan struct{}, maxConcurrency)
 		var wg sync.WaitGroup
 		for _, sec := range wave {
@@ -944,6 +1011,8 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 				defer itemEC.removeActivePath()
 				itemEC.pushPath(fmt.Sprintf("%s %s[%d]", s.ID, label, sec.Index))
 				note("[%s %d] started\n", label, sec.Index)
+				itemStart := time.Now()
+				obs.Info("workflow.item.start", itemEC.logAttrs("stage", s.ID)...)
 				outcome, err := executeStages(itemEC, s.Body)
 				r := ItemResult{Index: sec.Index, Label: sec.Label, Status: outcome}
 				if lastSaveAs := lastSaveAsOf(s.Body); lastSaveAs != "" {
@@ -955,8 +1024,10 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 					r.Status = "error"
 					r.Err = err.Error()
 					note("[%s %d] failed: %s\n", label, sec.Index, textbudget.SummarizeLong(r.Err, 200))
+					obs.Warn("workflow.item.failed", itemEC.logAttrs("stage", s.ID, "elapsed_ms", time.Since(itemStart).Milliseconds(), "err", r.Err)...)
 				} else {
 					note("[%s %d] done\n", label, sec.Index)
+					obs.Info("workflow.item.done", itemEC.logAttrs("stage", s.ID, "outcome", outcome, "elapsed_ms", time.Since(itemStart).Milliseconds())...)
 				}
 				itemEC.completeActivePath()
 				itemEC.reportProgress("")
