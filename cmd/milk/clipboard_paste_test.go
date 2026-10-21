@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -123,6 +124,7 @@ func TestSaveClipboardTemp_WritesAndReturnsPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("saveClipboardTemp: %v", err)
 	}
+	t.Cleanup(func() { os.Remove(path) })
 	// Verify extension.
 	if !strings.HasSuffix(path, ".png") {
 		t.Errorf("expected .png suffix, got %q", path)
@@ -146,6 +148,7 @@ func TestSaveClipboardTemp_PDFExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("saveClipboardTemp: %v", err)
 	}
+	t.Cleanup(func() { os.Remove(path) })
 	if !strings.HasSuffix(path, ".pdf") {
 		t.Errorf("expected .pdf suffix, got %q", path)
 	}
@@ -157,6 +160,7 @@ func TestSaveClipboardTemp_UnknownMIMEGetsBinExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("saveClipboardTemp: %v", err)
 	}
+	t.Cleanup(func() { os.Remove(path) })
 	if !strings.HasSuffix(path, ".bin") {
 		t.Errorf("expected .bin suffix for octet-stream, got %q", path)
 	}

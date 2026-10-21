@@ -87,8 +87,12 @@ func (r *workflowTurnRunner) Run(ctx context.Context, prompt string, out io.Writ
 	// First-turn attachment injection: the task text already references the
 	// staged files by path (attachmentTaskBlock), but that alone leaves a
 	// vision-capable role unable to *see* an image without tool calls. Inject
-	// the payload once, on this role's first turn — subsequent turns carry it
-	// in the role's persisted history.
+	// the payload once, on this role's first turn. Later turns do NOT carry
+	// it — message content parts are never persisted (ContentParts is
+	// json:"-"), so this is a deliberate cost tradeoff: the image rides one
+	// turn, and afterwards the role works from the task block's file
+	// references (CLI roles can re-read the file via @path/tool use; a local
+	// role keeps whatever it saw in its context window).
 	runPrompt := prompt
 	if !r.attachmentsInjected {
 		r.attachmentsInjected = true

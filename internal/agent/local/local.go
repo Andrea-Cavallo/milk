@@ -95,6 +95,24 @@ type ContentPart struct {
 // ImageURLPart is the payload of a ContentPart with type "image_url".
 type ImageURLPart struct {
 	URL string `json:"url"`
+	// Detail is OpenAI's optional image-detail hint ("low" | "high" |
+	// "auto"). Empty omits it — the provider picks its default.
+	Detail string `json:"detail,omitempty"`
+}
+
+// parseImageDataURL splits an image_url value of the form
+// "data:<mime>;base64,<payload>" into its MIME type and base64 payload.
+// ok is false for anything else (a http(s) URL, a malformed URI).
+func parseImageDataURL(url string) (mime, b64 string, ok bool) {
+	rest, found := strings.CutPrefix(url, "data:")
+	if !found {
+		return "", "", false
+	}
+	mime, b64, found = strings.Cut(rest, ";base64,")
+	if !found || mime == "" || b64 == "" {
+		return "", "", false
+	}
+	return mime, b64, true
 }
 
 // Message is the wire format for an OpenAI-compatible chat message.
@@ -2619,10 +2637,19 @@ func (a *Agent) RunBackgroundTask(ctx context.Context, jobID string, inbox chan 
 			Content: "[Context from the agent that spawned you — its own recent activity, for extra background beyond the task below]\n" + contextSummary,
 		})
 	}
-	msgs = append(msgs, Message{Role: "user", Content: task})
+	userMsg := Message{Role: "user", Content: task}
+	// Images the spawner attached ride the job's first message as multipart
+	// vision parts — a user-spawned job used to silently ignore them. The
+	// vision gate below (via runToolLoop) treats them exactly like a turn's.
+	userImages, _ := ImagePartsFromContext(ctx)
+	if len(userImages) > 0 {
+		userMsg.Content = ""
+		userMsg.ContentParts = append([]ContentPart{{Type: "text", Text: task}}, userImages...)
+	}
+	msgs = append(msgs, userMsg)
 	userMsgIdx := len(msgs) - 1
 
-	resultMsgs, err := bg.runToolLoop(ctx, msgs, tools, out, bgSess, mem, task, userMsgIdx, nil, nil)
+	resultMsgs, err := bg.runToolLoop(ctx, msgs, tools, out, bgSess, mem, task, userMsgIdx, userImages, nil)
 	if err != nil {
 		// Preserve partial work: resultMsgs holds the whole tool trajectory
 		// up to the failure. Returning its best answer (instead of "") keeps
@@ -2739,6 +2766,11 @@ func (a *Agent) cloneForBackground() *Agent {
 		maxPayloadBytes: a.maxPayloadBytes,
 		promptCaching:   a.promptCaching,
 		postEditCommand: a.postEditCommand,
+		// supportsVision is stable config (AgentConfig.Vision); without it the
+		// clone's vision gate misfired — a background job with image parts
+		// always took the "not configured for vision" drop branch, with a
+		// notice that blamed the wrong configuration.
+		supportsVision: a.supportsVision,
 		// Resolve the memory-visibility consumer now: a background job is a
 		// fork of the spawning agent and sees the same percepts it does
 		// (issue #172).
@@ -3867,6 +3899,15 @@ func messagesContentBytes(msgs []Message) int {
 	n := 0
 	for _, m := range msgs {
 		n += len(m.Content)
+		// ContentParts carry the payload bytes too (base64 data URIs for
+		// images) — counting them as zero made the proactive compaction gate
+		// blind to image bloat in a turn's tool results.
+		for _, p := range m.ContentParts {
+			n += len(p.Text)
+			if p.ImageURL != nil {
+				n += len(p.ImageURL.URL)
+			}
+		}
 	}
 	return n
 }
@@ -3960,13 +4001,112 @@ func (a *Agent) compactForPayloadSize(ctx context.Context, sess *session.Session
 }
 
 // imageRetryAttempts caps how many times streamCompletion retries a request
-// containing an image when the response indicates the backend didn't
-// actually process it (usage.prompt_tokens_details.image_tokens missing/0).
-// Observed live against xiaomimimo's mimo-v2.5: a byte-identical replay of a
-// request that silently dropped the image succeeded immediately — this is
-// backend flakiness, not a deterministic per-request failure, so a small
-// retry count clears it in practice without masking a persistent problem.
+// containing an image when the response carries positive evidence that the
+// backend didn't process it: usage.prompt_tokens_details present (the backend
+// does report image accounting) but image_tokens missing/0. A response with
+// no prompt_tokens_details at all is *not* evidence of a drop — most
+// OpenAI-compatible servers never report image accounting — and is accepted
+// as-is; replaying every image request up to three times against such servers
+// was pure cost and latency for nothing. Observed live against xiaomimimo's
+// mimo-v2.5: a byte-identical replay of a request that silently dropped the
+// image succeeded immediately — this is backend flakiness, not a
+// deterministic per-request failure, so a small retry count clears it in
+// practice without masking a persistent problem.
 const imageRetryAttempts = 3
+
+// imageUsageDropped reports whether an attempt's usage carries the positive
+// drop evidence described on imageRetryAttempts. imageTokens is -1 when the
+// backend reported no prompt_tokens_details at all (unknown — never a drop),
+// and >= 0 when it did (0 being the drop signal).
+func imageUsageDropped(imageTokens int64) bool { return imageTokens == 0 }
+
+// imageDropNotice is surfaced (live output + response text) when an
+// image-bearing request's returned response still carries drop evidence after
+// the retry budget — the model almost certainly never processed the
+// attachment and its "I don't see an image" non-answer should not stand
+// unexplained.
+const imageDropNotice = "[milk] the backend reported no image processing for the attached image(s) — the model most likely never saw them. Its answer above may not address the attachment."
+
+// imageRejectedNotice is surfaced (live output + response text) when the
+// backend rejects image input outright and the turn is retried without the
+// attachment(s) — the answer comes back, but the image does not.
+const imageRejectedNotice = "[milk] the backend rejected image input — the turn was retried without the attached image(s), so the model did not see them. Set \"vision\": true only on agents whose endpoint actually accepts images."
+
+// imageInputRejectionMarkers are the error fingerprints OpenAI-compatible
+// backends use when an image_url content part is unacceptable to them — an
+// endpoint without multimodal support, a text-only model behind a mis-set
+// "vision": true, a proxy with image input disabled. Matched
+// case-insensitively against the error text; a false positive costs exactly
+// one stripped retry (which then fails with the same error and is returned).
+var imageInputRejectionMarkers = []string{
+	"image input",
+	"image_url",
+	"image content",
+	"does not support image",
+	"doesn't support image",
+	"do not support image",
+	"not support images",
+	"images are not supported",
+	"no endpoints found that support image",
+	"invalid content part",
+	"input type image",
+}
+
+// isImageInputRejection reports whether err is the backend refusing image
+// input (see imageInputRejectionMarkers).
+func isImageInputRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range imageInputRejectionMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripImageParts removes image_url content parts from every message in
+// place — msgs shares its backing array with runToolLoop, so the turn's later
+// iterations go image-free too and never re-hit the rejection. Text parts are
+// folded back into Content (the multipart form exists only to carry the
+// images); a message left with nothing carries a one-line placeholder so the
+// conversation shape survives.
+func stripImageParts(msgs []Message) {
+	for i := range msgs {
+		m := &msgs[i]
+		if len(m.ContentParts) == 0 {
+			continue
+		}
+		var kept []ContentPart
+		var folded string
+		images := 0
+		for _, p := range m.ContentParts {
+			if p.Type == "image_url" {
+				images++
+				continue
+			}
+			if p.Type == "text" {
+				folded += p.Text
+				continue
+			}
+			kept = append(kept, p)
+		}
+		if images == 0 {
+			continue
+		}
+		if folded != "" {
+			if m.Content != "" {
+				m.Content += "\n"
+			}
+			m.Content += folded
+		} else if len(kept) == 0 && m.Content == "" {
+			m.Content = "[image attachment removed: the backend does not accept image input]"
+		}
+		m.ContentParts = kept
+	}
+}
 
 // messagesContainImage reports whether any message carries an image_url
 // content part — used to decide whether streamCompletion's image-drop retry
@@ -3990,13 +4130,14 @@ func messagesContainImage(msgs []Message) bool {
 // When msgs contains an image, the backend has been observed (live, against
 // xiaomimimo's mimo-v2.5) to sometimes accept a well-formed image_url part
 // and respond as if no image were given at all — no error, just a silent
-// drop, detectable only via the absence of usage.prompt_tokens_details.
-// image_tokens in the response. A byte-identical replay of the same failing
+// drop, detectable when the response's usage.prompt_tokens_details is present
+// but reports zero image tokens. A byte-identical replay of the same failing
 // request succeeded, confirming this is backend flakiness rather than
 // something wrong with the request itself. For image-bearing requests only,
 // each non-final attempt is buffered rather than streamed live to out: if the
 // backend dropped the image, the user must never see the resulting
-// non-answer, only the eventually-accepted response.
+// non-answer, only the eventually-accepted response. Exactly one attempt —
+// the one whose response is returned — is charged to token accounting.
 // userMsgIdx is the index of the message that started the current turn (see
 // runToolLoop) — passed through so a pre-flight payload-size trim never
 // discards it; see dropOldestDroppableUnit's doc comment for why that
@@ -4008,15 +4149,47 @@ func (a *Agent) streamCompletion(ctx context.Context, msgs []Message, tools []ma
 	if a.useResponsesAPI {
 		return a.responsesStreamCompletion(ctx, msgs, tools, out)
 	}
+	text, fallbackRaw, tcs, emptyFallback, reasoningText, err := a.streamCompletionLoop(ctx, msgs, tools, out, userMsgIdx)
+	if err == nil || !messagesContainImage(msgs) || !isImageInputRejection(err) {
+		return text, fallbackRaw, tcs, emptyFallback, reasoningText, err
+	}
+	// Graceful degradation: the endpoint rejected image input outright — a
+	// mis-set "vision": true or a server without multimodal support. Rather
+	// than fail the turn, drop the image parts and ask again; the user keeps
+	// an answer and a notice explains the attachment was lost. This is the
+	// one retry whose trigger is an explicit error, not usage accounting.
+	a.logWarn("backend rejected image input; retrying without images",
+		"model", a.model, "error", err)
+	stripImageParts(msgs)
+	fmt.Fprintln(out, "\n"+imageRejectedNotice)
+	text, fallbackRaw, tcs, emptyFallback, reasoningText, err = a.streamCompletionLoop(ctx, msgs, tools, out, userMsgIdx)
+	if err != nil {
+		return "", "", nil, false, "", err
+	}
+	return text + "\n\n" + imageRejectedNotice, fallbackRaw, tcs, emptyFallback, reasoningText, nil
+}
+
+// streamCompletionLoop is streamCompletion's chat-completions attempt loop
+// (the image-drop retry budget); streamCompletion wraps it with the
+// image-rejection degradation.
+func (a *Agent) streamCompletionLoop(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, userMsgIdx int) (string, string, []toolCall, bool, string, error) {
 	maxAttempts := 1
 	if messagesContainImage(msgs) {
 		maxAttempts = imageRetryAttempts
 	}
-	var (
+	// One seed for the whole retry budget: a replay is then byte-identical
+	// to the request the backend dropped (the property the retry relies on),
+	// instead of a differently-sampled near-copy.
+	seed := time.Now().UnixNano()
+	type attemptResult struct {
 		text, fallbackRaw, reasoningText string
 		tcs                              []toolCall
 		emptyFallback                    bool
-	)
+		buf                              *bytes.Buffer // the response as streamed to the buffered attempt's writer
+		usage                            usageReport
+		imageTokens                      int64
+	}
+	var last *attemptResult
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		final := attempt == maxAttempts
 		attemptOut := out
@@ -4025,28 +4198,110 @@ func (a *Agent) streamCompletion(ctx context.Context, msgs []Message, tools []ma
 			buf = &bytes.Buffer{}
 			attemptOut = buf
 		}
-		t, fr, tc, ef, rt, imageTokens, err := a.streamCompletionOnce(ctx, msgs, tools, attemptOut, userMsgIdx)
+		var usage usageReport
+		t, fr, tc, ef, rt, imageTokens, err := a.streamCompletionOnce(ctx, msgs, tools, attemptOut, userMsgIdx, seed, &usage)
 		if err != nil {
-			return "", "", nil, false, "", err
+			// A later attempt's transport error must not throw away an
+			// earlier attempt's buffered response — it is at worst the same
+			// non-answer a persistent drop would have produced.
+			if last == nil {
+				return "", "", nil, false, "", err
+			}
+			a.logWarn("image retry attempt errored; falling back to the previous attempt's buffered response",
+				"model", a.model, "attempt", attempt, "error", err)
+			if last.buf != nil {
+				io.Copy(out, last.buf) //nolint:errcheck
+			}
+			a.recordUsage(ctx, last.usage)
+			text := last.text
+			if imageUsageDropped(last.imageTokens) {
+				fmt.Fprintln(out, "\n"+imageDropNotice)
+				text += "\n\n" + imageDropNotice
+			}
+			return text, last.fallbackRaw, last.tcs, last.emptyFallback, last.reasoningText, nil
 		}
-		text, fallbackRaw, tcs, emptyFallback, reasoningText = t, fr, tc, ef, rt
-		if final || imageTokens > 0 {
+		last = &attemptResult{text: t, fallbackRaw: fr, tcs: tc, emptyFallback: ef, reasoningText: rt, buf: buf, usage: usage, imageTokens: imageTokens}
+		if final || !imageUsageDropped(imageTokens) {
 			if buf != nil {
 				io.Copy(out, buf) //nolint:errcheck
 			}
-			return text, fallbackRaw, tcs, emptyFallback, reasoningText, nil
+			a.recordUsage(ctx, usage)
+			text := t
+			if imageUsageDropped(imageTokens) {
+				// Returned response still carries drop evidence after the
+				// retry budget — surface the notice instead of letting the
+				// non-answer stand unexplained.
+				fmt.Fprintln(out, "\n"+imageDropNotice)
+				text += "\n\n" + imageDropNotice
+			}
+			return text, fr, tc, ef, rt, nil
 		}
 		a.logWarn("image request returned no image_tokens usage — backend likely dropped the image, retrying",
 			"model", a.model, "attempt", attempt, "max_attempts", maxAttempts)
 	}
-	return text, fallbackRaw, tcs, emptyFallback, reasoningText, nil
+	// Unreachable: the final attempt always returns above.
+	return last.text, last.fallbackRaw, last.tcs, last.emptyFallback, last.reasoningText, nil
+}
+
+// usageReport is one completion attempt's provider-reported token usage,
+// carried out of streamCompletionOnce so streamCompletion can charge exactly
+// one attempt — the one whose response is returned. A discarded image-drop
+// retry attempt cost real tokens upstream but must never inflate milk's own
+// accounting.
+type usageReport struct {
+	promptTokens     int64
+	completionTokens int64
+	cacheRead        int64
+	timing           StreamTiming
+}
+
+// recordUsage charges one accepted completion response to obs and the
+// caller's token callback — the accounting block streamCompletionOnce used to
+// inline. It runs exactly once per returned response (see streamCompletion).
+func (a *Agent) recordUsage(ctx context.Context, u usageReport) {
+	role := a.usageRole(ctx)
+	// OpenAI-compatible automatic caching (mirrored by providers such as MiMo)
+	// reports prompt_tokens as the TOTAL input including cached tokens — cacheRead
+	// is a subset of promptTokens, not additive to it. Every downstream consumer
+	// (session, obs, status bar, memory panel) assumes the Anthropic-style
+	// additive convention instead: prompt(fresh) + cacheRead + cacheCreation ==
+	// total input. Subtract here, once, so that invariant holds regardless of
+	// which provider produced the numbers.
+	freshPrompt := max(u.promptTokens-u.cacheRead, 0)
+	// Background-job clones record their token totals once, complete, at
+	// drain time under "<role>:subagent" (see cmd/milk's drainBackgroundJobs).
+	// Also recording per-request here would double-count them in
+	// metrics.jsonl — and did, before this guard, mis-tag them as the
+	// parent role's turns.
+	if a.jobID == "" {
+		obs.RecordTokens(ctx, a.model, role, freshPrompt, u.completionTokens)
+		obs.RecordTiming(ctx, a.model, role, u.timing.TTFT, u.timing.Decode)
+		// Cache tokens occupy context-window space and were never accumulated
+		// into obs for local providers (only cliRunner's turn-end dispatch did),
+		// leaving the cache side of every consumer (ctx:x/y, cache:NN%) at 0.
+		obs.AccumulateCacheTokens(a.model, role, u.cacheRead, 0)
+		// Single-request input size for the ctx:x/y indicator — this request's
+		// total input (fresh + cached), not the turn's summed consumption.
+		// Keyed by logRole(), so tool-agent/workflow/job clones land in their
+		// own buckets and never inflate the parent conversation's size.
+		obs.RecordRequestInput(role, freshPrompt+u.cacheRead)
+	}
+	if a.onTokens != nil {
+		// cacheCreation is always 0 here: OpenAI-compatible automatic caching
+		// (mirrored by other providers such as MiMo) reports cache-read hits via
+		// prompt_tokens_details.cached_tokens but never a write/creation size.
+		a.onTokens(a.model, role, freshPrompt, u.completionTokens, u.cacheRead, 0, u.timing)
+	}
 }
 
 // streamCompletionOnce is the actual single-attempt request/stream/parse
 // implementation streamCompletion loops over. imageTokens is
-// usage.prompt_tokens_details.image_tokens from the final usage chunk — see
-// streamCompletion's doc comment for why callers care.
-func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, userMsgIdx int) (string, string, []toolCall, bool, string, int64, error) {
+// usage.prompt_tokens_details.image_tokens from the final usage chunk (-1
+// when the backend reports no prompt_tokens_details at all) — see
+// streamCompletion's doc comment for why callers care. usage is filled but
+// never charged here: streamCompletion calls recordUsage exactly once, for the
+// attempt whose response it returns.
+func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, userMsgIdx int, seed int64, usage *usageReport) (string, string, []toolCall, bool, string, int64, error) {
 	req := chatRequest{
 		Model:    a.model,
 		Messages: msgs,
@@ -4056,7 +4311,7 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 			IncludeUsage bool `json:"include_usage"`
 		}{IncludeUsage: true},
 		Temperature: 1.0,
-		Seed:        time.Now().UnixNano(),
+		Seed:        seed,
 	}
 
 	body, err := json.Marshal(req)
@@ -4242,38 +4497,7 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 		attribute.String("agent", role),
 		attribute.String("provider", "local"),
 	)
-	// OpenAI-compatible automatic caching (mirrored by providers such as MiMo)
-	// reports prompt_tokens as the TOTAL input including cached tokens — cacheRead
-	// is a subset of promptTokens, not additive to it. Every downstream consumer
-	// (session, obs, status bar, memory panel) assumes the Anthropic-style
-	// additive convention instead: prompt(fresh) + cacheRead + cacheCreation ==
-	// total input. Subtract here, once, so that invariant holds regardless of
-	// which provider produced the numbers.
-	freshPrompt := max(promptTokens-cacheRead, 0)
-	// Background-job clones record their token totals once, complete, at
-	// drain time under "<role>:subagent" (see cmd/milk's drainBackgroundJobs).
-	// Also recording per-request here would double-count them in
-	// metrics.jsonl — and did, before this guard, mis-tag them as the
-	// parent role's turns.
-	if a.jobID == "" {
-		obs.RecordTokens(ctx, a.model, role, freshPrompt, completionTokens)
-		obs.RecordTiming(ctx, a.model, role, timing.TTFT, timing.Decode)
-		// Cache tokens occupy context-window space and were never accumulated
-		// into obs for local providers (only cliRunner's turn-end dispatch did),
-		// leaving the cache side of every consumer (ctx:x/y, cache:NN%) at 0.
-		obs.AccumulateCacheTokens(a.model, role, cacheRead, 0)
-		// Single-request input size for the ctx:x/y indicator — this request's
-		// total input (fresh + cached), not the turn's summed consumption.
-		// Keyed by logRole(), so tool-agent/workflow/job clones land in their
-		// own buckets and never inflate the parent conversation's size.
-		obs.RecordRequestInput(role, freshPrompt+cacheRead)
-	}
-	if a.onTokens != nil {
-		// cacheCreation is always 0 here: OpenAI-compatible automatic caching
-		// (mirrored by other providers such as MiMo) reports cache-read hits via
-		// prompt_tokens_details.cached_tokens but never a write/creation size.
-		a.onTokens(a.model, role, freshPrompt, completionTokens, cacheRead, 0, timing)
-	}
+	*usage = usageReport{promptTokens: promptTokens, completionTokens: completionTokens, cacheRead: cacheRead, timing: timing}
 
 	if det.Format != ToolFormatUnknown {
 		a.detectedFormat = det.Format
@@ -4394,11 +4618,12 @@ func (a *Agent) classifyStreamResult(det *StreamDetector, nativeCalls []toolCall
 // usage.prompt_tokens_details.cached_tokens field (OpenAI's automatic prompt
 // caching, mirrored by other OpenAI-compatible providers). cacheRead is 0 when
 // the field is absent, matching every provider that doesn't report it.
-// imageTokens (from usage.prompt_tokens_details.image_tokens) is 0 both when
-// the field is absent and when a request containing an image got a response
-// that didn't actually process it — streamCompletion uses that ambiguity
-// together with knowing whether the request had an image to decide whether
-// to retry (see messagesContainImage).
+// imageTokens is usage.prompt_tokens_details.image_tokens: -1 when the
+// response carries no prompt_tokens_details at all (the backend reports no
+// image accounting — unknown, never treated as a drop), and >= 0 when it does
+// (0 being the positive evidence of a silently dropped image that
+// streamCompletion's retry budget acts on — see imageRetryAttempts and
+// imageUsageDropped).
 func (a *Agent) scanSSE(
 	scanner *bufio.Scanner,
 	det *StreamDetector,
@@ -4409,7 +4634,8 @@ func (a *Agent) scanSSE(
 	timing *StreamTiming,
 ) ([]toolCall, int64, int64, int64, int64, string, string, error) {
 	dbg := a.debugLog
-	var promptTokens, completionTokens, cacheRead, imageTokens int64
+	var promptTokens, completionTokens, cacheRead int64
+	imageTokens := int64(-1)
 	var reasoningBuf strings.Builder
 	var finishReason string
 	// firstOut/lastOut bracket the generation window (StreamTiming.Decode);

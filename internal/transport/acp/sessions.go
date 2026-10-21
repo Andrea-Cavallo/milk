@@ -145,6 +145,13 @@ func UserMessageUpsert(id MessageID, text string) MessageUpsert {
 	return MessageUpsert{SessionUpdate: "user_message", MessageID: id, Content: []ContentBlock{TextBlock(text)}}
 }
 
+// UserMessageUpsertBlocks creates a user_message upsert carrying the prompt's
+// content blocks as the client sent them — the accept-echo of a multimodal
+// session/prompt (image/audio/resource blocks round-trip unchanged).
+func UserMessageUpsertBlocks(id MessageID, blocks []ContentBlock) MessageUpsert {
+	return MessageUpsert{SessionUpdate: "user_message", MessageID: id, Content: blocks}
+}
+
 // AgentMessageUpsert creates an agent_message upsert (replayed assistant
 // message).
 func AgentMessageUpsert(id MessageID, text string) MessageUpsert {
@@ -161,4 +168,11 @@ func AgentThoughtUpsert(id MessageID, text string) MessageUpsert {
 // messageId append into one message).
 func UserMessageChunk(id MessageID, text string) ContentChunk {
 	return ContentChunk{SessionUpdate: "user_message_chunk", MessageID: id, Content: TextBlock(text)}
+}
+
+// UserMessageChunkBlock is UserMessageChunk for one non-text content block —
+// the v1 fallback echo of a multimodal prompt (blocks append into the same
+// message, in order).
+func UserMessageChunkBlock(id MessageID, block ContentBlock) ContentChunk {
+	return ContentChunk{SessionUpdate: "user_message_chunk", MessageID: id, Content: block}
 }

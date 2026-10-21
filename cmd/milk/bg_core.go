@@ -188,11 +188,17 @@ func parseBgStartArgs(arg string) (agent, task string, err error) {
 // user-started job: fork the planned agent on the task text, persisting
 // through the session's memory store. mgr supplies the job's follow-up-input
 // channel (send_background_agent — issue #250); it may be nil.
-func userJobRunner(agent *local.Agent, mgr *local.Manager, cwd, task string, mem *memory.Store) func(context.Context, string, io.Writer) (string, session.TokenUsage, error) {
+func userJobRunner(agent *local.Agent, mgr *local.Manager, cwd, task string, mem *memory.Store, images []local.ContentPart) func(context.Context, string, io.Writer) (string, session.TokenUsage, error) {
 	return func(ctx context.Context, jobID string, out io.Writer) (string, session.TokenUsage, error) {
 		var inbox chan string
 		if mgr != nil {
 			inbox = mgr.Inbox(jobID)
+		}
+		// Attachments the user had staged when the job spawned (issue: they
+		// used to be silently ignored) ride the job's ctx as per-call image
+		// parts, exactly like a normal turn's.
+		if len(images) > 0 {
+			ctx = local.WithImageParts(ctx, images)
 		}
 		return agent.RunBackgroundTask(ctx, jobID, inbox, cwd, task, "", out, mem)
 	}

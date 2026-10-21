@@ -72,7 +72,7 @@ func (as *acpSession) runFollowup() {
 		as.flushPendingFollowup()
 		as.flushRemoteInputs()
 	}()
-	if _, err := as.runTurn(context.Background(), backgroundFollowupPrompt); err != nil {
+	if _, err := as.runTurn(context.Background(), backgroundFollowupPrompt, nil); err != nil {
 		as.notify(acp.AgentMessageChunk(as.liveID("followup"),
 			"Background follow-up failed: "+err.Error()))
 	}

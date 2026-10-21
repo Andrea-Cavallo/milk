@@ -1725,13 +1725,6 @@ func isContextDeadlineExceeded(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded)
 }
 
-func cleanupCLIImageFiles(st *interactiveState) {
-	for _, p := range st.pendingCLIImageFiles {
-		os.Remove(p) //nolint:errcheck
-	}
-	st.pendingCLIImageFiles = nil
-}
-
 // isEOFOrClosed reports whether err is a normal PTY/pipe EOF or "file already closed"
 // that occurs when the PTY master is closed after the child exits.
 func isEOFOrClosed(err error) bool {
@@ -2392,7 +2385,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case clipboardAttachMsg:
 		defer os.Remove(msg.path)
-		m = m.handleAttachCmd(msg.path)
+		m = m.handleAttachFile(msg.path, msg.mime)
 		return m, nil
 
 	case clipboardNoToolMsg:
@@ -3599,6 +3592,30 @@ func (m model) spawnUserBackgroundAgent(task, spec string) (tea.Model, tea.Cmd) 
 	m.busyHint = ""
 	m.syncLayout()
 
+	// Staged attachments (/attach, clipboard paste) ride the job instead of
+	// stranding when the turn they were staged for never comes: images go as
+	// per-call vision parts (the job's vision gate decides from there), text
+	// as inline context blocks ahead of the task.
+	var jobImages []local.ContentPart
+	if len(m.pendingAttachments) > 0 {
+		var textBlocks strings.Builder
+		for _, a := range m.pendingAttachments {
+			if a.isImage() {
+				jobImages = append(jobImages, local.ContentPart{
+					Type:     "image_url",
+					ImageURL: &local.ImageURLPart{URL: attachmentDataURI(a)},
+				})
+			} else {
+				textBlocks.WriteString(attachmentContextBlock(a))
+			}
+		}
+		if textBlocks.Len() > 0 {
+			task = textBlocks.String() + "\n" + task
+		}
+		m.appendTranscript(milkTag() + fmt.Sprintf(" attached %d staged file(s) to the background job\n", len(m.pendingAttachments)))
+		m.pendingAttachments = nil
+	}
+
 	mgr := m.agents.backgroundMgr
 	// Build the job's agent through buildTUIAgents — the same live callback
 	// wiring every turn gets (permission asks incl. the background timed
@@ -3635,7 +3652,7 @@ func (m model) spawnUserBackgroundAgent(task, spec string) (tea.Model, tea.Cmd) 
 	// Update deadlocks because the event loop goroutine is the only reader
 	// of that channel and it is blocked waiting for Update to return.
 	return m, func() tea.Msg {
-		job := mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, mgr, cwd, task, m.mem))
+		job := mgr.Spawn(label, task, "user", modelName, userJobRunner(agent, mgr, cwd, task, m.mem, jobImages))
 		return backgroundSpawnedMsg{jobID: job.ID, label: label, model: modelName}
 	}
 }
@@ -3780,8 +3797,11 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 
 	// Apply pending attachments.
 	// Text attachments: prepend context blocks to the agent prompt.
-	// Image attachments: set ContentParts on the local agent for multipart vision payload;
-	//   also inject data-URI blocks into the prompt for the CLI escalation path.
+	// Image attachments: multipart vision content parts on the turn ctx
+	//   (local.WithImageParts below) — a CLI runner stages its own
+	//   @temp-file references from those same parts when it handles the turn
+	//   (stageCLIImageRefs), so the prompt carries no @path noise and the
+	//   files are guaranteed alive for the whole turn.
 	// Session history uses the original input plus compact [attached: name] placeholders.
 	attachments := m.pendingAttachments
 	m.pendingAttachments = nil // clear before dispatch
@@ -3792,42 +3812,21 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 	var imageParts []local.ContentPart
 	if len(attachments) > 0 {
 		var textBlocks strings.Builder
-		var imgBlocks strings.Builder
 		var ph strings.Builder
 		for _, a := range attachments {
 			fmt.Fprintf(&ph, " %s", attachmentPlaceholder(a))
 			if a.isImage() {
-				// Local-provider agent (primary and/or escalation): multipart
-				// image_url content part (base64 data URI) — wired below into
-				// whichever *local.Agent(s) are set. A local escalation agent
-				// used to only get this same image dumped as a raw base64 text
-				// blob (see the removed inline-text branch this replaced) —
-				// which it can't actually see as an image, so it confabulated
-				// a plausible-sounding description instead of reading it.
+				// Multipart image_url content part (base64 data URI) — wired
+				// below into whichever *local.Agent(s) handle the turn via the
+				// per-call ctx (issue #297). A local escalation agent used to
+				// only get this same image dumped as a raw base64 text blob
+				// (see the removed inline-text branch this replaced) — which
+				// it can't actually see as an image, so it confabulated a
+				// plausible-sounding description instead of reading it.
 				imageParts = append(imageParts, local.ContentPart{
 					Type:     "image_url",
 					ImageURL: &local.ImageURLPart{URL: attachmentDataURI(a)},
 				})
-				if m.agents.escalation != nil && m.agents.escalation.IsCLI() {
-					// CLI escalation path: write image to temp file, inject @path reference.
-					// The claude binary reads @path natively — no base64 in the prompt needed.
-					ext := mimeExtension(a.MIMEType)
-					written := false
-					if f, err := os.CreateTemp("", "milk-img-*"+ext); err == nil {
-						if _, werr := f.Write(a.Data); werr == nil {
-							f.Close()
-							m.st.pendingCLIImageFiles = append(m.st.pendingCLIImageFiles, f.Name())
-							fmt.Fprintf(&imgBlocks, "@%s\n", f.Name())
-							written = true
-						} else {
-							f.Close()
-							os.Remove(f.Name())
-						}
-					}
-					if !written {
-						fmt.Fprintf(&imgBlocks, "[attached image: %s]\n%s\n\n", a.Name, attachmentDataURI(a))
-					}
-				}
 			} else {
 				textBlocks.WriteString(attachmentContextBlock(a))
 			}
@@ -3836,9 +3835,6 @@ func (m model) dispatchAgent(input string) (tea.Model, tea.Cmd) {
 		if textBlocks.Len() > 0 {
 			sb.WriteString(textBlocks.String())
 			sb.WriteByte('\n')
-		}
-		if imgBlocks.Len() > 0 {
-			sb.WriteString(imgBlocks.String())
 		}
 		sb.WriteString(input)
 		agentInput = sb.String()
@@ -4131,12 +4127,26 @@ func firstInputReader(ir []inputReader) inputReader {
 
 // runTurn routes a prompt to the appropriate agent, writing output to out.
 func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agents *dispatchAgents, input string, out io.Writer, ir ...inputReader) error {
+	// sessionContent is the compact version stored in history (with
+	// attachment placeholders); it falls back to input when no override is
+	// set. Consume the override up front: everything below can early-return
+	// (routing error, the Claude gate), and a leftover value would otherwise
+	// be recorded as the NEXT turn's history content.
+	sessionContent := input
+	if st.pendingSessionContent != "" {
+		sessionContent = st.pendingSessionContent
+		st.pendingSessionContent = ""
+	}
 	// An agent that read unavailable when the runners were built may just not
 	// have been up yet — re-check instead of freezing the fallback until a
 	// restart (see refreshTurnAvailability).
 	localAvail, escalationAvail := refreshTurnAvailability(ctx, rtr, agents)
 
-	rt, routeErr := routeTurn(ctx, st, rtr, input, localAvail, escalationAvail)
+	// Route on sessionContent (the user's text with attachment placeholders),
+	// not the full agent input: inlined attachment content inflates the
+	// prompt past the router's token-threshold rule and used to flip turns to
+	// escalation just because a big file was attached.
+	rt, routeErr := routeTurn(ctx, st, rtr, sessionContent, localAvail, escalationAvail)
 	if routeErr != nil {
 		return routeErr
 	}
@@ -4222,14 +4232,6 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 		}
 	}
 
-	// sessionContent is the compact version stored in history (with attachment
-	// placeholders). Falls back to input when no attachment override is set.
-	sessionContent := input
-	if st.pendingSessionContent != "" {
-		sessionContent = st.pendingSessionContent
-		st.pendingSessionContent = ""
-	}
-
 	switch target {
 	case router.TargetLocal:
 		if mem := st.mem; mem != nil {
@@ -4238,13 +4240,9 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 				_ = mem.PruneGlobal(st.cfg.PerceptStoreSizeLimit())
 			}()
 		}
-		// Local path: CLI image temp files not needed; clean up.
-		cleanupCLIImageFiles(st)
 		turnErr = runPrimaryWithSession(turnCtx, st.cfg, st.sess, agents.primary, agents.escalation, st.mem, input, sessionContent, out, agents, onResponse, onSegment, onWorkflowStart, pw)
 	case router.TargetEscalation:
 		turnErr = runEscalationWithSession(turnCtx, st.cfg, st.sess, agents.escalation, "", st.mem, input, sessionContent, out, agents, onResponse, onSegment, onWorkflowStart, pw)
-		// CLI image temp files are no longer needed after the turn.
-		cleanupCLIImageFiles(st)
 	}
 	recordTurn(turnCtx, target, sourceLabel, turnStart, turnErr)
 	st.notifier.NotifyTurnDone(turnCtx, agentName, turnErr)

@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/scoutme/milk/internal/session"
 	"github.com/scoutme/milk/internal/textbudget"
 	"github.com/scoutme/milk/internal/transport/acp"
@@ -242,3 +243,48 @@ func (as *acpSession) emitHistoryMessage(kind histMsgKind, id acp.MessageID, tex
 
 // boundReplayText caps one replayed message at replayMaxMessageChars.
 func boundReplayText(s string) string { return textbudget.SummarizeLong(s, replayMaxMessageChars) }
+
+// echoUserPrompt is the accept-echo of one user prompt: a multimodal prompt
+// echoes its content blocks as the client sent them (pasted images render
+// back in the client's transcript), a text prompt echoes plain text. Used by
+// runTurn and by prompt()'s mid-turn interception paths alike — whichever
+// path consumes the prompt, the client sees its message under the response's
+// message ID.
+func (as *acpSession) echoUserPrompt(id acp.MessageID, prompt string, media *acpPromptMedia) {
+	if media != nil {
+		as.emitUserMessageBlocks(id, media.echo)
+		return
+	}
+	as.emitHistoryMessage(histUser, id, prompt)
+}
+
+// surfaceMediaNotes sends the client-visible notices for prompt content that
+// cannot reach a model (audio, non-image payloads, open-set kinds). The
+// dispatch path surfaces them through the turn's say channel; the
+// interception paths (ask answers, /interrupt, busy-safe commands) call this
+// directly so an attached-but-undeliverable payload never vanishes without a
+// trace.
+func (as *acpSession) surfaceMediaNotes(media *acpPromptMedia, id acp.MessageID) {
+	if media == nil {
+		return
+	}
+	for _, n := range media.notes {
+		as.notify(acp.AgentMessageChunk(id, ansi.Strip(milkTag()+" "+n+"\n")))
+	}
+}
+
+// emitUserMessageBlocks is the accept-echo of a multimodal prompt: the
+// prompt's content blocks go out as the client sent them (v2 message upsert;
+// per-block chunks for a v1 client, same messageId appends into one message),
+// so a pasted image renders back in the client's own transcript. Session
+// history stores the compact placeholder form instead (see acp_media.go) —
+// replay therefore shows text, not payloads.
+func (as *acpSession) emitUserMessageBlocks(id acp.MessageID, blocks []acp.ContentBlock) {
+	if as.v1Client {
+		for _, b := range blocks {
+			as.notify(acp.UserMessageChunkBlock(id, b))
+		}
+		return
+	}
+	as.notify(acp.UserMessageUpsertBlocks(id, blocks))
+}

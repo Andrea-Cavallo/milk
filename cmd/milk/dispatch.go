@@ -331,7 +331,10 @@ func runPrimaryWithSession(
 	if res.EscalationReason != "" {
 		fmt.Fprintf(out, "\n%s %s requested escalation: %s\n", milkTag(), agentName, res.EscalationReason)
 		if sess.CurrentNeed == "" {
-			sess.RecordNeed(prompt)
+			// sessionContent, not prompt: the prompt can carry full
+			// attachment payloads (base64 data URIs), which have no business
+			// in a persisted need record.
+			sess.RecordNeed(sessionContent)
 		}
 		sess.RebuildSummaryBricks(cfg.AgentContextBudget(cfg.EscalationAgentConfig()))
 		logStateTransition(sess, session.StateRouting, agentName+" self-escalation")
@@ -346,12 +349,15 @@ func runPrimaryWithSession(
 			sess.AddTurn(session.Turn{Role: session.RoleAssistant, Agent: session.AgentLocal, AgentName: agentName, Content: note})
 			return session.Save(sess)
 		}
+		// sessionContent (not prompt) keeps full attachment payloads out of
+		// the escalation turn's persisted history — same rule as the normal
+		// dispatch paths above.
 		if escalationRunner != nil {
-			return runEscalation(ctx, cfg, sess, escalationRunner, res.EscalationReason, mem, prompt, out, da, onResponse, onSegment, onWorkflowStart)
+			return runEscalationWithSession(ctx, cfg, sess, escalationRunner, res.EscalationReason, mem, prompt, sessionContent, out, da, onResponse, onSegment, onWorkflowStart)
 		}
 		// Fallback: build CLI escalation runner on-demand.
 		cliEsc := buildFallbackCLIRunner(cfg)
-		return runEscalation(ctx, cfg, sess, cliEsc, res.EscalationReason, mem, prompt, out, da, onResponse, onSegment, onWorkflowStart)
+		return runEscalationWithSession(ctx, cfg, sess, cliEsc, res.EscalationReason, mem, prompt, sessionContent, out, da, onResponse, onSegment, onWorkflowStart)
 	}
 
 	if res.WorkflowStart != nil {

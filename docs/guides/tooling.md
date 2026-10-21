@@ -329,9 +329,10 @@ Attach files and images to an agent turn via `/attach` or by pasting a file path
 /attach ~/screenshots/error.png
 ```
 
-- **Text files** — contents injected as a fenced code block prepended to your prompt; both local and CLI agents receive the full contents.
-- **Images** — base64-encoded and sent as a multipart vision payload to vision-capable local models (OpenAI `image_url` format); for the Claude CLI path, a data URI is injected as a context block.
-- **PDF and other binary files** — noted as binary with a byte count; text extraction is not performed.
+- **Text files** — contents injected as a fenced code block prepended to your prompt; both local and CLI agents receive the full contents (inlined up to 200KB, with a truncation marker beyond that).
+- **Images** — base64-encoded and sent as a multipart vision payload to vision-capable local models (OpenAI `image_url` format); a Claude CLI runner gets `@temp-file` references staged at dispatch time (the binary reads `@path` natively). Over ACP the same handling is reached with standard `{"type":"image","data":"…","mimeType":"image/png"}` blocks in `session/prompt` (see [docs/reference/acp-integration.md](../reference/acp-integration.md#multimodal-input-image-pasting)).
+- **PDF and other binary files** — noted as binary with a byte count; text extraction is not performed. Binary content is never dumped into the prompt as text.
+- **Size and detection** — one attachment is capped at 32MB (rejected with a message beyond that). Content is sniffed by magic bytes first (a text file named `foo.png` is text); SVG inlines as text rather than riding the vision path.
 
 The status bar shows `[N attached]` while pending. Attachments clear after the turn completes.
 
@@ -347,13 +348,14 @@ Pasting text that looks like an existing absolute path (starting with `/` or `~/
 
 ### Session history
 
-Attachment data is never stored verbatim. The session records a compact placeholder like `[attached: filename.png]` next to the prompt; file contents are sent on the turn they're attached, not persisted beyond that.
+Attachment data is never stored verbatim. The session records a compact placeholder like `[attached: filename.png]` next to the prompt (on every path, including a self-escalation); file contents are sent on the turn they're attached, not persisted beyond that.
 
 ### Supported types
 
 | Extension | MIME type | Handling |
 |---|---|---|
-| `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` | `image/*` | Multipart vision payload |
+| `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tiff` | `image/*` | Multipart vision payload |
+| `.svg` | `image/svg+xml` | Fenced text block (most vision endpoints accept only raster formats) |
 | `.txt`, `.md`, `.log` | `text/plain` | Fenced block in prompt |
 | `.go`, `.py`, `.js`, `.ts`, `.sh`, … | `text/x-*` | Fenced block in prompt |
 | `.json`, `.yaml`, `.toml`, `.html`, `.css` | Various text | Fenced block in prompt |

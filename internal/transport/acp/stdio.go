@@ -2,14 +2,23 @@ package acp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 )
+
+// MaxLineBytes caps one inbound JSON-RPC line. A single session/prompt can
+// carry base64 image blocks (a pasted screenshot is easily megabytes), so the
+// cap is generous — but a line that exceeds it is dropped with a stderr
+// warning and the stream keeps serving, instead of the old Scanner behavior
+// of ending the whole connection on ErrTooLong.
+const MaxLineBytes = 64 << 20 // 64MB
 
 // Handler dispatches incoming client->agent JSON-RPC requests and
 // notifications. Implementations live in cmd/milk (acpServer) — this
@@ -84,14 +93,40 @@ func (c *StdioConn) Serve(ctx context.Context, r io.Reader) error {
 	lines := make(chan []byte, 64)
 	scanErr := make(chan error, 1)
 	go func() {
-		sc := bufio.NewScanner(r)
-		sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // large tool-call payloads need headroom past the default 64KB token limit
-		for sc.Scan() {
-			line := append([]byte(nil), sc.Bytes()...) // Scanner reuses its internal buffer
-			lines <- line
+		// A hand-rolled bounded line reader, not bufio.Scanner: a Scanner
+		// stops scanning forever on ErrTooLong, so one oversized line (a
+		// pasted screenshot's base64 in a session/prompt) would kill the
+		// whole connection. Here an over-limit line is dropped with a
+		// warning and the stream keeps serving.
+		br := bufio.NewReaderSize(r, 64*1024)
+		var carry []byte
+		dropping := false
+		for {
+			chunk, err := br.ReadSlice('\n')
+			if err == bufio.ErrBufferFull {
+				carry = append(carry, chunk...)
+				if len(carry) > MaxLineBytes {
+					dropping = true
+					carry = nil
+					fmt.Fprintf(os.Stderr, "milk serve --acp: dropped a JSON-RPC line over %d bytes — a pasted attachment may be too large\n", MaxLineBytes)
+				}
+				continue
+			}
+			line := append(carry, chunk...)
+			carry = nil
+			if !dropping {
+				line = bytes.TrimRight(line, "\r\n")
+				if len(line) > 0 {
+					lines <- append([]byte(nil), line...)
+				}
+			}
+			dropping = false
+			if err != nil {
+				scanErr <- err
+				close(lines)
+				return
+			}
 		}
-		scanErr <- sc.Err()
-		close(lines)
 	}()
 
 	for {

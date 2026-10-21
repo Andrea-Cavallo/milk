@@ -51,6 +51,17 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	switch cmd {
+	case cmdNew, cmdClear, cmdDrop, cmdResume:
+		// Session-switching commands orphan staged attachments (/attach,
+		// clipboard paste): the turn they would ride belongs to a different
+		// conversation. Drop them with a notice instead of leaking them
+		// across the switch.
+		if len(m.pendingAttachments) > 0 {
+			m.appendTranscript(milkTag() + fmt.Sprintf(" dropped %d staged attachment(s) — staged files do not survive %s\n", len(m.pendingAttachments), cmd))
+			m.pendingAttachments = nil
+		}
+	}
 	if cmd == cmdHistory {
 		return m.handleHistoryCmd(strings.TrimSpace(rest)), nil
 	}
@@ -977,11 +988,18 @@ func (m model) handlePathPasteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // The next submitted turn will include the file as a context block (text) or a
 // multipart vision payload (image). Returns the updated model without a tea.Cmd.
 func (m model) handleAttachCmd(path string) model {
+	return m.handleAttachFile(path, "")
+}
+
+// handleAttachFile is handleAttachCmd with the MIME type already known
+// (clipboard probes know exactly what they read — the temp file's name tells
+// detection nothing). Empty knownMIME falls back to detection.
+func (m model) handleAttachFile(path, knownMIME string) model {
 	if path == "" {
 		m.appendTranscript(milkTag() + " usage: /attach <path>\n")
 		return m
 	}
-	a, err := loadAttachment(path)
+	a, err := loadAttachmentMIME(path, knownMIME)
 	if err != nil {
 		m.appendTranscript(fmt.Sprintf("%s error: %v\n", milkTag(), err))
 		return m

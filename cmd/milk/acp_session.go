@@ -477,12 +477,11 @@ func (as *acpSession) currentCtx() context.Context {
 // throughout, a terminal state_update notification fires, and only then
 // does this return (see acp.PromptResponse's doc comment in lifecycle.go).
 func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.PromptResponse, error) {
-	var text strings.Builder
-	for _, block := range req.Prompt {
-		if block.Type == "text" {
-			text.WriteString(block.Text)
-		}
-	}
+	// Multimodal input (ADR-0074): text blocks assemble the prompt, image
+	// blocks (and any other non-text kind) ride alongside it as attachments
+	// — text-only prompts come back with media == nil and dispatch exactly
+	// as before.
+	text, media := parseACPPrompt(req.Prompt)
 	// One turn at a time per session. A prompt that arrives while an
 	// automatic background follow-up is running waits for it rather than
 	// cancelling it: the follow-up has already drained the finished jobs'
@@ -495,11 +494,12 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 	// asked. With no turn in flight the prompt falls through to runTurn's
 	// wizard-then-question consumption instead. Synthetic follow-ups are
 	// never answers.
-	prompt := strings.TrimSpace(text.String())
+	prompt := strings.TrimSpace(text)
 	if prompt != backgroundFollowupPrompt && as.turnBusy() {
 		if consumed, answered := as.takeAskAnswer(prompt); consumed {
 			msgID := as.liveID("msg")
-			as.emitHistoryMessage(histUser, msgID, prompt)
+			as.echoUserPrompt(msgID, prompt, media)
+			as.surfaceMediaNotes(media, msgID)
 			if answered {
 				as.notify(acp.AgentMessageChunk(as.liveID("ask"), ansi.Strip(milkTag()+" ✓ answer recorded")))
 			} else {
@@ -526,7 +526,8 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 			as.mu.Unlock()
 			if cancel != nil {
 				msgID := as.liveID("msg")
-				as.emitHistoryMessage(histUser, msgID, prompt)
+				as.echoUserPrompt(msgID, prompt, media)
+				as.surfaceMediaNotes(media, msgID)
 				cancel()
 				as.notify(acp.AgentMessageChunk(as.liveID("ask"), ansi.Strip(milkTag()+" ⏹ interrupting the running turn…")))
 				return acp.PromptResponse{MessageID: msgID}, nil
@@ -547,23 +548,37 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 		as.flushPendingFollowup()
 		as.flushRemoteInputs()
 	}()
-	return as.runTurn(ctx, strings.TrimSpace(text.String()))
+	return as.runTurn(ctx, strings.TrimSpace(text), media)
 }
 
 // runTurn runs one turn for prompt text, with as.turnMu held by the caller.
-func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptResponse, error) {
+// media carries the prompt's non-text content (ADR-0074; nil for synthetic
+// prompts): its blocks are echoed back to the client as the user message and
+// its image blocks ride the turn as attachments.
+func (as *acpSession) runTurn(ctx context.Context, prompt string, media *acpPromptMedia) (acp.PromptResponse, error) {
 
 	msgID := as.liveID("msg")
 	// Accept-echo of the user's message under the exact ID this turn's
 	// PromptResponse returns (the schema's messageId identity rule). milk's
 	// synthetic follow-up prompt is never echoed — the client never sent it.
+	// A multimodal prompt echoes its content blocks as the client sent them
+	// (pasted images render back in its transcript); a text prompt echoes
+	// plain text as before.
 	if prompt != backgroundFollowupPrompt {
-		as.emitHistoryMessage(histUser, msgID, prompt)
+		as.echoUserPrompt(msgID, prompt, media)
 	}
 
 	as.notify(acp.RunningState())
 
 	turnCtx, cancel := context.WithCancel(ctx)
+	// Multimodal input: image blocks ride the turn as multipart vision
+	// content parts on the per-call ctx (issue #297 — the agents are shared
+	// with background work, never an instance field), so whichever local
+	// agent the router picks sends a multipart payload, with the vision gate
+	// (agent config `vision`) behaving exactly as in the TUI.
+	if parts := media.imageParts(); len(parts) > 0 {
+		turnCtx = local.WithImageParts(turnCtx, parts)
+	}
 	as.mu.Lock()
 	as.cancel = cancel
 	as.turnCtx = turnCtx
@@ -586,6 +601,17 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 	}
 	onResponse := say
 	turn := &acpTurn{ctx: turnCtx, as: as, say: say}
+
+	// Client-visible notices for prompt content that cannot reach a model
+	// (audio, non-image payloads, open-set block kinds) — up front, so they
+	// surface however this prompt is consumed (wizard answer, slash command,
+	// or a dispatched turn). The model-side placeholder lines are in the
+	// prompt itself.
+	if media != nil {
+		for _, n := range media.notes {
+			say(ansi.Strip(milkTag() + " " + n + "\n"))
+		}
+	}
 
 	// A pending /config init wizard consumes this prompt as its next answer
 	// (ACP's handleInitWizardKey analogue — one answer per session/prompt).
@@ -759,12 +785,19 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 
 	onWorkflowStart := func(ws *local.WorkflowStartSignal) { as.startWorkflowFromTool(turn, ws) }
 
+	// Images ride turnCtx as multipart vision parts (above); a CLI (claude)
+	// runner stages its own @temp-file references from those parts when it
+	// handles the turn (stageCLIImageRefs in runner.go), so the prompt carries
+	// no @path noise and the temp files live exactly as long as the turn.
+	// Session history records the compact prompt (placeholders only — never
+	// payloads or temp paths).
+
 	var turnErr error
 	switch target {
 	case router.TargetLocal:
-		turnErr = runPrimary(turnCtx, as.cfg, as.sess, as.primaryRunner, as.escalationRunner, as.mem, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
+		turnErr = runPrimaryWithSession(turnCtx, as.cfg, as.sess, as.primaryRunner, as.escalationRunner, as.mem, prompt, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
 	case router.TargetEscalation:
-		turnErr = runEscalation(turnCtx, as.cfg, as.sess, as.escalationRunner, "", as.mem, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
+		turnErr = runEscalationWithSession(turnCtx, as.cfg, as.sess, as.escalationRunner, "", as.mem, prompt, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
 	default:
 		turnErr = fmt.Errorf("unknown routing target: %s", target)
 	}
