@@ -188,6 +188,11 @@ clipboard paste produce, gated by the same `"vision": true` agent flag.
 - **Oversized lines can't kill the connection.** One JSON-RPC line is capped
   at 64MB (a pasted screenshot's base64 in one `session/prompt`); an over-limit
   line is dropped with a stderr warning and the stream keeps serving.
+- **Config changes reach open sessions.** Like the TUI's hot-reload, a write
+  to `~/.milk/config.json` (or the project-local `.milk/config.json`) is
+  picked up at the next `session/prompt`: the agents are rebuilt and a
+  `config reloaded` notice chunk is sent — flipping `"vision": true` takes
+  effect without restarting the client session.
 - **The accept-echo carries your blocks.** The `user_message` upsert under the
   `messageId` the `session/prompt` response returns holds the prompt's content
   blocks as the client sent them (image included), so a client can render the

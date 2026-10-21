@@ -101,3 +101,8 @@ the fixes below apply to both surfaces and refine the decisions above:
    carry staged attachments; self-escalation and `RecordNeed` record the
    compact session content, never payloads; an over-limit ACP JSON-RPC line
    drops with a warning instead of ending the connection.
+6. **ACP sessions no longer freeze their config.** The TUI hot-reloads on a
+   config write; an ACP session kept the runners it was created with, so
+   enabling `"vision": true` never reached an open client session. Prompt
+   entry now fingerprints both config files and rebuilds the runners through
+   the `buildRunners` seam on change (with a notice), mirroring the TUI.

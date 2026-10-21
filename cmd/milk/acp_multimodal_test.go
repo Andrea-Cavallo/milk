@@ -9,12 +9,18 @@ package main
 
 import (
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/transport/acp"
 )
 
@@ -227,5 +233,71 @@ func TestACPServer_PromptImagePDF_NotForwarded(t *testing.T) {
 	}
 	if !noted {
 		t.Error("expected a client-visible note about the undeliverable attachment")
+	}
+}
+
+// TestACPSession_ConfigHotReload pins the ACP config hot-reload: a change to
+// config.json while a session is open (e.g. enabling "vision": true) must
+// reach the next prompt — sessions used to freeze their config at creation,
+// so images kept being dropped until the client was restarted.
+func TestACPSession_ConfigHotReload(t *testing.T) {
+	var bodies []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(stubRecordingBackend(&bodies, &mu))
+	t.Cleanup(srv.Close)
+
+	home := t.TempDir()
+	milkDir := filepath.Join(home, ".milk")
+	if err := os.MkdirAll(milkDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfgPath := filepath.Join(milkDir, "config.json")
+	writeCfg := func(vision bool) {
+		cfgJSON := fmt.Sprintf(`{"agent":"test-local","agents":[{"name":"test-local","url":%q,"model":"test-model","provider":"local","vision":%v}]}`, srv.URL, vision)
+		if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0o600); err != nil {
+			t.Fatalf("WriteFile config: %v", err)
+		}
+	}
+	writeCfg(false)
+	t.Setenv("HOME", home)
+
+	cfg, err := config.LoadMerged()
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+	conn := &fakeACPConn{}
+	server := newACPServer(cfg, conn)
+
+	cwd := t.TempDir()
+	newResp := acpRequest(t, server, "session/new", acp.NewSessionRequest{CWD: cwd}).(acp.NewSessionResponse)
+
+	// Flip vision on while the session is open. mtime granularity is coarse
+	// on some filesystems — nudge it forward explicitly.
+	writeCfg(true)
+	future := time.Now().Add(2 * time.Second)
+	os.Chtimes(cfgPath, future, future) //nolint:errcheck
+
+	acpRequest(t, server, "session/prompt", acp.PromptRequest{
+		SessionID: newResp.SessionID,
+		Prompt: []acp.ContentBlock{
+			acp.TextBlock("what is in this image"),
+			acp.ImageBlock(acpTinyPNG, "image/png"),
+		},
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, "image_url") {
+		t.Errorf("config change did not reach the open session — image still dropped; bodies=%d", len(bodies))
+	}
+	var noticed bool
+	for _, u := range sentUpdates(t, conn) {
+		if c, ok := u.(acp.ContentChunk); ok && strings.Contains(c.Content.Text, "config reloaded") {
+			noticed = true
+		}
+	}
+	if !noticed {
+		t.Error("expected a 'config reloaded' notice chunk")
 	}
 }

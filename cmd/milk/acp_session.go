@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,11 +38,15 @@ const acpNoReplyNotice = "(milk finished this turn without a text reply — see 
 // why local.Manager+dispatchAgents are NOT shared across sessions here,
 // unlike the design doc's own literal wording).
 type acpSession struct {
-	cfg  config.Config
-	sess *session.Session
-	mem  *memory.Store
-	conn acp.Conn
-	id   acp.SessionID
+	cfg config.Config
+	// cfgStamp is the config-file fingerprint (mtimes/sizes of the global and
+	// project-local config.json) the runners were built from — see
+	// maybeReloadConfig.
+	cfgStamp string
+	sess     *session.Session
+	mem      *memory.Store
+	conn     acp.Conn
+	id       acp.SessionID
 
 	// firstBindingID is the store session ID the view was created with;
 	// replayKey is "" while the view is bound to it (plain hist-* replay
@@ -198,6 +204,10 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 	as.firstBindingID = sess.ID
 	as.lastActive.Store(time.Now().UnixNano())
 	as.st = &interactiveState{sess: sess, cwd: cwd, cfg: cfg, mem: mem, toolFutures: map[string]chan string{}}
+	// The runners this session starts with were built from the config as it
+	// is now — seed the hot-reload stamp so maybeReloadConfig only fires on a
+	// later change.
+	as.cfgStamp = configStampFor(cwd)
 	// Thoughts have always been forwarded over ACP; keep that unless the
 	// config explicitly opts out.
 	as.showThinking.Store(cfg.ShowReasoning == nil || *cfg.ShowReasoning)
@@ -213,9 +223,64 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 	as.setupTasks()
 	as.setupShells()
 	if err := as.buildRunners(cfg); err != nil {
+
+		as.cfgStamp = configStampFor(as.st.cwd)
 		return nil, err
 	}
 	return as, nil
+}
+
+// configStampFor fingerprints the config files a session's runners were
+// built from (see maybeReloadConfig).
+func configStampFor(cwd string) string {
+	cfgDir, err := config.Dir()
+	if err != nil {
+		return ""
+	}
+	localPath, _ := config.LocalConfigPathIn(cwd)
+	return configFileStamp(filepath.Join(cfgDir, "config.json"), localPath)
+}
+
+// configFileStamp fingerprints the global and project-local config files
+// (mtime+size each) so a change can be detected without re-reading them.
+func configFileStamp(paths ...string) string {
+	var b strings.Builder
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil {
+			fmt.Fprintf(&b, "%s|%d|%d;", p, fi.ModTime().UnixNano(), fi.Size())
+		}
+	}
+	return b.String()
+}
+
+// maybeReloadConfig is the ACP half of config hot-reload: an ACP session used
+// to freeze its config at session creation, so a change made while the client
+// was open (e.g. enabling "vision": true on the active agent) never reached
+// it — the next prompt kept using the old runners. Checked at prompt entry
+// against both config files; on a change the config is re-read and the
+// runners rebuilt through the same seam the /config init commit uses
+// (buildRunners — cfg/st.cfg only swap on success). Returns a client notice
+// when it fired, "" otherwise.
+func (as *acpSession) maybeReloadConfig() string {
+	cfgDir, err := config.Dir()
+	if err != nil {
+		return ""
+	}
+	cfgPath := filepath.Join(cfgDir, "config.json")
+	localPath, _ := config.LocalConfigPathIn(as.st.cwd)
+	stamp := configFileStamp(cfgPath, localPath)
+	if stamp == as.cfgStamp {
+		return ""
+	}
+	as.cfgStamp = stamp
+	cfg, err := config.LoadMergedIn(as.st.cwd)
+	if err != nil {
+		return ansi.Strip(milkTag() + " config reload failed (" + err.Error() + ") — keeping the previous config\n")
+	}
+	if err := as.buildRunners(cfg); err != nil {
+		return ansi.Strip(milkTag() + " config reloaded, but rebuilding the runners failed (" + err.Error() + ") — keeping the previous agents\n")
+	}
+	return ansi.Strip(milkTag() + " config reloaded — agents rebuilt from config\n")
 }
 
 // buildRunners (re)builds the session's primary/escalation runners from cfg
@@ -723,6 +788,13 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string, media *acpProm
 			return acp.PromptResponse{MessageID: msgID}, nil
 		}
 		prompt = dispatch
+	}
+
+	// Config hot-reload (see maybeReloadConfig) — checked at dispatch time,
+	// so the notice accompanies prompts that actually reach a model and never
+	// milk's own slash commands (which rebuild what they need themselves).
+	if note := as.maybeReloadConfig(); note != "" {
+		as.notify(acp.AgentMessageChunk(as.liveID("cfg"), note))
 	}
 
 	as.loopMu.Lock()
