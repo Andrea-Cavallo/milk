@@ -513,3 +513,44 @@ func TestRunBackgroundTask_ForwardsAttachedImages(t *testing.T) {
 		t.Errorf("expected the attached image in the job's first request body (%d bodies)", len(bodies))
 	}
 }
+
+// TestStreamCompletion_NoDropNoticeOnCachedFollowUpIteration pins the false
+// positive seen live against mimo-v2.6: the turn's image is processed on the
+// first request (image_tokens reported), but every later tool-loop iteration
+// re-sends it from the backend's prompt cache and reports only cached_tokens —
+// which must not read as a silent drop (no retries, no notice).
+func TestStreamCompletion_NoDropNoticeOnCachedFollowUpIteration(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch calls.Add(1) {
+		case 1:
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc1","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]}}]}`+"\n\n")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+			fmt.Fprint(w, `data: {"choices":[],"usage":{"prompt_tokens":300,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":0,"image_tokens":192}}}`+"\n\n")
+		default:
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"I see a red square."},"finish_reason":"stop"}]}`+"\n\n")
+			fmt.Fprint(w, `data: {"choices":[],"usage":{"prompt_tokens":320,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":256}}}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	a := New(srv.URL, "test-model")
+	a.supportsVision = true
+	a.WithPermissions(nil, func(tool, summary string) bool { return true })
+	a.SetPendingImageParts([]ContentPart{
+		{Type: "image_url", ImageURL: &ImageURLPart{URL: "data:image/png;base64,abc123"}},
+	})
+
+	var out strings.Builder
+	if _, err := a.Run(context.Background(), nil, "what is in this image", &out, &session.Session{CWD: "/tmp"}, nil); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("expected 2 requests (tool call + answer, no drop retries), got %d", got)
+	}
+	if strings.Contains(out.String(), "reported no image processing") {
+		t.Errorf("false drop notice on a cached follow-up iteration: %q", out.String())
+	}
+}

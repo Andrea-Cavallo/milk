@@ -4123,6 +4123,27 @@ func messagesContainImage(msgs []Message) bool {
 	return false
 }
 
+// imageNewInRequest reports whether the turn's image is being sent for the
+// first time in this request: the user message at userMsgIdx carries an image
+// and nothing from the assistant follows it yet. On a later tool-loop
+// iteration the same image rides along from the backend's prompt cache, which
+// reports prompt_tokens_details with cached_tokens only (no image_tokens) —
+// indistinguishable from a silent drop by usage alone, so it is not evidence.
+func imageNewInRequest(msgs []Message, userMsgIdx int) bool {
+	if userMsgIdx < 0 || userMsgIdx >= len(msgs) {
+		return false
+	}
+	if !messagesContainImage(msgs[userMsgIdx : userMsgIdx+1]) {
+		return false
+	}
+	for _, m := range msgs[userMsgIdx+1:] {
+		if m.Role == "assistant" {
+			return false
+		}
+	}
+	return true
+}
+
 // streamCompletion sends a chat completion request and streams the response.
 // Routes to the Bedrock Converse streaming API when useBedrockNative is set;
 // otherwise uses the OpenAI-compatible /v1/chat/completions endpoint.
@@ -4174,8 +4195,12 @@ func (a *Agent) streamCompletion(ctx context.Context, msgs []Message, tools []ma
 // image-rejection degradation.
 func (a *Agent) streamCompletionLoop(ctx context.Context, msgs []Message, tools []map[string]any, out io.Writer, userMsgIdx int) (string, string, []toolCall, bool, string, error) {
 	maxAttempts := 1
-	if messagesContainImage(msgs) {
+	checkImageDrop := imageNewInRequest(msgs, userMsgIdx)
+	if checkImageDrop {
 		maxAttempts = imageRetryAttempts
+	}
+	imageDropped := func(imageTokens int64) bool {
+		return checkImageDrop && imageUsageDropped(imageTokens)
 	}
 	// One seed for the whole retry budget: a replay is then byte-identical
 	// to the request the backend dropped (the property the retry relies on),
@@ -4214,20 +4239,20 @@ func (a *Agent) streamCompletionLoop(ctx context.Context, msgs []Message, tools 
 			}
 			a.recordUsage(ctx, last.usage)
 			text := last.text
-			if imageUsageDropped(last.imageTokens) {
+			if imageDropped(last.imageTokens) {
 				fmt.Fprintln(out, "\n"+imageDropNotice)
 				text += "\n\n" + imageDropNotice
 			}
 			return text, last.fallbackRaw, last.tcs, last.emptyFallback, last.reasoningText, nil
 		}
 		last = &attemptResult{text: t, fallbackRaw: fr, tcs: tc, emptyFallback: ef, reasoningText: rt, buf: buf, usage: usage, imageTokens: imageTokens}
-		if final || !imageUsageDropped(imageTokens) {
+		if final || !imageDropped(imageTokens) {
 			if buf != nil {
 				io.Copy(out, buf) //nolint:errcheck
 			}
 			a.recordUsage(ctx, usage)
 			text := t
-			if imageUsageDropped(imageTokens) {
+			if imageDropped(imageTokens) {
 				// Returned response still carries drop evidence after the
 				// retry budget — surface the notice instead of letting the
 				// non-answer stand unexplained.
