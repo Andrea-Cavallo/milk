@@ -263,6 +263,13 @@ type permOverrides struct {
 	safetyAllowSet   bool
 }
 
+// permOverridesNow returns a snapshot of the session's timed-answer overrides.
+func (st *interactiveState) permOverridesNow() permOverrides {
+	st.permMu.RLock()
+	defer st.permMu.RUnlock()
+	return st.permOverrides
+}
+
 // bgAskPolicy is the tool-ask policy for background work (background-job
 // tool asks and workflow-step tool asks).
 func bgAskPolicy(cfg config.Config, ov permOverrides) askPolicy {
@@ -395,7 +402,10 @@ func execPermissionsCore(rest string, cfg config.Config, ov *permOverrides) (str
 // per-prompt countdowns), session overrides otherwise — the grammar lives in
 // execPermissionsCore, shared with ACP's acpPermissions.
 func (m model) handlePermissionsCmd(rest string) model {
+	m.st.permMu.Lock()
 	out, listing := execPermissionsCore(rest, m.st.cfg, &m.st.permOverrides)
+	ov := m.st.permOverrides
+	m.st.permMu.Unlock()
 	if !listing {
 		if out != "" {
 			m.appendTranscript(out + "\n")
@@ -404,7 +414,7 @@ func (m model) handlePermissionsCmd(rest string) model {
 	}
 	var sb strings.Builder
 	sb.WriteString(milkTag() + " permission asks — every ask races direct input, remote oversight, and (for background asks) the timed answer:\n")
-	sb.WriteString(formatPermPolicy(m.st.cfg, m.st.permOverrides) + "\n")
+	sb.WriteString(formatPermPolicy(m.st.cfg, ov) + "\n")
 	rows := 0
 	appendRow := func(state string, msg *permRequestMsg) {
 		rows++

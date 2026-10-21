@@ -305,6 +305,41 @@ func acpCommandNames() string {
 	return strings.Join(names, ", ")
 }
 
+// acpBusySafe are the ACP commands that run immediately while a turn is in
+// flight instead of queueing behind turnMu — the permission family, whose
+// whole point is to be usable while a turn is waiting on (or about to raise)
+// an ask. Each must have a plain `run` handler that only touches state behind
+// as.mu / an atomic (acpPermissions, acpSkipPerms), and each must also be in
+// the TUI's busySafeCommands (pinned by a test).
+var acpBusySafe = map[string]bool{
+	cmdPermissions: true,
+	cmdSkipPerms:   true,
+}
+
+// runBusySafeCommand executes prompt now if it is an acpBusySafe command,
+// echoing the prompt and the result to the client like a normal command turn
+// but without taking the turn lock or touching the running turn. ok is false
+// for any other prompt.
+func (as *acpSession) runBusySafeCommand(prompt string) (resp acp.PromptResponse, ok bool) {
+	cmd, rest, found := extractSlashCommand(prompt)
+	if !found || !acpBusySafe[cmd] {
+		return acp.PromptResponse{}, false
+	}
+	for _, c := range acpCommandTable() {
+		if c.name != cmd || c.run == nil {
+			continue
+		}
+		msgID := as.liveID("msg")
+		as.emitHistoryMessage(histUser, msgID, prompt)
+		out, _ := c.run(as, rest)
+		if out = ansi.Strip(out); out != "" {
+			as.notify(acp.AgentMessageChunk(as.liveID("busycmd"), out))
+		}
+		return acp.PromptResponse{MessageID: msgID}, true
+	}
+	return acp.PromptResponse{}, false
+}
+
 // acpSkipPerms is /skip-permissions over ACP: the shared grammar
 // (execSkipPermsCore), applied to the session's atomic and returned as a
 // plain slash result.

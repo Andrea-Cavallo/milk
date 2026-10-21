@@ -534,6 +534,13 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 		}
 	}
 
+	// The permission family acts at once, mid-turn, for the same reason.
+	if as.turnBusy() {
+		if resp, ok := as.runBusySafeCommand(prompt); ok {
+			return resp, nil
+		}
+	}
+
 	as.turnMu.Lock()
 	defer func() {
 		as.releaseTurn()

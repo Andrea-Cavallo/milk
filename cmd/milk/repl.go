@@ -3904,7 +3904,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 	var cliPC permContext
 	if agents.cliAgent != nil {
 		tuiCliAgent := agents.cliAgent.
-			WithSkipPermissions(st.skipPermissions).
+			WithSkipPermissions(st.skipPermissions.Load()).
 			WithOAuthRequiredHandler(func(serverName, authURL string) {
 				send(oauthRequiredMsg{serverName: serverName, authURL: authURL})
 			}).
@@ -3965,7 +3965,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 	localBgPermAsk := func(jobID, tool, summary string) bool {
 		ctx, cancel := context.WithTimeout(context.Background(), st.cfg.EffectiveBackgroundAgentTimeout())
 		defer cancel()
-		p := bgAskPolicy(st.cfg, st.permOverrides)
+		p := bgAskPolicy(st.cfg, st.permOverridesNow())
 		sum := jobPermSummary(summary, jobID)
 		allow, _ := askPermission(ctx, st.notifier,
 			oversight.PermRequest{ToolName: tool, Input: sum},
@@ -3988,7 +3988,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 	localBgUserAsk := func(ctx context.Context, jobID, question string, options []string) (string, bool) {
 		ctx, cancel := context.WithTimeout(ctx, st.cfg.EffectiveBackgroundAgentTimeout())
 		defer cancel()
-		p := bgAskPolicy(st.cfg, st.permOverrides)
+		p := bgAskPolicy(st.cfg, st.permOverridesNow())
 		note := autoNoteQuestion(p.deadline)
 		if jobID != "" {
 			note = "job " + jobID + " — " + note
@@ -4011,7 +4011,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 	// with the safety policy — its own default knob, so one "allow" can't
 	// silently re-enable unattended runaway loops.
 	localSafetyAsk := func(jobID, tool, summary string) local.SafetyOutcome {
-		p := safetyAskPolicy(st.cfg, st.permOverrides)
+		p := safetyAskPolicy(st.cfg, st.permOverridesNow())
 		return safetyAskRun(context.Background(), st.notifier, jobID, tool, summary,
 			func(c context.Context) bool {
 				sum := jobPermSummary(summary, jobID)
@@ -4060,7 +4060,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		safetyAsk:           localSafetyAsk,
 		userAsk:             makeLocalUserAsk(localHost, st.notifier),
 		bgUserAsk:           localBgUserAsk,
-		skipPerms:           func() bool { return st.skipPermissions },
+		skipPerms:           st.skipPermissions.Load,
 		onOpenFile:          localOpenFile,
 		onRetract:           localOnRetract,
 		onToolUse:           localOnToolUse,
@@ -4499,7 +4499,8 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 		localPerms = lp
 	}
 
-	st := &interactiveState{sess: sess, cwd: cwd, cfg: cfg, mem: mem, cs: cs, localPerms: localPerms, toolFutures: map[string]chan string{}, skipPermissions: cliAgentConfig(cfg).DangerouslySkipPermissions, notifier: newNotifier(cfg)}
+	st := &interactiveState{sess: sess, cwd: cwd, cfg: cfg, mem: mem, cs: cs, localPerms: localPerms, toolFutures: map[string]chan string{}, notifier: newNotifier(cfg)}
+	st.skipPermissions.Store(cliAgentConfig(cfg).DangerouslySkipPermissions)
 
 	// Wire token persistence callbacks now that st is available; closures reference
 	// st.sess so they always write to the current session even after /new.
