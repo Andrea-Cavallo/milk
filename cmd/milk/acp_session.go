@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,11 +38,15 @@ const acpNoReplyNotice = "(milk finished this turn without a text reply — see 
 // why local.Manager+dispatchAgents are NOT shared across sessions here,
 // unlike the design doc's own literal wording).
 type acpSession struct {
-	cfg  config.Config
-	sess *session.Session
-	mem  *memory.Store
-	conn acp.Conn
-	id   acp.SessionID
+	cfg config.Config
+	// cfgStamp is the config-file fingerprint (mtimes/sizes of the global and
+	// project-local config.json) the runners were built from — see
+	// maybeReloadConfig.
+	cfgStamp string
+	sess     *session.Session
+	mem      *memory.Store
+	conn     acp.Conn
+	id       acp.SessionID
 
 	// firstBindingID is the store session ID the view was created with;
 	// replayKey is "" while the view is bound to it (plain hist-* replay
@@ -198,6 +204,10 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 	as.firstBindingID = sess.ID
 	as.lastActive.Store(time.Now().UnixNano())
 	as.st = &interactiveState{sess: sess, cwd: cwd, cfg: cfg, mem: mem, toolFutures: map[string]chan string{}}
+	// The runners this session starts with were built from the config as it
+	// is now — seed the hot-reload stamp so maybeReloadConfig only fires on a
+	// later change.
+	as.cfgStamp = configStampFor(cwd)
 	// Thoughts have always been forwarded over ACP; keep that unless the
 	// config explicitly opts out.
 	as.showThinking.Store(cfg.ShowReasoning == nil || *cfg.ShowReasoning)
@@ -213,9 +223,64 @@ func newACPSession(cfg config.Config, sess *session.Session, conn acp.Conn, id a
 	as.setupTasks()
 	as.setupShells()
 	if err := as.buildRunners(cfg); err != nil {
+
+		as.cfgStamp = configStampFor(as.st.cwd)
 		return nil, err
 	}
 	return as, nil
+}
+
+// configStampFor fingerprints the config files a session's runners were
+// built from (see maybeReloadConfig).
+func configStampFor(cwd string) string {
+	cfgDir, err := config.Dir()
+	if err != nil {
+		return ""
+	}
+	localPath, _ := config.LocalConfigPathIn(cwd)
+	return configFileStamp(filepath.Join(cfgDir, "config.json"), localPath)
+}
+
+// configFileStamp fingerprints the global and project-local config files
+// (mtime+size each) so a change can be detected without re-reading them.
+func configFileStamp(paths ...string) string {
+	var b strings.Builder
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil {
+			fmt.Fprintf(&b, "%s|%d|%d;", p, fi.ModTime().UnixNano(), fi.Size())
+		}
+	}
+	return b.String()
+}
+
+// maybeReloadConfig is the ACP half of config hot-reload: an ACP session used
+// to freeze its config at session creation, so a change made while the client
+// was open (e.g. enabling "vision": true on the active agent) never reached
+// it — the next prompt kept using the old runners. Checked at prompt entry
+// against both config files; on a change the config is re-read and the
+// runners rebuilt through the same seam the /config init commit uses
+// (buildRunners — cfg/st.cfg only swap on success). Returns a client notice
+// when it fired, "" otherwise.
+func (as *acpSession) maybeReloadConfig() string {
+	cfgDir, err := config.Dir()
+	if err != nil {
+		return ""
+	}
+	cfgPath := filepath.Join(cfgDir, "config.json")
+	localPath, _ := config.LocalConfigPathIn(as.st.cwd)
+	stamp := configFileStamp(cfgPath, localPath)
+	if stamp == as.cfgStamp {
+		return ""
+	}
+	as.cfgStamp = stamp
+	cfg, err := config.LoadMergedIn(as.st.cwd)
+	if err != nil {
+		return ansi.Strip(milkTag() + " config reload failed (" + err.Error() + ") — keeping the previous config\n")
+	}
+	if err := as.buildRunners(cfg); err != nil {
+		return ansi.Strip(milkTag() + " config reloaded, but rebuilding the runners failed (" + err.Error() + ") — keeping the previous agents\n")
+	}
+	return ansi.Strip(milkTag() + " config reloaded — agents rebuilt from config\n")
 }
 
 // buildRunners (re)builds the session's primary/escalation runners from cfg
@@ -477,12 +542,11 @@ func (as *acpSession) currentCtx() context.Context {
 // throughout, a terminal state_update notification fires, and only then
 // does this return (see acp.PromptResponse's doc comment in lifecycle.go).
 func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.PromptResponse, error) {
-	var text strings.Builder
-	for _, block := range req.Prompt {
-		if block.Type == "text" {
-			text.WriteString(block.Text)
-		}
-	}
+	// Multimodal input (ADR-0074): text blocks assemble the prompt, image
+	// blocks (and any other non-text kind) ride alongside it as attachments
+	// — text-only prompts come back with media == nil and dispatch exactly
+	// as before.
+	text, media := parseACPPrompt(req.Prompt)
 	// One turn at a time per session. A prompt that arrives while an
 	// automatic background follow-up is running waits for it rather than
 	// cancelling it: the follow-up has already drained the finished jobs'
@@ -495,11 +559,12 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 	// asked. With no turn in flight the prompt falls through to runTurn's
 	// wizard-then-question consumption instead. Synthetic follow-ups are
 	// never answers.
-	prompt := strings.TrimSpace(text.String())
+	prompt := strings.TrimSpace(text)
 	if prompt != backgroundFollowupPrompt && as.turnBusy() {
 		if consumed, answered := as.takeAskAnswer(prompt); consumed {
 			msgID := as.liveID("msg")
-			as.emitHistoryMessage(histUser, msgID, prompt)
+			as.echoUserPrompt(msgID, prompt, media)
+			as.surfaceMediaNotes(media, msgID)
 			if answered {
 				as.notify(acp.AgentMessageChunk(as.liveID("ask"), ansi.Strip(milkTag()+" ✓ answer recorded")))
 			} else {
@@ -526,7 +591,8 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 			as.mu.Unlock()
 			if cancel != nil {
 				msgID := as.liveID("msg")
-				as.emitHistoryMessage(histUser, msgID, prompt)
+				as.echoUserPrompt(msgID, prompt, media)
+				as.surfaceMediaNotes(media, msgID)
 				cancel()
 				as.notify(acp.AgentMessageChunk(as.liveID("ask"), ansi.Strip(milkTag()+" ⏹ interrupting the running turn…")))
 				return acp.PromptResponse{MessageID: msgID}, nil
@@ -547,23 +613,37 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 		as.flushPendingFollowup()
 		as.flushRemoteInputs()
 	}()
-	return as.runTurn(ctx, strings.TrimSpace(text.String()))
+	return as.runTurn(ctx, strings.TrimSpace(text), media)
 }
 
 // runTurn runs one turn for prompt text, with as.turnMu held by the caller.
-func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptResponse, error) {
+// media carries the prompt's non-text content (ADR-0074; nil for synthetic
+// prompts): its blocks are echoed back to the client as the user message and
+// its image blocks ride the turn as attachments.
+func (as *acpSession) runTurn(ctx context.Context, prompt string, media *acpPromptMedia) (acp.PromptResponse, error) {
 
 	msgID := as.liveID("msg")
 	// Accept-echo of the user's message under the exact ID this turn's
 	// PromptResponse returns (the schema's messageId identity rule). milk's
 	// synthetic follow-up prompt is never echoed — the client never sent it.
+	// A multimodal prompt echoes its content blocks as the client sent them
+	// (pasted images render back in its transcript); a text prompt echoes
+	// plain text as before.
 	if prompt != backgroundFollowupPrompt {
-		as.emitHistoryMessage(histUser, msgID, prompt)
+		as.echoUserPrompt(msgID, prompt, media)
 	}
 
 	as.notify(acp.RunningState())
 
 	turnCtx, cancel := context.WithCancel(ctx)
+	// Multimodal input: image blocks ride the turn as multipart vision
+	// content parts on the per-call ctx (issue #297 — the agents are shared
+	// with background work, never an instance field), so whichever local
+	// agent the router picks sends a multipart payload, with the vision gate
+	// (agent config `vision`) behaving exactly as in the TUI.
+	if parts := media.imageParts(); len(parts) > 0 {
+		turnCtx = local.WithImageParts(turnCtx, parts)
+	}
 	as.mu.Lock()
 	as.cancel = cancel
 	as.turnCtx = turnCtx
@@ -586,6 +666,17 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 	}
 	onResponse := say
 	turn := &acpTurn{ctx: turnCtx, as: as, say: say}
+
+	// Client-visible notices for prompt content that cannot reach a model
+	// (audio, non-image payloads, open-set block kinds) — up front, so they
+	// surface however this prompt is consumed (wizard answer, slash command,
+	// or a dispatched turn). The model-side placeholder lines are in the
+	// prompt itself.
+	if media != nil {
+		for _, n := range media.notes {
+			say(ansi.Strip(milkTag() + " " + n + "\n"))
+		}
+	}
 
 	// A pending /config init wizard consumes this prompt as its next answer
 	// (ACP's handleInitWizardKey analogue — one answer per session/prompt).
@@ -699,6 +790,13 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 		prompt = dispatch
 	}
 
+	// Config hot-reload (see maybeReloadConfig) — checked at dispatch time,
+	// so the notice accompanies prompts that actually reach a model and never
+	// milk's own slash commands (which rebuild what they need themselves).
+	if note := as.maybeReloadConfig(); note != "" {
+		as.notify(acp.AgentMessageChunk(as.liveID("cfg"), note))
+	}
+
 	as.loopMu.Lock()
 	as.loop.ResetTurn()
 	as.loopMu.Unlock()
@@ -759,12 +857,19 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 
 	onWorkflowStart := func(ws *local.WorkflowStartSignal) { as.startWorkflowFromTool(turn, ws) }
 
+	// Images ride turnCtx as multipart vision parts (above); a CLI (claude)
+	// runner stages its own @temp-file references from those parts when it
+	// handles the turn (stageCLIImageRefs in runner.go), so the prompt carries
+	// no @path noise and the temp files live exactly as long as the turn.
+	// Session history records the compact prompt (placeholders only — never
+	// payloads or temp paths).
+
 	var turnErr error
 	switch target {
 	case router.TargetLocal:
-		turnErr = runPrimary(turnCtx, as.cfg, as.sess, as.primaryRunner, as.escalationRunner, as.mem, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
+		turnErr = runPrimaryWithSession(turnCtx, as.cfg, as.sess, as.primaryRunner, as.escalationRunner, as.mem, prompt, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
 	case router.TargetEscalation:
-		turnErr = runEscalation(turnCtx, as.cfg, as.sess, as.escalationRunner, "", as.mem, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
+		turnErr = runEscalationWithSession(turnCtx, as.cfg, as.sess, as.escalationRunner, "", as.mem, prompt, prompt, io.Discard, as.da, onResponse, onSegment, onWorkflowStart)
 	default:
 		turnErr = fmt.Errorf("unknown routing target: %s", target)
 	}

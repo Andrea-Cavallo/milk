@@ -274,7 +274,7 @@ func (as *acpSession) runRemoteTurn(text string) {
 		as.flushPendingFollowup()
 		as.flushRemoteInputs()
 	}()
-	if _, err := as.runTurn(context.Background(), text); err != nil {
+	if _, err := as.runTurn(context.Background(), text, nil); err != nil {
 		as.notify(acp.AgentMessageChunk(as.liveID("remote"),
 			"Remote-oversight turn failed: "+err.Error()))
 	}

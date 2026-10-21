@@ -331,3 +331,78 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// ── content over extension, binary safety (ADR-0074 review) ─────────────────
+
+func TestDetectMIME_TextContentBeatsImageExtension(t *testing.T) {
+	got := detectMIME("screenshot.png", []byte("just some text, no magic here"))
+	if got != "text/plain" {
+		t.Errorf("text content named .png: want text/plain, got %q", got)
+	}
+}
+
+func TestDetectMIME_UnknownBinaryIsOctetStream(t *testing.T) {
+	got := detectMIME("blob", []byte{0x00, 0x01, 0x02, 0x03, 0x00, 0xFF})
+	if got != "application/octet-stream" {
+		t.Errorf("binary content: want application/octet-stream, got %q", got)
+	}
+}
+
+func TestDetectMIME_MagicBMPAndTIFF(t *testing.T) {
+	if got := detectMIME("x", []byte("BM"+string(make([]byte, 20)))); got != "image/bmp" {
+		t.Errorf("BMP magic: got %q", got)
+	}
+	if got := detectMIME("x", []byte("II*\x00rest")); got != "image/tiff" {
+		t.Errorf("TIFF magic: got %q", got)
+	}
+}
+
+func TestIsImage_SVGIsNotAVisionPayload(t *testing.T) {
+	a := PendingAttachment{MIMEType: "image/svg+xml", Data: []byte("<svg/>")}
+	if a.isImage() {
+		t.Error("svg must not be treated as a vision payload — it is text")
+	}
+	if blk := attachmentContextBlock(a); !strings.Contains(blk, "<svg/>") {
+		t.Errorf("svg should inline as text, got %q", blk)
+	}
+}
+
+func TestLoadAttachmentMIME_KnownMIMERoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "milk-paste-1.bin") // meaningless extension
+	if err := os.WriteFile(path, []byte{0x01, 0x02, 0x03}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := loadAttachmentMIME(path, "audio/ogg")
+	if err != nil {
+		t.Fatalf("loadAttachmentMIME: %v", err)
+	}
+	if a.MIMEType != "audio/ogg" {
+		t.Errorf("known MIME thrown away: got %q", a.MIMEType)
+	}
+	if blk := attachmentContextBlock(a); !strings.Contains(blk, "binary") {
+		t.Errorf("binary payload must not be inlined as text, got %q", blk)
+	}
+}
+
+func TestAttachmentContextBlock_NeverInlinesBinaryAsText(t *testing.T) {
+	a := PendingAttachment{Name: "notes.txt", MIMEType: "text/plain", Data: []byte("hello\x00world")}
+	blk := attachmentContextBlock(a)
+	if strings.Contains(blk, "hello") || !strings.Contains(blk, "binary") {
+		t.Errorf("NUL-carrying data must get the binary notice, got %q", blk)
+	}
+}
+
+func TestLoadAttachment_RejectsOversize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge.bin")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Truncate(maxAttachmentBytes + 1) //nolint:errcheck
+	f.Close()
+	if _, err := loadAttachment(path); err == nil {
+		t.Error("expected oversize attachment to be rejected")
+	}
+}

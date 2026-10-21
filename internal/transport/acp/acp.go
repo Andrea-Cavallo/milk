@@ -22,6 +22,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 )
 
 // ProtocolVersion is the ACP protocol version this surface targets (v2 is the
@@ -129,15 +130,183 @@ type UpdateSessionNotification struct {
 
 // --- shared content shapes -------------------------------------------------
 
-// ContentBlock is a single content block. The parity surface streams text;
-// other block kinds pass through as open-set types.
+// ContentBlock is a single content block — the ACP ContentBlock union
+// (text | image | audio | resource_link) over the upstream
+// TextContentBlock / ImageContentBlock / AudioContentBlock /
+// ResourceLinkContentBlock shapes. Every field is optional except Type;
+// fields this struct doesn't model (annotations, _meta, an open-set kind's
+// own payload) survive a decode/encode round trip in extra, so a block
+// received on the wire can be echoed back faithfully.
 type ContentBlock struct {
-	Type string `json:"type"` // "text" (open-set)
+	Type string `json:"type"` // "text" | "image" | "audio" | "resource_link" (open-set)
 	Text string `json:"text,omitempty"`
+	// Data is the image/audio payload: base64-encoded bytes per the spec —
+	// never a data: URI (milk tolerates one on the way in, see
+	// cmd/milk/acp_media.go).
+	Data string `json:"data,omitempty"`
+	// MimeType is the image/audio payload's MIME type (e.g. "image/png").
+	MimeType string `json:"mimeType,omitempty"`
+	// Resource is the resource_link payload (a URI plus metadata).
+	Resource *Resource `json:"resource,omitempty"`
+
+	// extra holds wire fields not modelled above (annotations, _meta, an
+	// open-set kind's payload) for faithful pass-through.
+	extra map[string]json.RawMessage
+}
+
+// Resource is a resource_link block's payload: the resource's URI plus the
+// metadata a client attaches to it. Text/Blob are tolerated for clients that
+// send MCP-style embedded resource contents instead of a bare link (Text is
+// inlined into the prompt; Blob is noted, never forwarded verbatim).
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Blob        string `json:"blob,omitempty"`
+
+	extra map[string]json.RawMessage
 }
 
 // TextBlock is the common ContentBlock{text}.
 func TextBlock(text string) ContentBlock { return ContentBlock{Type: "text", Text: text} }
+
+// ImageBlock is ContentBlock{image} — data is bare base64 per the spec.
+func ImageBlock(data, mimeType string) ContentBlock {
+	return ContentBlock{Type: "image", Data: data, MimeType: mimeType}
+}
+
+// AudioBlock is ContentBlock{audio} — data is bare base64 per the spec.
+func AudioBlock(data, mimeType string) ContentBlock {
+	return ContentBlock{Type: "audio", Data: data, MimeType: mimeType}
+}
+
+// ResourceLinkBlock is ContentBlock{resource_link}.
+func ResourceLinkBlock(r Resource) ContentBlock {
+	return ContentBlock{Type: "resource_link", Resource: &r}
+}
+
+// blockKnownKeys are the wire keys ContentBlock models itself; everything
+// else round-trips through extra.
+var blockKnownKeys = map[string]bool{
+	"type": true, "text": true, "data": true, "mimeType": true, "resource": true,
+}
+
+// UnmarshalJSON decodes the modelled fields and keeps the rest (annotations,
+// _meta, an open-set kind's payload) in extra. A resource_link sent in the
+// flat form some clients emit (uri/name/… at the block's top level instead of
+// nested under "resource") is folded into Resource.
+func (c *ContentBlock) UnmarshalJSON(data []byte) error {
+	type alias ContentBlock
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	extra := map[string]json.RawMessage{}
+	for k, v := range m {
+		if !blockKnownKeys[k] {
+			extra[k] = v
+		}
+	}
+	if len(extra) == 0 {
+		extra = nil
+	}
+	*c = ContentBlock(a)
+	c.extra = extra
+	// Flat resource_link tolerance: no "resource" object, but a top-level
+	// "uri" (the flat shape's required key) is present.
+	if c.Type == "resource_link" && c.Resource == nil {
+		var flat struct {
+			URI         string `json:"uri"`
+			Name        string `json:"name"`
+			Title       string `json:"title,omitempty"`
+			Description string `json:"description,omitempty"`
+			MimeType    string `json:"mimeType,omitempty"`
+			Size        int64  `json:"size,omitempty"`
+		}
+		if err := json.Unmarshal(data, &flat); err == nil && flat.URI != "" {
+			c.Resource = &Resource{
+				URI: flat.URI, Name: flat.Name, Title: flat.Title,
+				Description: flat.Description, MimeType: flat.MimeType, Size: flat.Size,
+			}
+		}
+	}
+	return nil
+}
+
+// MarshalJSON encodes the modelled fields and re-emits anything captured in
+// extra untouched (modelled keys win), so an open-set block passes through
+// milk without losing payload.
+func (c ContentBlock) MarshalJSON() ([]byte, error) {
+	type alias ContentBlock
+	base, err := json.Marshal(alias(c))
+	if err != nil {
+		return nil, err
+	}
+	return mergeExtraJSON(base, c.extra)
+}
+
+// UnmarshalJSON / MarshalJSON give Resource the same extra pass-through as
+// ContentBlock (resource-level annotations, _meta, …).
+func (r *Resource) UnmarshalJSON(data []byte) error {
+	type alias Resource
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	extra := map[string]json.RawMessage{}
+	for k, v := range m {
+		switch k {
+		case "uri", "name", "title", "description", "mimeType", "size", "text", "blob":
+		default:
+			extra[k] = v
+		}
+	}
+	if len(extra) == 0 {
+		extra = nil
+	}
+	*r = Resource(a)
+	r.extra = extra
+	return nil
+}
+
+func (r Resource) MarshalJSON() ([]byte, error) {
+	type alias Resource
+	base, err := json.Marshal(alias(r))
+	if err != nil {
+		return nil, err
+	}
+	return mergeExtraJSON(base, r.extra)
+}
+
+// mergeExtraJSON folds captured unknown keys back into a marshalled object,
+// without overwriting keys the typed struct emitted.
+func mergeExtraJSON(base []byte, extra map[string]json.RawMessage) ([]byte, error) {
+	if len(extra) == 0 {
+		return base, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(base, &m); err != nil {
+		return nil, err
+	}
+	for k, v := range extra {
+		if _, ok := m[k]; !ok {
+			m[k] = v
+		}
+	}
+	return json.Marshal(m)
+}
 
 // ToolCallContent is one item of tool-call content (ToolCallContent union:
 // "content" wrapping a ContentBlock, "terminal" referencing an agent-owned

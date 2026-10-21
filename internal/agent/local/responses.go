@@ -31,13 +31,60 @@ type responsesRequest struct {
 // It covers role-based messages (user/assistant/system), function_call items,
 // and function_call_output items via the union of their fields with omitempty.
 type responsesInput struct {
-	Type      string `json:"type,omitempty"`
-	Role      string `json:"role,omitempty"`
-	Content   string `json:"content,omitempty"`
+	Type string `json:"type,omitempty"`
+	Role string `json:"role,omitempty"`
+	// Content is either a plain string or a []responsesContentPart array —
+	// the Responses API accepts both shapes, and only the array can carry
+	// images.
+	Content   any    `json:"content,omitempty"`
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 	Output    string `json:"output,omitempty"`
+}
+
+// responsesContentPart is one element of a multimodal Responses API message
+// content array: input_text, or input_image carrying a data URI (exactly the
+// shape OpenAI's docs specify for a pasted image).
+type responsesContentPart struct {
+	Type     string `json:"type"` // "input_text" | "input_image"
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+// responsesContentFromParts converts message content parts to Responses API
+// content items. An image of a type the API won't take becomes a visible
+// drop note rather than a silent omission (sending it would 400).
+func responsesContentFromParts(parts []ContentPart) []responsesContentPart {
+	out := make([]responsesContentPart, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			if p.Text != "" {
+				out = append(out, responsesContentPart{Type: "input_text", Text: p.Text})
+			}
+		case "image_url":
+			if p.ImageURL == nil {
+				continue
+			}
+			if mime, _, ok := parseImageDataURL(p.ImageURL.URL); ok && responsesImageFormat(mime) {
+				out = append(out, responsesContentPart{Type: "input_image", ImageURL: p.ImageURL.URL})
+			} else {
+				out = append(out, responsesContentPart{Type: "input_text", Text: "[an image attachment was dropped: its format is not supported by this backend]"})
+			}
+		}
+	}
+	return out
+}
+
+// responsesImageFormat reports whether mime is one of the raster formats the
+// Responses API accepts for input_image.
+func responsesImageFormat(mime string) bool {
+	switch mime {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp":
+		return true
+	}
+	return false
 }
 
 // responsesEvent is the data payload of a Responses API SSE event.
@@ -90,6 +137,15 @@ func messagesToResponses(msgs []Message) []responsesInput {
 				items = append(items, responsesInput{Role: "assistant", Content: m.Content})
 			}
 		default: // user, system
+			// Multipart messages (vision content parts) map to the array
+			// content shape; a plain string stays a plain string. Without
+			// this the parts — images included — were silently dropped.
+			if len(m.ContentParts) > 0 {
+				if parts := responsesContentFromParts(m.ContentParts); len(parts) > 0 {
+					items = append(items, responsesInput{Role: m.Role, Content: parts})
+					continue
+				}
+			}
 			items = append(items, responsesInput{Role: m.Role, Content: m.Content})
 		}
 	}

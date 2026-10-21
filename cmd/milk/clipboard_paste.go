@@ -172,6 +172,7 @@ func pickNonTextMIME(types []string) string {
 		}
 		// Skip X selection meta-targets and text types.
 		if strings.HasPrefix(t, "text/") ||
+			strings.HasPrefix(t, "x-special/") ||
 			t == "TARGETS" || t == "TIMESTAMP" || t == "MULTIPLE" ||
 			t == "SAVE_TARGETS" || t == "UTF8_STRING" || t == "STRING" ||
 			t == "TEXT" || t == "COMPOUND_TEXT" {

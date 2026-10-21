@@ -47,6 +47,13 @@ func acpTestServer(t *testing.T, reply string) (*acpServer, *fakeACPConn) {
 // backend, for tests that need to inspect what milk sent the model.
 func acpTestServerWithHandler(t *testing.T, h http.HandlerFunc) (*acpServer, *fakeACPConn) {
 	t.Helper()
+	return acpTestServerWithAgent(t, h, "")
+}
+
+// acpTestServerWithAgent is acpTestServerWithHandler with extra JSON fields
+// merged into the stub agent's config entry (e.g. `"vision": true`).
+func acpTestServerWithAgent(t *testing.T, h http.HandlerFunc, agentExtra string) (*acpServer, *fakeACPConn) {
+	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
@@ -55,7 +62,7 @@ func acpTestServerWithHandler(t *testing.T, h http.HandlerFunc) (*acpServer, *fa
 	if err := os.MkdirAll(milkDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	cfgJSON := fmt.Sprintf(`{"agent":"test-local","agents":[{"name":"test-local","url":%q,"model":"test-model","provider":"local"}]}`, srv.URL)
+	cfgJSON := fmt.Sprintf(`{"agent":"test-local","agents":[{"name":"test-local","url":%q,"model":"test-model","provider":"local"%s}]}`, srv.URL, agentExtra)
 	if err := os.WriteFile(filepath.Join(milkDir, "config.json"), []byte(cfgJSON), 0o600); err != nil {
 		t.Fatalf("WriteFile config: %v", err)
 	}

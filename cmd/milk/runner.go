@@ -133,7 +133,10 @@ type TurnRunner interface {
 	// Name returns the display name used in logs and status lines.
 	Name() string
 	// IsCLI reports whether this runner invokes the claude CLI subprocess.
-	// Used to decide how to pass image attachments (@path vs inline data URI).
+	// Image delivery needs no host-side decision anymore: every runner
+	// resolves its own images from the turn's ctx parts (cliRunner stages
+	// @temp-file references via stageCLIImageRefs, localRunner sends
+	// multipart parts) — see ADR-0074's amendments.
 	IsCLI() bool
 	// Ping checks whether the underlying agent binary or endpoint is reachable.
 	Ping() error
@@ -156,9 +159,11 @@ type TurnRunner interface {
 	) (TurnResult, error)
 	// RunToolCall executes a single lightweight inference call with no session
 	// bookkeeping. images are forwarded from a calling agent that couldn't
-	// attach them itself (see local.ToolAgentDispatcher); only localRunner
-	// can actually use them (via per-call ctx — local.WithImageParts, issue
-	// #297) — cliRunner and subprocessRunner accept but ignore the parameter.
+	// attach them itself (see local.ToolAgentDispatcher). localRunner sends
+	// them via per-call ctx (local.WithImageParts, issue #297), cliRunner
+	// stages them as @temp-file references (stageCLIImageRefs);
+	// subprocessRunner accepts but cannot use them (it appends a
+	// could-not-forward note).
 	// Returns the agent's text response or an error.
 	RunToolCall(ctx context.Context, cfg config.Config, prompt string, images []local.ContentPart, out io.Writer) (string, error)
 }
@@ -479,6 +484,20 @@ func (r *cliRunner) Execute(
 	primaryName := cfg.ActiveAgent().Name
 	escalationName := cfg.EscalationAgentConfig().Name
 
+	// Multimodal turns (ADR-0074): a CLI runner takes images as @path
+	// references, never multipart parts — stage the turn's ctx-carried images
+	// here, after routing. The runner that handles the turn does the staging,
+	// so a local model never sees @path noise, a CLI *primary* gets its images
+	// too, and the temp files are alive for the whole turn (self-escalation
+	// and permission retries included). Hosts only wire the parts
+	// (local.WithImageParts) — they never manage CLI temp files.
+	if parts, _ := local.ImagePartsFromContext(ctx); len(parts) > 0 {
+		if block, cleanup := stageCLIImageRefs(parts); block != "" {
+			defer cleanup()
+			prompt = block + prompt
+		}
+	}
+
 	agent := applyPersistedGrants(r.agent, r.pc)
 	if r.pc.cs != nil && r.pc.toolFutures == nil {
 		agent = agent.WithPermissionHandler(makePermissionHandler(r.newInput(), out, r.pc.cs))
@@ -742,35 +761,11 @@ func (r *cliRunner) RunToolCall(ctx context.Context, _ config.Config, prompt str
 	if !r.agent.SkipPermissions() {
 		return "", errors.New("claude-cli tool-agent requires dangerously_skip_permissions: true")
 	}
-	if len(images) > 0 {
-		// claude reads @path references natively — write each forwarded image
-		// to a temp file (no persistent m.st.pendingCLIImageFiles tracking
-		// exists at this stateless-call layer, so clean up here directly).
-		var refs strings.Builder
-		for _, part := range images {
-			if part.ImageURL == nil {
-				continue
-			}
-			data, mime, ok := decodeDataURI(part.ImageURL.URL)
-			if !ok {
-				continue
-			}
-			f, err := os.CreateTemp("", "milk-toolagent-img-*"+mimeExtension(mime))
-			if err != nil {
-				continue
-			}
-			if _, err := f.Write(data); err != nil {
-				f.Close()
-				os.Remove(f.Name()) //nolint:errcheck
-				continue
-			}
-			f.Close()
-			defer os.Remove(f.Name()) //nolint:errcheck
-			fmt.Fprintf(&refs, "@%s\n", f.Name())
-		}
-		if refs.Len() > 0 {
-			prompt = refs.String() + prompt
-		}
+	// claude reads @path references natively (see stageCLIImageRefs); the
+	// staged files are removed when the call ends.
+	if block, cleanup := stageCLIImageRefs(images); block != "" {
+		defer cleanup()
+		prompt = block + prompt
 	}
 	// Run a fresh first-turn (no session resume) with empty context — tool calls
 	// are stateless one-shot requests, not continuation of an escalation session.
@@ -893,6 +888,13 @@ func (r *subprocessRunner) Execute(
 ) (TurnResult, error) {
 	primaryName := cfg.ActiveAgent().Name
 	escalationName := cfg.EscalationAgentConfig().Name
+
+	// Multimodal turns (ADR-0074): a subprocess agent has no image channel
+	// at all — say so in the prompt instead of dropping the attachments
+	// without a trace.
+	if parts, _ := local.ImagePartsFromContext(ctx); len(parts) > 0 {
+		prompt += fmt.Sprintf("\n\n<system-reminder>%d image attachment(s) could not be forwarded to this agent (%s) — it runs as a subprocess without vision input.</system-reminder>\n", len(parts), r.name)
+	}
 
 	agent := r.agent
 	if mem != nil && cbs.OnPercept != nil {

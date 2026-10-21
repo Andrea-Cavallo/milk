@@ -282,3 +282,47 @@ func TestStdioConn_AfterResponseSkippedOnError(t *testing.T) {
 		t.Errorf("AfterResponse called on error response: %v", h.got)
 	}
 }
+
+// TestServe_OversizedLineDroppedStreamSurvives pins the line-reader
+// resilience: a JSON-RPC line over MaxLineBytes (a pasted screenshot's
+// base64) is dropped with a warning — the old bufio.Scanner behavior ended
+// the entire connection on ErrTooLong — and the very next line is still
+// dispatched.
+func TestServe_OversizedLineDroppedStreamSurvives(t *testing.T) {
+	h := &fakeHandler{}
+	r, w := io.Pipe()
+	conn := NewStdioConn(io.Discard, h)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- conn.Serve(ctx, r) }()
+
+	go func() {
+		w.Write(bytes.Repeat([]byte("x"), MaxLineBytes+1024)) //nolint:errcheck
+		w.Write([]byte("\n"))                                 //nolint:errcheck
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}`+"\n")
+		w.Close() //nolint:errcheck
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Serve did not return after the stream closed")
+	}
+	// handleRequest runs on its own goroutine — poll briefly for it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		n := len(h.requests)
+		h.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.requests) != 1 || h.requests[0] != "ping" {
+		t.Errorf("expected exactly the post-overflow ping to be dispatched, got %v", h.requests)
+	}
+}

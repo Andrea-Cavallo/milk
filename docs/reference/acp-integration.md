@@ -38,7 +38,7 @@ milk serve --acp
 | `session/close` | client → agent | ✅ real: cancel any running turn + suppress follow-ups + persist + free (idempotent, the file is kept — close ≠ delete) |
 | `session/delete` | client → agent | ✅ real, behind the `session.delete` capability (`{}`): close-if-open, then drop the session file and index entry (accepts an unambiguous ID prefix) |
 | `session/set_config_option` | client → agent | ✅ real: two options, advertised as `configOptions` in the `session/new` and `session/resume` responses — `think` (boolean, = `/think on\|off`) and `routing` (select `auto`\|`primary`\|`escalation`, = clear pins / `/primary` / `/escalate`). The response carries the full updated option set. Unknown `configId`, a value outside the declared set, or the wrong value `type` → `-32602`; unknown session → `-32002` |
-| `session/prompt` | client → agent | ✅ real |
+| `session/prompt` | client → agent | ✅ real: text **and multimodal content blocks** — pasted/attached images reach vision-capable agents (see "Multimodal input" below) |
 | `session/cancel` | client → agent (notification) | ✅ real |
 | `session/update` (`state_update`) | agent → client | ✅ real: `running` at turn start, `idle` at turn end |
 | `session/update` (`config_option_update`) | agent → client | ✅ real: pushed when a slash command (`/think`, `/escalate`, `/primary`) moves an option's value, so the client's settings UI never drifts from the commands. Not sent for changes made through `session/set_config_option` itself (its response already carries the state) |
@@ -156,6 +156,68 @@ who only ever meets milk through their editor can configure it:
   than the server's startup snapshot.
 - **No editor question.** The TUI's trailing "open config in editor now?" is
   skipped — `/config open` answers with the path for the client's editor.
+
+## Multimodal input (image pasting)
+
+`session/prompt` takes the ACP `ContentBlock` union, not just text. An image
+pasted into a client's chat reaches a vision-capable model through exactly the
+TUI's attachment path (ADR-0074): the same multipart payload `/attach` and
+clipboard paste produce, gated by the same `"vision": true` agent flag.
+
+| Prompt block | What milk does |
+|---|---|
+| `text` | Assembled in order into the prompt (multiple text blocks concatenate verbatim) |
+| `image` | Decoded (bare base64 per the spec; a full `data:` URI is tolerated) and sent as a multipart `image_url` content part — or, when a claude-cli runner handles the turn, staged as a temp file and referenced as `@path` (the binary reads `@path` natively; staging happens at dispatch, so the files live exactly as long as the turn). An empty `mimeType` is sniffed from the bytes. A payload that is not a raster image (a PDF, an SVG, junk) is never sent as `image_url` — textual payloads inline as text, anything else is noted and dropped. Attachments over 32MB are rejected with a notice |
+| `audio` | Not forwarded — milk supports image input only. The prompt gets an `[attached audio: …]` placeholder and the client gets a notice chunk |
+| `resource_link` | Referenced in the prompt as `[linked resource: name — uri]`; an inline `resource.text` is inlined, binary `blob` content is noted but not forwarded |
+| any other `type` | Open-set, never an error: a placeholder plus a notice, and the block still round-trips in the accept-echo |
+
+- **Same vision gate as the TUI.** The `image_url` part is only sent when the
+  agent's config entry has `"vision": true` (sending one to a non-vision
+  endpoint is a hard API error on many backends). Without the flag the model
+  gets the familiar `<system-reminder>` that the agent isn't configured for
+  vision — the turn is never failed or the prompt dropped because of an
+  attachment. And if the endpoint rejects image input anyway, the turn is
+  retried once without the images, with a notice — a mis-set flag degrades to
+  "the model didn't see the image", never to a failed turn.
+- **Undeliverable content is always announced.** Audio, non-image payloads,
+  undecodable base64 and open-set block kinds all leave a placeholder in the
+  prompt and a notice chunk for the client — including on prompts milk
+  consumes itself (a slash command, a wizard answer): nothing attached is
+  ever dropped silently.
+- **Oversized lines can't kill the connection.** One JSON-RPC line is capped
+  at 64MB (a pasted screenshot's base64 in one `session/prompt`); an over-limit
+  line is dropped with a stderr warning and the stream keeps serving.
+- **Config changes reach open sessions.** Like the TUI's hot-reload, a write
+  to `~/.milk/config.json` (or the project-local `.milk/config.json`) is
+  picked up at the next `session/prompt`: the agents are rebuilt and a
+  `config reloaded` notice chunk is sent — flipping `"vision": true` takes
+  effect without restarting the client session.
+- **The accept-echo carries your blocks.** The `user_message` upsert under the
+  `messageId` the `session/prompt` response returns holds the prompt's content
+  blocks as the client sent them (image included), so a client can render the
+  pasted image back in its transcript; a v1 client gets the same blocks as
+  `user_message_chunk`s on that `messageId`.
+- **History stays compact.** The user turn recorded for replay carries
+  placeholders (`[attached image: image-1.png (image/png)]`), never base64 —
+  a later `session/resume` replay shows the placeholder text, not the image.
+- **One messageId per turn.** milk echoes the user message and streams the
+  agent's reply under the same `messageId` (the one the `session/prompt`
+  response returns); history replay instead gives user and agent turns
+  distinct IDs. Clients must key live messages by `sessionUpdate` kind +
+  `messageId`, not `messageId` alone.
+
+```jsonc
+// → client pastes an image alongside its question
+{"jsonrpc":"2.0","id":7,"method":"session/prompt","params":{"sessionId":"a1b2c3d4-...","prompt":[
+  {"type":"text","text":"what is in this image?"},
+  {"type":"image","data":"iVBORw0KGgo…","mimeType":"image/png"}]}}
+
+// ← accept-echo: the client's own blocks under the response's messageId
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"a1b2c3d4-...","update":{"sessionUpdate":"user_message","messageId":"msg-2","content":[
+  {"type":"text","text":"what is in this image?"},
+  {"type":"image","data":"iVBORw0KGgo…","mimeType":"image/png"}]}}}
+```
 
 ## Workflows, tasks and background agents
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -514,6 +515,11 @@ func (m model) launchGenericWorkflow(w *workflowWizardState) (tea.Model, tea.Cmd
 	// local providers, @path lines for CLI providers).
 	attachments := m.pendingAttachments
 	m.pendingAttachments = nil
+	// Materialize the attachments into a workflow-owned temp dir: the task
+	// block and CLI @path references name files that must exist on disk for
+	// the whole run, and a clipboard-pasted attachment's original path is a
+	// milk temp file that is gone by now (see materializeWorkflowAttachments).
+	attachments, attachDir := materializeWorkflowAttachments(attachments)
 	task := workflowTaskWithAttachments(w.task, attachments)
 	if len(attachments) > 0 {
 		names := make([]string, 0, len(attachments))
@@ -564,6 +570,9 @@ func (m model) launchGenericWorkflow(w *workflowWizardState) (tea.Model, tea.Cmd
 		workflowIdleCheck(gen),
 		func() tea.Msg {
 			defer cancel()
+			if attachDir != "" {
+				defer os.RemoveAll(attachDir)
+			}
 			err := r.Run(ctx, runCfg)
 			return workflow.WorkflowDoneMsg{Err: err}
 		},

@@ -50,9 +50,31 @@ type bedrockMessage struct {
 
 type bedrockContentBlock struct {
 	Text       string             `json:"text,omitempty"`
+	Image      *bedrockImage      `json:"image,omitempty"`
 	ToolUse    *bedrockToolUse    `json:"toolUse,omitempty"`
 	ToolResult *bedrockToolResult `json:"toolResult,omitempty"`
 	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
+}
+
+// bedrockImage is Converse's image content block. Source.Bytes is the raw
+// image bytes in AWS JSON blob encoding (base64) — exactly what an image_url
+// data URI already carries after its prefix.
+type bedrockImage struct {
+	Format string            `json:"format"` // "png" | "jpeg" | "gif" | "webp"
+	Source bedrockImageBytes `json:"source"`
+}
+
+type bedrockImageBytes struct {
+	Bytes string `json:"bytes"`
+}
+
+// bedrockImageFormats maps MIME types to Converse image formats.
+var bedrockImageFormats = map[string]string{
+	"image/png":  "png",
+	"image/jpeg": "jpeg",
+	"image/jpg":  "jpeg",
+	"image/gif":  "gif",
+	"image/webp": "webp",
 }
 
 type bedrockToolUse struct {
@@ -140,6 +162,36 @@ type bedrockMetadataEvent struct {
 // convertMessagesToConverse translates OpenAI-format messages to Bedrock Converse format.
 // System messages (any position) are extracted into a separate slice.
 // Consecutive tool-result messages are merged into a single user message (Bedrock requirement).
+// bedrockBlocksFromParts converts message content parts to Converse content
+// blocks: text parts verbatim, image parts as image blocks (formats Converse
+// accepts). An image of another type becomes a visible drop note rather than
+// a silent omission (sending it would fail the request).
+func bedrockBlocksFromParts(parts []ContentPart) []bedrockContentBlock {
+	var out []bedrockContentBlock
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			if p.Text != "" {
+				out = append(out, bedrockContentBlock{Text: p.Text})
+			}
+		case "image_url":
+			if p.ImageURL == nil {
+				continue
+			}
+			mime, b64, ok := parseImageDataURL(p.ImageURL.URL)
+			if !ok {
+				continue
+			}
+			if format := bedrockImageFormats[mime]; format != "" {
+				out = append(out, bedrockContentBlock{Image: &bedrockImage{Format: format, Source: bedrockImageBytes{Bytes: b64}}})
+			} else {
+				out = append(out, bedrockContentBlock{Text: "[an image attachment was dropped: its format is not supported by this backend]"})
+			}
+		}
+	}
+	return out
+}
+
 func convertMessagesToConverse(msgs []Message) ([]bedrockMessage, []bedrockSystem) {
 	var system []bedrockSystem
 	var result []bedrockMessage
@@ -157,6 +209,15 @@ func convertMessagesToConverse(msgs []Message) ([]bedrockMessage, []bedrockSyste
 					Role:    "user",
 					Content: []bedrockContentBlock{{Text: m.Content}},
 				})
+			}
+			// Multipart messages (vision content parts) map to Converse
+			// content blocks; without this the images — and, for a
+			// Content-less tool-image message, the whole message — were
+			// silently dropped.
+			if len(m.ContentParts) > 0 {
+				if blocks := bedrockBlocksFromParts(m.ContentParts); len(blocks) > 0 {
+					result = append(result, bedrockMessage{Role: "user", Content: blocks})
+				}
 			}
 
 		case "tool":

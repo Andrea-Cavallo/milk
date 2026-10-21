@@ -274,11 +274,6 @@ type interactiveState struct {
 	// attachment placeholders in history instead of full file content.
 	pendingSessionContent string
 
-	// pendingCLIImageFiles holds temp file paths for images staged for the CLI
-	// escalation path. Each file is prepended as @<path> in the prompt so the
-	// claude binary reads the image natively. Paths are removed after the turn.
-	pendingCLIImageFiles []string
-
 	// activeFallbackTarget is set by runTurn just before a turn runs when the
 	// router's decision was overridden by availability (e.g. local down → escalation).
 	// "" means no override is active. Used by agentLabel to show the correct agent
