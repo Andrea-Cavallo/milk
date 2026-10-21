@@ -211,10 +211,10 @@ stages:
 
 | Kind | Purpose | Key fields |
 |---|---|---|
-| `agent_turn` | Run one turn on a role's agent | `role`, `prompt` (Go template), `save_as`; optional `verdict` (map of outcome → `{action: break\|retry, warn}`, read from the turn's output for an enclosing `loop` — the map's **keys are the response words to match**, scanned from the end of the output, longest first, so a stage can prompt for its own vocabulary; the historical `good_to_go` / `needs_refinement` / `sprint_done` are still recognized when no declared key matches, and `unknown` is the no-match fallback — ADR-0071), `skip_user_checkpoint_marker`/`on_answer_prompt` (treat output as clarifying questions unless a marker line is present), `empty_output_fallback: git_diff`, `run_unless_marker_in`/`run_unless_contains` (skip this stage based on a prior stage's output), `use_memory: true` (opt this stage into the same percept injection primary/escalation turns get — off by default, since workflow roles are otherwise fully isolated: a fresh scratch session per role, no session-orientation context) |
+| `agent_turn` | Run one turn on a role's agent | `role`, `prompt` (Go template), `save_as`; optional `verdict` (map of outcome → `{action: break\|retry, warn}`, read from the turn's output for an enclosing `loop` — the map's **keys are the response words to match**, scanned from the end of the output, longest first, so a stage can prompt for its own vocabulary; the historical `good_to_go` / `needs_refinement` / `sprint_done` are still recognized when no declared key matches, and `unknown` is the no-match fallback — ADR-0071; a rule may also carry `board_status: todo|in_progress|blocked|done` to set the current fan-out item's board status when it fires — e.g. `todo` on a retry reopens the item so the retried worker can claim it again, ADR-0073), `skip_user_checkpoint_marker`/`on_answer_prompt` (treat output as clarifying questions unless a marker line is present), `empty_output_fallback: git_diff`, `run_unless_marker_in`/`run_unless_contains` (skip this stage based on a prior stage's output), `use_memory: true` (opt this stage into the same percept injection primary/escalation turns get — off by default, since workflow roles are otherwise fully isolated: a fresh scratch session per role, no session-orientation context) |
 | `loop` | Repeat its `body` | Either `over`+`from` (iterate a declared collection parsed out of another stage's saved output — see below) or `max_iterations`/`max_iterations_from` (a bounded retry loop; the last body stage must declare `verdict`) |
 | `user_checkpoint` | Pause for a real user reply | `prompt` (rendered from current vars), `save_as` |
-| `parallel_group` | Like `loop over`, but each item's `body` runs **concurrently** | `over`, `from`, `max_concurrency`, `save_as` (aggregated per-item results) |
+| `parallel_group` | Like `loop over`, but each item's `body` runs **concurrently** — an item starts the moment *its own* `depends_on` items finish, not when a whole wave does | `over`, `from`, `max_concurrency`, `save_as` (aggregated per-item results), `skip_if_board_status` (board definitions: items in a listed status are not dispatched and keep their last result — a repeated fan-out re-runs only reopened items; ADR-0073) |
 | `board_seed` | Populate the shared board from the plan document (deterministic, no agent turn; requires `board: true` — see below) | `over`, `from` |
 
 **Per-item isolation (issue #297)**: each fan-out item gets its own clone of the role's runner adapter (`workflow.CloneableTurnRunner` — own scratch session, session ID, nonce and one-shot flags), so concurrent items never share or interleave session state; an item's passes resume within *that item's* session. Vision attachments for workflow turns ride the call's context (`local.WithImageParts`) rather than any shared agent field, so a background workflow running concurrently with a REPL turn touches no shared mutable state either. Runners that don't implement the optional clone interface keep the previous shared-instance behavior.
@@ -235,6 +235,13 @@ every role of the run reads and writes (ADR-0071, issue #197; `team` is the buil
   (`todo`/`in_progress`/`blocked`/`done` + notes; `claimed` only via claim), `board_post`
   (short cross-role findings). Claims and findings are attributed to the acting identity
   (`worker·Item-2`) threaded on the turn's context.
+- **Reopening and re-runs** (ADR-0073): a `done` item cannot be claimed (not even by its owner);
+  reopen it by setting it back to `todo` — a verdict rule's `board_status: todo` does it for a
+  retry, and the coordinator's `board_update` does it between passes. A `parallel_group` with
+  `skip_if_board_status: [done]` then re-runs only the reopened items on the next pass; the other
+  items keep the result they last produced in the group's `save_as` aggregate. A claimed item
+  moved on to `in_progress` can be re-claimed by the same identity (retry/resume); identical
+  repeated `board_post`s from one sender are absorbed.
 - **Persistence**: every mutation is written through atomically to
   `<checkpoint>.board.json` next to the workflow checkpoint — resume restores live claims;
   caps (200 findings, trimmed notes) keep long runs bounded.

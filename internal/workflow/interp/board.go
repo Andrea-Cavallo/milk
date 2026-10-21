@@ -3,6 +3,7 @@ package interp
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/scoutme/milk/internal/workflow"
@@ -70,6 +71,23 @@ func seedItemsFromTrace(trace []TraceEntry, stages []workflow.Stage) ([]board.It
 	return nil, false
 }
 
+var (
+	boardLabelListMarker = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+`)
+	boardLabelBold       = regexp.MustCompile(`\*\*(.+?)\*\*`)
+)
+
+// cleanBoardLabel turns a plan section's first content line into a board
+// label: the plan is markdown, the board is a plain-text table, so list
+// markers, bold spans and inline-code ticks are dropped (a designer that
+// bolds each item's title would otherwise leave "**…**" in every label).
+func cleanBoardLabel(line string) string {
+	line = strings.TrimSpace(line)
+	line = boardLabelListMarker.ReplaceAllString(line, "")
+	line = boardLabelBold.ReplaceAllString(line, "$1")
+	line = strings.ReplaceAll(line, "`", "")
+	return strings.TrimSpace(line)
+}
+
 // execBoardSeed populates the shared board from a plan document's declared
 // sections (deterministic — no agent turn). Seeding is idempotent (indexes
 // already on the board keep their live status), so a replayed leaf or a
@@ -105,7 +123,7 @@ func execBoardSeed(ec *execContext, s workflow.Stage) error {
 			if line == "" || strings.HasPrefix(line, "##") {
 				continue
 			}
-			label = line
+			label = cleanBoardLabel(line)
 			break
 		}
 		items = append(items, board.Item{Index: sec.Index, Label: label, DependsOn: sec.DependsOn})

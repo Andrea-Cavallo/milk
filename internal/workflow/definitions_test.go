@@ -152,3 +152,47 @@ func TestValidate_BoardSeedContract(t *testing.T) {
 		t.Errorf("nested seed without board flag: err = %v", err)
 	}
 }
+
+// board_status / skip_if_board_status are generic board features: they need a
+// board, board_status needs a current item (a parallel_group body), and the
+// statuses must exist (and be settable, for board_status).
+func TestDefinition_Validate_BoardFields(t *testing.T) {
+	item := func(rule VerdictRule) Stage {
+		return Stage{ID: "fan", Kind: StageKindParallelGroup, Over: "Item", Body: []Stage{{
+			ID: "eval", Kind: StageKindAgentTurn, Role: "e", Prompt: "p",
+			Verdict: map[string]VerdictRule{"retry_me": rule},
+		}}}
+	}
+	def := func(board bool, stages ...Stage) Definition {
+		return Definition{Name: "d", Board: board, Stages: stages}
+	}
+	tests := []struct {
+		name    string
+		d       Definition
+		wantErr string
+	}{
+		{"valid reopen", def(true, item(VerdictRule{Action: "retry", BoardStatus: "todo"})), ""},
+		{"board_status without board", def(false, item(VerdictRule{Action: "retry", BoardStatus: "todo"})), "requires \"board: true\""},
+		{"board_status outside an item", def(true, Stage{ID: "e", Kind: StageKindAgentTurn, Role: "e", Prompt: "p",
+			Verdict: map[string]VerdictRule{"x": {Action: "retry", BoardStatus: "todo"}}}), "inside a parallel_group"},
+		{"claimed is not settable", def(true, item(VerdictRule{Action: "retry", BoardStatus: "claimed"})), "not settable"},
+		{"unknown status", def(true, item(VerdictRule{Action: "retry", BoardStatus: "nope"})), "not settable"},
+		{"skip filter valid", def(true, Stage{ID: "fan", Kind: StageKindParallelGroup, Over: "Item", SkipIfBoardStatus: []string{"done"},
+			Body: []Stage{{ID: "w", Kind: StageKindAgentTurn, Role: "w", Prompt: "p"}}}), ""},
+		{"skip filter without board", def(false, Stage{ID: "fan", Kind: StageKindParallelGroup, Over: "Item", SkipIfBoardStatus: []string{"done"},
+			Body: []Stage{{ID: "w", Kind: StageKindAgentTurn, Role: "w", Prompt: "p"}}}), "requires \"board: true\""},
+		{"skip filter unknown status", def(true, Stage{ID: "fan", Kind: StageKindParallelGroup, Over: "Item", SkipIfBoardStatus: []string{"finished"},
+			Body: []Stage{{ID: "w", Kind: StageKindAgentTurn, Role: "w", Prompt: "p"}}}), "unknown board status"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.d.Validate()
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

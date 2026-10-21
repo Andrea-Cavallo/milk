@@ -321,6 +321,21 @@ func (a *Agent) logRole() string {
 	return agentRoleForMetrics(a.escalationName)
 }
 
+// usageRole is logRole refined for token/latency attribution: a workflow step
+// executor's traffic is tagged with the workflow role the turn runs as
+// ("primary:workflow:worker"), so a run's cost splits per role instead of
+// landing in one "workflow" bucket. The suffix keeps the prefix queries
+// (SessionTokensByRolePrefix) working, and the role set is the definition's own.
+func (a *Agent) usageRole(ctx context.Context) string {
+	role := a.logRole()
+	if a.workflowRole {
+		if wr := workflow.TurnRoleFrom(ctx); wr != "" {
+			role += ":" + wr
+		}
+	}
+	return role
+}
+
 // ModelName returns this agent's configured model identifier, for callers
 // outside the package that need to attribute token usage (e.g. a compaction
 // summarization call made from cmd/milk/main.go).
@@ -4221,7 +4236,7 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 			}
 		}
 	}
-	role := a.logRole()
+	role := a.usageRole(ctx)
 	obs.RecordDuration(ctx, inferenceScope, "milk.inference.latency_ms", time.Since(inferenceStart),
 		attribute.String("model", a.model),
 		attribute.String("agent", role),

@@ -17,6 +17,7 @@ package interp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"regexp"
@@ -220,6 +221,9 @@ type execContext struct {
 	// context belongs to one; execAgentTurn folds it into the board
 	// identity ("worker·Item-2") so claims and findings are attributable.
 	itemToken string
+	// itemIndex is the current parallel_group item's number (the board item
+	// with the same index), 0 outside one.
+	itemIndex int
 
 	// progressSend is the Send func used for ProgressMsg reporting. It is
 	// always the parent's Send (never nil when the caller supplied one),
@@ -627,7 +631,7 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 	// ctx: local-agent schemas gate board_* tool registration on it and the
 	// handlers read it back — context values flow through the runner and
 	// the tool loop's derived contexts untouched.
-	turnCtx := ec.ctx
+	turnCtx := workflow.WithTurnRole(ec.ctx, s.Role)
 	if ec.board != nil {
 		identity := s.Role
 		if ec.itemToken != "" {
@@ -733,10 +737,27 @@ func execAgentTurn(ec *execContext, s workflow.Stage) (string, error) {
 		ec.cfg.Send(workflow.WorkflowChunkMsg{Text: fmt.Sprintf(
 			"\n[warning: unexpected verdict %q at stage %q, treating as %q]\n", key, s.ID, rule.Action)})
 	}
+	reopenBoardItem(ec, s, key, rule)
 	ec.completeActivePath()
 	ec.reportProgress("")
 	ec.recordLeaf(TraceEntry{StageID: s.ID, SaveAs: s.SaveAs, Value: out, Outcome: rule.Action})
 	return rule.Action, nil
+}
+
+// reopenBoardItem applies a verdict rule's BoardStatus to the current
+// parallel_group item's board entry (Definition validation guarantees the
+// rule only sits inside such a body of a board definition). Writing "todo"
+// releases the claim, which is what lets a retried worker claim its own
+// item again after marking it done before evaluation.
+func reopenBoardItem(ec *execContext, s workflow.Stage, key string, rule workflow.VerdictRule) {
+	if rule.BoardStatus == "" || ec.board == nil || ec.itemIndex == 0 {
+		return
+	}
+	if _, err := ec.board.Update(ec.itemIndex, rule.BoardStatus, ""); err != nil {
+		obs.Warn("workflow.board.update_failed", ec.logAttrs("stage", s.ID, "verdict", key, "status", rule.BoardStatus, "err", err.Error())...)
+		return
+	}
+	obs.Info("workflow.board.item_status", ec.logAttrs("stage", s.ID, "verdict", key, "item_index", ec.itemIndex, "status", rule.BoardStatus)...)
 }
 
 // resolveUserCheckpointDance implements the SkipUserCheckpointMarker /
@@ -908,15 +929,24 @@ func execBoundedLoop(ec *execContext, s workflow.Stage) (string, error) {
 }
 
 // execParallelGroup runs Body once per declared section named by Over,
-// concurrently within each dependency wave (bounded by MaxConcurrency) and
-// giving each a private copy of Vars — concurrent writers to a shared map
-// would race, and each item's intermediate SaveAs values (e.g. a per-item
-// "worker_output") are meaningless to its siblings. Items with a DependsOn
-// declaration only start once every dependency's wave has finished (see
-// computeWaves); a dependency cycle is reported as an error rather than
-// deadlocking. One item's error does not cancel the others in its wave or
-// abort later waves; results aggregate into Vars[SaveAs] as []ItemResult, in
-// declaration order regardless of wave grouping.
+// concurrently (bounded by MaxConcurrency) and giving each a private copy of
+// Vars — concurrent writers to a shared map would race, and each item's
+// intermediate SaveAs values (e.g. a per-item "worker_output") are
+// meaningless to its siblings.
+//
+// Scheduling is dependency-driven per item: an item with a DependsOn
+// declaration starts the moment every item it depends on has finished (not
+// when a whole "wave" has), so a slow sibling never holds back an unrelated
+// dependent. A dependency cycle or a reference to a missing item is reported
+// as an error up front (computeWaves) rather than deadlocking. One item's
+// error does not cancel the others or stop its dependents from starting.
+//
+// SkipIfBoardStatus (board definitions) leaves out the items whose board
+// status is listed: they are not dispatched, count as finished for their
+// dependents, and keep the result a previous run of this group stored under
+// SaveAs — so a repeated fan-out (an outer retry loop) re-runs only the
+// reopened items yet the aggregate still describes every item. Results
+// aggregate into Vars[SaveAs] as []ItemResult in declaration order.
 func execParallelGroup(ec *execContext, s workflow.Stage) error {
 	if _, ok, err := tryReplay(ec, s); ok {
 		return err
@@ -933,8 +963,7 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 		ec.recordLeaf(TraceEntry{StageID: s.ID})
 		return nil
 	}
-	waves, err := computeWaves(sections)
-	if err != nil {
+	if _, err := computeWaves(sections); err != nil {
 		return fmt.Errorf("workflow: stage %q: %w", s.ID, err)
 	}
 	ec.pushPath(fmt.Sprintf("%s (%d items)", s.ID, len(sections)))
@@ -958,83 +987,128 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 			ec.cfg.Send(workflow.WorkflowChunkMsg{Text: fmt.Sprintf(format, args...)})
 		}
 	}
-	note("\n[%s: %d %ss, up to %d at a time — workers run without live output]\n", s.ID, len(sections), label, maxConcurrency)
-	obs.Info("workflow.fanout.start", ec.logAttrs("stage", s.ID, "items", len(sections), "waves", len(waves), "max_concurrency", maxConcurrency)...)
 
-	for waveIdx, wave := range waves {
-		indexes := make([]int, len(wave))
-		for i, sec := range wave {
-			indexes[i] = sec.Index
+	finished := make(map[int]bool, len(sections)) // items resolved for their dependents
+	var pending []Section
+	var skipped []int
+	prev := previousItemResults(ec.vars[s.SaveAs])
+	for i, sec := range sections {
+		if status, skip := skipForBoardStatus(ec, s, sec.Index); skip {
+			finished[sec.Index] = true
+			skipped = append(skipped, sec.Index)
+			r, ok := prev[sec.Index]
+			if !ok {
+				r = ItemResult{Index: sec.Index, Label: sec.Label, Status: "skipped (board: " + status + ")"}
+			}
+			results[i] = r
+			continue
 		}
-		obs.Info("workflow.fanout.wave", ec.logAttrs("stage", s.ID, "wave", waveIdx+1, "of", len(waves), "items", fmt.Sprint(indexes))...)
-		sem := make(chan struct{}, maxConcurrency)
-		var wg sync.WaitGroup
-		for _, sec := range wave {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(sec Section) {
-				defer wg.Done()
-				defer func() { <-sem }()
+		pending = append(pending, sec)
+	}
+	note("\n[%s: %d %ss, up to %d at a time — workers run without live output]\n", s.ID, len(pending), label, maxConcurrency)
+	if len(skipped) > 0 {
+		note("[%s: skipping %s %v — already settled on the board]\n", s.ID, label, skipped)
+	}
+	obs.Info("workflow.fanout.start", ec.logAttrs("stage", s.ID, "items", len(sections), "dispatch", len(pending), "skipped", fmt.Sprint(skipped), "max_concurrency", maxConcurrency)...)
 
-				itemVars := make(map[string]any, len(ec.vars)+2)
-				maps.Copy(itemVars, ec.vars)
-				itemVars[label] = sec.Index
-				itemVars[label+"_section"] = sec.Body
+	runItem := func(sec Section) {
+		itemVars := make(map[string]any, len(ec.vars)+2)
+		maps.Copy(itemVars, ec.vars)
+		itemVars[label] = sec.Index
+		itemVars[label+"_section"] = sec.Body
 
-				// Suppress live streaming for parallel workers: concurrent
-				// WorkflowChunkMsg writes interleave in the workflow's live
-				// buffer, producing garbled output. Each worker runs silently;
-				// the workflow panel still tracks progress via activePathTracker.
-				workerCfg := ec.cfg
-				workerCfg.Send = nil
-				// Issue #297: items run as concurrent goroutines over a
-				// map-cloned RunConfig — the SAME runner values. Give each
-				// item its own adapter where the runner supports cloning,
-				// so per-call/session state (session ID, nonce, one-shot
-				// flags) is never shared between goroutines. Non-cloneable
-				// runners keep the previous shared-instance behavior.
-				itemRunners := make(map[string]workflow.TurnRunner, len(ec.cfg.Runners))
-				for role, rn := range ec.cfg.Runners {
-					if c, ok := rn.(workflow.CloneableTurnRunner); ok {
-						itemRunners[role] = c.CloneTurnRunner()
-					} else {
-						itemRunners[role] = rn
-					}
-				}
-				workerCfg.Runners = itemRunners
-				itemEC := &execContext{
-					ctx: ec.ctx, cfg: workerCfg, vars: itemVars, defName: ec.defName,
-					active: ec.active, activePathID: ec.forkActivePath(),
-					progressSend: ec.progressSend,
-					board:        ec.board, itemToken: fmt.Sprintf("%s-%d", s.Over, sec.Index),
-				}
-				defer itemEC.removeActivePath()
-				itemEC.pushPath(fmt.Sprintf("%s %s[%d]", s.ID, label, sec.Index))
-				note("[%s %d] started\n", label, sec.Index)
-				itemStart := time.Now()
-				obs.Info("workflow.item.start", itemEC.logAttrs("stage", s.ID)...)
-				outcome, err := executeStages(itemEC, s.Body)
-				r := ItemResult{Index: sec.Index, Label: sec.Label, Status: outcome}
-				if lastSaveAs := lastSaveAsOf(s.Body); lastSaveAs != "" {
-					if out, ok := itemVars[lastSaveAs].(string); ok {
-						r.Output = out
-					}
-				}
-				if err != nil {
-					r.Status = "error"
-					r.Err = err.Error()
-					note("[%s %d] failed: %s\n", label, sec.Index, textbudget.SummarizeLong(r.Err, 200))
-					obs.Warn("workflow.item.failed", itemEC.logAttrs("stage", s.ID, "elapsed_ms", time.Since(itemStart).Milliseconds(), "err", r.Err)...)
-				} else {
-					note("[%s %d] done\n", label, sec.Index)
-					obs.Info("workflow.item.done", itemEC.logAttrs("stage", s.ID, "outcome", outcome, "elapsed_ms", time.Since(itemStart).Milliseconds())...)
-				}
-				itemEC.completeActivePath()
-				itemEC.reportProgress("")
-				results[posByIndex[sec.Index]] = r
-			}(sec)
+		// Suppress live streaming for parallel workers: concurrent
+		// WorkflowChunkMsg writes interleave in the workflow's live
+		// buffer, producing garbled output. Each worker runs silently;
+		// the workflow panel still tracks progress via activePathTracker.
+		workerCfg := ec.cfg
+		workerCfg.Send = nil
+		// Issue #297: items run as concurrent goroutines over a
+		// map-cloned RunConfig — the SAME runner values. Give each
+		// item its own adapter where the runner supports cloning,
+		// so per-call/session state (session ID, nonce, one-shot
+		// flags) is never shared between goroutines. Non-cloneable
+		// runners keep the previous shared-instance behavior.
+		itemRunners := make(map[string]workflow.TurnRunner, len(ec.cfg.Runners))
+		for role, rn := range ec.cfg.Runners {
+			if c, ok := rn.(workflow.CloneableTurnRunner); ok {
+				itemRunners[role] = c.CloneTurnRunner()
+			} else {
+				itemRunners[role] = rn
+			}
 		}
-		wg.Wait()
+		workerCfg.Runners = itemRunners
+		itemEC := &execContext{
+			ctx: ec.ctx, cfg: workerCfg, vars: itemVars, defName: ec.defName,
+			active: ec.active, activePathID: ec.forkActivePath(),
+			progressSend: ec.progressSend,
+			board:        ec.board, itemToken: fmt.Sprintf("%s-%d", s.Over, sec.Index), itemIndex: sec.Index,
+		}
+		defer itemEC.removeActivePath()
+		itemEC.pushPath(fmt.Sprintf("%s %s[%d]", s.ID, label, sec.Index))
+		note("[%s %d] started\n", label, sec.Index)
+		itemStart := time.Now()
+		obs.Info("workflow.item.start", itemEC.logAttrs("stage", s.ID)...)
+		outcome, err := executeStages(itemEC, s.Body)
+		r := ItemResult{Index: sec.Index, Label: sec.Label, Status: outcome}
+		if lastSaveAs := lastSaveAsOf(s.Body); lastSaveAs != "" {
+			if out, ok := itemVars[lastSaveAs].(string); ok {
+				r.Output = out
+			}
+		}
+		if err != nil {
+			r.Status = "error"
+			r.Err = err.Error()
+			note("[%s %d] failed: %s\n", label, sec.Index, textbudget.SummarizeLong(r.Err, 200))
+			obs.Warn("workflow.item.failed", itemEC.logAttrs("stage", s.ID, "elapsed_ms", time.Since(itemStart).Milliseconds(), "err", r.Err)...)
+		} else {
+			note("[%s %d] done\n", label, sec.Index)
+			obs.Info("workflow.item.done", itemEC.logAttrs("stage", s.ID, "outcome", outcome, "elapsed_ms", time.Since(itemStart).Milliseconds())...)
+		}
+		itemEC.completeActivePath()
+		itemEC.reportProgress("")
+		results[posByIndex[sec.Index]] = r
+	}
+
+	ready := func(sec Section) bool {
+		for _, dep := range sec.DependsOn {
+			if !finished[dep] {
+				return false
+			}
+		}
+		return true
+	}
+	doneCh := make(chan int)
+	running := 0
+	for len(pending) > 0 || running > 0 {
+		for i := 0; i < len(pending) && running < maxConcurrency; {
+			if ec.ctx.Err() != nil || !ready(pending[i]) {
+				i++
+				continue
+			}
+			sec := pending[i]
+			pending = append(pending[:i], pending[i+1:]...)
+			running++
+			go func() {
+				defer func() { doneCh <- sec.Index }()
+				runItem(sec)
+			}()
+		}
+		if running == 0 {
+			// Nothing running and nothing startable: the context ended (or,
+			// defensively, a dependency can never resolve). Record what never
+			// ran instead of hanging.
+			reason := "cancelled before start"
+			if ec.ctx.Err() == nil {
+				reason = "dependencies never resolved"
+			}
+			for _, sec := range pending {
+				results[posByIndex[sec.Index]] = ItemResult{Index: sec.Index, Label: sec.Label, Status: "error", Err: reason}
+			}
+			break
+		}
+		finished[<-doneCh] = true
+		running--
 	}
 	if s.SaveAs != "" {
 		ec.vars[s.SaveAs] = results
@@ -1043,13 +1117,54 @@ func execParallelGroup(ec *execContext, s workflow.Stage) error {
 	return nil
 }
 
+// skipForBoardStatus reports whether item index must not be dispatched
+// because its board status is one of the group's SkipIfBoardStatus, and which
+// status that was.
+func skipForBoardStatus(ec *execContext, s workflow.Stage, index int) (status string, skip bool) {
+	if ec.board == nil || len(s.SkipIfBoardStatus) == 0 {
+		return "", false
+	}
+	for _, it := range ec.board.Items() {
+		if it.Index != index {
+			continue
+		}
+		for _, st := range s.SkipIfBoardStatus {
+			if it.Status == st {
+				return st, true
+			}
+		}
+	}
+	return "", false
+}
+
+// previousItemResults reads an earlier run of the group's aggregate back as
+// results by item index. The stored value is []ItemResult within a run and a
+// JSON-decoded []any after a checkpoint replay, so both go through JSON.
+func previousItemResults(v any) map[int]ItemResult {
+	if v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var rs []ItemResult
+	if json.Unmarshal(raw, &rs) != nil {
+		return nil
+	}
+	out := make(map[int]ItemResult, len(rs))
+	for _, r := range rs {
+		out[r.Index] = r
+	}
+	return out
+}
+
 // computeWaves groups sections into dependency waves: wave 0 holds every
 // section with no DependsOn, wave 1 holds sections whose dependencies are
-// all satisfied by wave 0, and so on. Sections within a wave have no
-// dependency relationship to each other and can run concurrently; a wave
-// only starts once every earlier wave has fully finished. Returns an error
-// if a dependency cycle (or a reference to a nonexistent index) prevents any
-// section from ever becoming ready.
+// all satisfied by wave 0, and so on. Returns an error if a dependency cycle
+// (or a reference to a nonexistent index) prevents any section from ever
+// becoming ready. execParallelGroup schedules per item rather than per wave;
+// it calls this to reject unresolvable dependencies before running anything.
 func computeWaves(sections []Section) ([][]Section, error) {
 	resolved := make(map[int]bool, len(sections))
 	remaining := make([]Section, len(sections))

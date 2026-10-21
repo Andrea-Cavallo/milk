@@ -2,11 +2,14 @@ package interp
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/scoutme/milk/internal/workflow"
+	"github.com/scoutme/milk/internal/workflow/board"
 )
 
 func loadTeamDefinition(t *testing.T) workflow.Definition {
@@ -106,4 +109,82 @@ func TestTeamYAML_DeclaresBoardAndValidates(t *testing.T) {
 		t.Error("dropping board: true must invalidate the definition (board_seed pairing)")
 	}
 	_ = io.Discard
+}
+
+// The shipped team.yaml wires the generic engine features together: a
+// refinement retry reopens the item (so the worker's claim is accepted
+// again), and a later pass re-runs only the items the stand-up reopened.
+// Item 1 is accepted first time; item 2 needs one refinement and is then
+// reopened by the stand-up for a second pass.
+func TestTeamYAML_RefinementRetryAndSecondPassRunOnlyReopenedItems(t *testing.T) {
+	def := loadTeamDefinition(t)
+
+	var mu sync.Mutex
+	workerCalls := map[int]int{}
+	claimRefused := 0
+	evalCalls := map[int]int{}
+	standups := 0
+
+	designer := &funcRunner{name: "designer", fn: func(context.Context, string) (string, error) {
+		return "NO_QUESTIONS\n## Spec\nx\n\n## Item Plan\n## Item 1\na\n\n## Item 2\nb\n", nil
+	}}
+	worker := &funcRunner{name: "worker", fn: func(ctx context.Context, _ string) (string, error) {
+		idx := itemOf(t, ctx)
+		b := board.FromContext(ctx)
+		mu.Lock()
+		defer mu.Unlock()
+		workerCalls[idx]++
+		if _, ok := b.Claim(idx, board.IdentityFrom(ctx)); !ok {
+			claimRefused++
+			return "SKIPPED: claim refused", nil
+		}
+		b.Update(idx, board.StatusDone, "") // done before evaluation, as the live run did
+		return fmt.Sprintf("worked item %d", idx), nil
+	}}
+	evaluator := &funcRunner{name: "evaluator", fn: func(ctx context.Context, _ string) (string, error) {
+		if board.IdentityFrom(ctx) == "evaluator" { // final_evaluation: no item
+			return "NO_ISSUES", nil
+		}
+		idx := itemOf(t, ctx)
+		mu.Lock()
+		defer mu.Unlock()
+		evalCalls[idx]++
+		if idx == 2 && evalCalls[idx] == 1 {
+			return "needs_refinement", nil
+		}
+		return "good_to_go", nil
+	}}
+	coordinator := &funcRunner{name: "coordinator", fn: func(ctx context.Context, _ string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		standups++
+		if standups == 1 {
+			board.FromContext(ctx).Update(2, board.StatusTodo, "")
+			return "more_work", nil
+		}
+		return "all_done", nil
+	}}
+	cfg := runCfg(map[string]workflow.TurnRunner{
+		"designer": designer, "worker": worker, "evaluator": evaluator, "coordinator": coordinator,
+		"implementer": &funcRunner{name: "implementer", fn: func(context.Context, string) (string, error) { return "unused", nil }},
+	})
+	if err := New(def, "build two things").Run(context.Background(), cfg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if claimRefused != 0 {
+		t.Errorf("%d worker claim(s) refused — a refinement retry or a reopened item could not re-claim", claimRefused)
+	}
+	if workerCalls[1] != 1 {
+		t.Errorf("item 1 worked %d times, want exactly once (settled items are not re-run in pass 2)", workerCalls[1])
+	}
+	if workerCalls[2] != 3 {
+		t.Errorf("item 2 worked %d times, want 3 (attempt 1, refinement, pass 2)", workerCalls[2])
+	}
+	if evalCalls[1] != 1 || evalCalls[2] != 3 {
+		t.Errorf("evaluator calls = %v, want item 1 once and item 2 three times (no due-diligence reviews of skipped items)", evalCalls)
+	}
+	if standups != 2 {
+		t.Errorf("standups = %d, want 2", standups)
+	}
 }

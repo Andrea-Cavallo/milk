@@ -146,16 +146,16 @@ func displayStageLabel(label string) string {
 		if idx := strings.Index(label, " item["); idx >= 0 {
 			return "item " + strings.TrimSuffix(strings.TrimPrefix(label[idx+len(" item["):], ""), "]")
 		}
-	case base == "sprint_loop":
+	case strings.HasSuffix(base, "_loop"):
+		// Any loop stage "<…>_<noun>_loop" reads as "<noun> N" (team_pass_loop
+		// → "pass 1", worker_attempt_loop → "attempt 2", sprint_loop → "sprint 1"),
+		// derived from the definition's own ids rather than a list of names.
+		words := strings.Split(strings.TrimSuffix(base, "_loop"), "_")
+		noun := words[len(words)-1]
 		if idx := strings.Index(label, "["); idx >= 0 {
-			return "sprint " + strings.TrimSuffix(label[idx+1:], "]")
+			return noun + " " + strings.TrimSuffix(label[idx+1:], "]")
 		}
-		return "sprint loop"
-	case strings.HasSuffix(base, "_pass_loop") || base == "pass_loop":
-		if idx := strings.Index(label, "["); idx >= 0 {
-			return "pass " + strings.TrimSuffix(label[idx+1:], "]")
-		}
-		return "pass loop"
+		return noun + " loop"
 	}
 	switch base {
 	case "workflow":

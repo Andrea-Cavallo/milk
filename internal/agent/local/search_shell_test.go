@@ -12,6 +12,7 @@ import (
 
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/session"
+	"github.com/scoutme/milk/internal/workflow"
 	"github.com/scoutme/milk/internal/workflow/board"
 )
 
@@ -271,5 +272,21 @@ func TestLogSnippet(t *testing.T) {
 	// "é" is two bytes: cutting at 3 would split the second one.
 	if got := logSnippet("abéé", 4); got != "abé…" {
 		t.Errorf("got %q, want rune-safe cut", got)
+	}
+}
+
+func TestUsageRole_WorkflowRoleSuffix(t *testing.T) {
+	a := (&Agent{escalationName: ""}).AsWorkflowExecutor()
+	base := a.logRole()
+	if got := a.usageRole(context.Background()); got != base {
+		t.Errorf("no turn role: got %q, want %q", got, base)
+	}
+	ctx := workflow.WithTurnRole(context.Background(), "worker")
+	if got := a.usageRole(ctx); got != base+":worker" {
+		t.Errorf("got %q, want %q", got, base+":worker")
+	}
+	plain := &Agent{}
+	if got := plain.usageRole(ctx); got != plain.logRole() {
+		t.Errorf("a non-workflow agent must ignore the turn role, got %q", got)
 	}
 }

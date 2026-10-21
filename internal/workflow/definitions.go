@@ -1,6 +1,10 @@
 package workflow
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/scoutme/milk/internal/workflow/board"
+)
 
 // Definition is a workflow described as data (YAML/JSON) rather than a
 // hand-written Go type. The interpreter (internal/workflow/interp) walks a
@@ -128,9 +132,16 @@ type Stage struct {
 	// exposes its current 1-based iteration count as (e.g. "pass"). Unused
 	// by Over-bounded loops, which instead derive both an index and a
 	// "<label>_section" body var from Over itself (e.g. "sprint"/"sprint_section").
-	IterationVar   string  `yaml:"iteration_var,omitempty" json:"iteration_var,omitempty"`
-	MaxConcurrency int     `yaml:"max_concurrency,omitempty" json:"max_concurrency,omitempty"`
-	Body           []Stage `yaml:"body,omitempty" json:"body,omitempty"`
+	IterationVar   string `yaml:"iteration_var,omitempty" json:"iteration_var,omitempty"`
+	MaxConcurrency int    `yaml:"max_concurrency,omitempty" json:"max_concurrency,omitempty"`
+	// SkipIfBoardStatus (parallel_group on a board definition): items whose
+	// board status is listed here are not dispatched — they count as resolved
+	// for their dependents and keep the result they last produced (the
+	// group's SaveAs value from an earlier run of the group). A repeated
+	// fan-out (an outer retry loop) therefore re-runs only the items that
+	// were reopened, e.g. ["done"].
+	SkipIfBoardStatus []string `yaml:"skip_if_board_status,omitempty" json:"skip_if_board_status,omitempty"`
+	Body              []Stage  `yaml:"body,omitempty" json:"body,omitempty"`
 }
 
 // VerdictRule maps one ParseVerdict outcome (its map key: "good_to_go",
@@ -143,6 +154,12 @@ type VerdictRule struct {
 	// warning to the transcript (mirrors dev.go's VerdictUnknown handling)
 	// but still applies Action.
 	Warn bool `yaml:"warn,omitempty" json:"warn,omitempty"`
+	// BoardStatus, on a stage inside a board definition's parallel_group,
+	// sets the current item's board status when this outcome fires (e.g.
+	// "todo" on a retry: the item is reopened and its claim released so the
+	// retried worker can claim it again — a worker that marked its item done
+	// before evaluation would otherwise be refused by its own claim).
+	BoardStatus string `yaml:"board_status,omitempty" json:"board_status,omitempty"`
 }
 
 const (
@@ -163,7 +180,7 @@ func (d Definition) Validate() error {
 	if len(d.Stages) == 0 {
 		return fmt.Errorf("workflow definition %q: at least one stage is required", d.Name)
 	}
-	if err := validateStages(d.Name, d.Stages); err != nil {
+	if err := validateStages(d.Name, d.Stages, validateCtx{board: d.Board}); err != nil {
 		return err
 	}
 	if !d.Board && stagesHaveBoardSeed(d.Stages) {
@@ -186,18 +203,37 @@ func stagesHaveBoardSeed(stages []Stage) bool {
 	return false
 }
 
-func validateStages(defName string, stages []Stage) error {
+// validateCtx is what a stage's validation needs to know about where it sits.
+type validateCtx struct {
+	board  bool // the definition has a shared board
+	inItem bool // inside a parallel_group body (a current item exists)
+}
+
+func validateStages(defName string, stages []Stage, vc validateCtx) error {
 	for _, s := range stages {
-		if err := s.validate(defName); err != nil {
+		if err := s.validate(defName, vc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s Stage) validate(defName string) error {
+func (s Stage) validate(defName string, vc validateCtx) error {
 	if s.ID == "" {
 		return fmt.Errorf("workflow definition %q: stage with kind %q missing id", defName, s.Kind)
+	}
+	for key, rule := range s.Verdict {
+		if rule.BoardStatus == "" {
+			continue
+		}
+		switch {
+		case !vc.board:
+			return fmt.Errorf("workflow definition %q: stage %q verdict %q: board_status requires \"board: true\" on the definition", defName, s.ID, key)
+		case !vc.inItem:
+			return fmt.Errorf("workflow definition %q: stage %q verdict %q: board_status needs a current item, so the stage must sit inside a parallel_group", defName, s.ID, key)
+		case !board.SettableStatus(rule.BoardStatus):
+			return fmt.Errorf("workflow definition %q: stage %q verdict %q: board_status %q is not settable (want todo|in_progress|blocked|done)", defName, s.ID, key, rule.BoardStatus)
+		}
 	}
 	switch s.Kind {
 	case StageKindAgentTurn:
@@ -231,7 +267,7 @@ func (s Stage) validate(defName string) error {
 				return fmt.Errorf("workflow definition %q: stage %q (loop, iteration-bounded) requires its last body stage to declare verdict rules", defName, s.ID)
 			}
 		}
-		if err := validateStages(defName, s.Body); err != nil {
+		if err := validateStages(defName, s.Body, vc); err != nil {
 			return err
 		}
 	case StageKindBoardSeed:
@@ -245,7 +281,17 @@ func (s Stage) validate(defName string) error {
 		if s.Over == "" {
 			return fmt.Errorf("workflow definition %q: stage %q (parallel_group) missing over", defName, s.ID)
 		}
-		if err := validateStages(defName, s.Body); err != nil {
+		if len(s.SkipIfBoardStatus) > 0 && !vc.board {
+			return fmt.Errorf("workflow definition %q: stage %q (parallel_group): skip_if_board_status requires \"board: true\" on the definition", defName, s.ID)
+		}
+		for _, st := range s.SkipIfBoardStatus {
+			if !board.ValidStatus(st) {
+				return fmt.Errorf("workflow definition %q: stage %q (parallel_group): unknown board status %q in skip_if_board_status", defName, s.ID, st)
+			}
+		}
+		itemVC := vc
+		itemVC.inItem = true
+		if err := validateStages(defName, s.Body, itemVC); err != nil {
 			return err
 		}
 	default:

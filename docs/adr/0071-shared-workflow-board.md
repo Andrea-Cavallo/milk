@@ -101,3 +101,10 @@ one cheap turn to skip (no per-item conditional-skip yet — see below).
   (#297's acceptance) — the board is the one deliberately shared mutable thing, so it must
   stay mutex-first.
 - Custom verdict keys are now available to *any* definition, not just `team`.
+
+## Update (2026-10-21, ADR-0073)
+
+The first live run showed that a `done` item could not be re-claimed even by its
+owner, which silently disabled refinement retries, and that a repeated fan-out
+re-ran every item. Reopening (`board_status` on verdict rules), item gating
+(`skip_if_board_status`) and per-item scheduling are described in ADR-0073.
