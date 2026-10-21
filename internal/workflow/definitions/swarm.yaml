@@ -30,7 +30,11 @@ vars:
     of intent.
 
     Keep the number of items to the minimum needed -- do not split work into more items than
-    there are genuinely independent (or dependency-ordered) units of work.
+    there are genuinely independent (or dependency-ordered) units of work. Items start the
+    moment their own dependencies finish, so a single catch-all item that depends on every
+    other item serializes the whole tail of the run: prefer defining the contracts between
+    items up front in the spec, and keep any unavoidable integration item small (assembly
+    and wiring only, no new subsystems).
 
 name: swarm
 roles: [designer, worker, evaluator, implementer]

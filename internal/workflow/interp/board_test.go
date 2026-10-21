@@ -211,3 +211,19 @@ func TestBoard_NoBoardRunRendersEmpty(t *testing.T) {
 		t.Errorf("no board ⇒ no identity, got %q", p.identities[0])
 	}
 }
+
+func TestCleanBoardLabel(t *testing.T) {
+	tests := map[string]string{
+		"**Engine core, input, collision, app shell.**": "Engine core, input, collision, app shell.",
+		"- **UI**: HUD, menus":                          "UI: HUD, menus",
+		"1. Build `src/core/engine.js`":                 "Build src/core/engine.js",
+		"plain label":                                   "plain label",
+		"  spaced  ":                                    "spaced",
+		"snake_case __init__ stays":                     "snake_case __init__ stays",
+	}
+	for in, want := range tests {
+		if got := cleanBoardLabel(in); got != want {
+			t.Errorf("cleanBoardLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

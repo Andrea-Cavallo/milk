@@ -267,6 +267,8 @@ Not available over ACP (the client cannot survive its server process being repla
 - **ACP** — an input whose **first token** is `/interrupt` is intercepted before `turnMu` (it must not queue behind the turn it targets), echoes to the client, cancels and answers immediately; mid-input stays plain prompt text, and idle it runs through `acp_commands.go` like every other command. Native `session/cancel` is unchanged.
 - Interrupted turns notify remote oversight as `⏹ *agent* turn interrupted` (a cancellation is not an error).
 
+**Commands usable while a turn is running**: beyond `/interrupt`, the permission family — `/permissions` (listing and `default|timeout` overrides) and `/skip-permissions` — runs at once instead of waiting for the turn: they act on session-level settings guarded by a mutex / atomics (the running turn's background asks and permission checks read the same state), dispatch nothing, and are what a user needs while a turn is waiting on, or about to raise, an ask. TUI: in `busySafeCommands`; ACP: `acpBusySafe` is intercepted before `turnMu` like `/interrupt` (echo + result, the running turn untouched); a test pins ACP's list as a subset of the TUI's.
+
 **Multi-line input**: Shift+Enter/Alt+Enter inserts a newline; Enter submits. Bracketed paste is handled transparently.
 
 **Clipboard binary paste**: when a bracketed paste yields empty text, milk probes the system clipboard (`xclip`/`wl-paste`) for non-text content (e.g. `image/png`); found content is saved to a temp file and staged as a pending attachment, same as `/attach`. No special key combination beyond a normal paste gesture.

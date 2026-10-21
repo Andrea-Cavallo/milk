@@ -42,6 +42,20 @@ var updatableStatuses = map[string]bool{
 	StatusTodo: true, StatusInProgress: true, StatusBlocked: true, StatusDone: true,
 }
 
+// ValidStatus reports whether s names any item status (what a definition's
+// skip filter may match on).
+func ValidStatus(s string) bool {
+	switch s {
+	case StatusTodo, StatusClaimed, StatusInProgress, StatusBlocked, StatusDone:
+		return true
+	}
+	return false
+}
+
+// SettableStatus reports whether s is a status Update may write (everything
+// except "claimed", which only Claim's CAS can produce).
+func SettableStatus(s string) bool { return updatableStatuses[s] }
+
 const (
 	// MaxFindings caps the stored finding list (oldest dropped) so a long
 	// run cannot grow the sidecar or the rendered board without bound.
@@ -201,10 +215,13 @@ func findItem(items []Item, index int) *Item {
 }
 
 // Claim atomically claims item index for who. It succeeds for a todo or
-// blocked item, is idempotent when who already holds the claim, and fails
-// (ok=false, with the holding item) when another claimer or a done item
-// stands in the way — first claimer wins, structurally preventing the
-// duplicate-work failure mode swarm only catches at integration time.
+// blocked item, is idempotent when who already holds the claim (still
+// "claimed", or already moved on to "in_progress" — a retry or a resumed run
+// re-claiming its own item), and fails (ok=false, with the holding item) when
+// another claimer or a done item stands in the way — first claimer wins,
+// structurally preventing the duplicate-work failure mode swarm only catches
+// at integration time. A done item is reopened (Update to todo, which
+// releases the claim) before anyone can claim it again.
 func (b *Board) Claim(index int, who string) (Item, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -213,7 +230,7 @@ func (b *Board) Claim(index int, who string) (Item, bool) {
 		return Item{}, false
 	}
 	switch {
-	case it.Status == StatusClaimed && it.ClaimedBy == who:
+	case (it.Status == StatusClaimed || it.Status == StatusInProgress) && it.ClaimedBy == who:
 		return *it, true // idempotent re-claim (resume, retry pass)
 	case it.Status == StatusTodo || it.Status == StatusBlocked:
 		it.Status = StatusClaimed
@@ -257,8 +274,15 @@ func (b *Board) Update(index int, status, notes string) (Item, error) {
 	return *it, nil
 }
 
+// dedupeWindow is how many of the newest findings Post compares a new one
+// against: a model that repeats a board_post call (same sender, same scope,
+// same text) must not flood teammates' view of the board with copies.
+const dedupeWindow = 10
+
 // Post appends a finding from a role (optionally scoped to an item),
-// trimming and capping so a long run degrades instead of growing forever.
+// trimming and capping so a long run degrades instead of growing forever. An
+// exact repeat of a recent finding from the same sender and scope is
+// absorbed: the existing finding is returned and nothing is stored.
 func (b *Board) Post(from string, item int, text string) Finding {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -267,6 +291,11 @@ func (b *Board) Post(from string, item int, text string) Finding {
 		Item: item,
 		Text: trimRunes(text, maxFindingRunes),
 		At:   time.Now(),
+	}
+	for i := len(b.findings) - 1; i >= 0 && i >= len(b.findings)-dedupeWindow; i-- {
+		if e := b.findings[i]; e.From == f.From && e.Item == f.Item && e.Text == f.Text {
+			return e
+		}
 	}
 	b.findings = append(b.findings, f)
 	if len(b.findings) > MaxFindings {

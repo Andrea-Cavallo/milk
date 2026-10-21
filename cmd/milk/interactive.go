@@ -6,6 +6,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -242,11 +244,19 @@ type interactiveState struct {
 	// as each tool call is detected in the stream. The user is asked immediately
 	// via the TUI; handleStructuredDenials reads the answer (blocking briefly if
 	// the user hasn't responded yet). Keyed by tool name.
-	toolFutures     map[string]chan string
-	skipPermissions bool             // session-level override for DangerouslySkipPermissions
-	permOverrides   permOverrides    // session-level overrides for the timed answer (ADR-0052, /permissions default|timeout)
-	localPerms      *local.PermStore // persisted tool grants for the primary local agent
-	notifier        oversight.Notifier
+	toolFutures map[string]chan string
+	// skipPermissions is the session-level override for
+	// DangerouslySkipPermissions. Atomic: running turns read it from agent
+	// goroutines while /skip-permissions (busy-safe) writes it from the UI one.
+	skipPermissions atomic.Bool
+	// permOverrides are the session-level overrides for the timed answer
+	// (ADR-0052, /permissions default|timeout), guarded by permMu for the same
+	// reason: background asks read them mid-turn. Use permOverridesNow /
+	// updatePermOverrides.
+	permMu        sync.RWMutex
+	permOverrides permOverrides
+	localPerms    *local.PermStore // persisted tool grants for the primary local agent
+	notifier      oversight.Notifier
 
 	// pendingRemoteInputs queues messages received from the remote oversight
 	// interface (e.g. Telegram) while a turn is in progress. Drained one at a
@@ -327,6 +337,11 @@ var busySafeCommands = map[string]bool{
 	cmdPaste:         true,
 	cmdMCP:           true,
 	cmdBg:            true,
+	// The permission family acts on session-level settings behind locks/atomics
+	// and dispatches nothing: a user waiting on (or about to be asked by) a
+	// running turn is exactly who needs them.
+	cmdPermissions: true,
+	cmdSkipPerms:   true,
 }
 
 // handleSlashCommand processes a slash command with optional surrounding prompt text.
@@ -798,8 +813,8 @@ func execLearn(fact string, st *interactiveState) string {
 // (execSkipPermsCore), applied to the session flag and styled for the
 // transcript.
 func execSkipPerms(sub string, st *interactiveState) string {
-	next, msg := execSkipPermsCore(sub, st.skipPermissions)
-	st.skipPermissions = next
+	next, msg := execSkipPermsCore(sub, st.skipPermissions.Load())
+	st.skipPermissions.Store(next)
 	if next {
 		return milkTag() + " " + red(msg)
 	}

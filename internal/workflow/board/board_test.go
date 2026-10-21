@@ -231,3 +231,42 @@ func TestLoadOrNew_RoundTripAndCorrupt(t *testing.T) {
 		t.Error("a corrupt sidecar must surface an error, not start empty")
 	}
 }
+
+// A retry of an item the same worker already moved to in_progress re-claims it
+// (idempotent), a done item must be reopened first, and reopening releases the
+// claim so the same worker — or another — can take it again.
+func TestClaim_RetryAfterProgressAndReopen(t *testing.T) {
+	b := New("")
+	b.Seed([]Item{{Index: 1}})
+	b.Claim(1, "worker·Item-1")
+	b.Update(1, StatusInProgress, "")
+	if _, ok := b.Claim(1, "worker·Item-1"); !ok {
+		t.Error("re-claim of the owner's own in_progress item must succeed")
+	}
+	if _, ok := b.Claim(1, "worker·Item-2"); ok {
+		t.Error("another claimer must not take an in_progress item")
+	}
+
+	b.Update(1, StatusDone, "")
+	if _, ok := b.Claim(1, "worker·Item-1"); ok {
+		t.Fatal("a done item stays unclaimable until reopened, even for its owner")
+	}
+	it, err := b.Update(1, StatusTodo, "")
+	if err != nil || it.ClaimedBy != "" {
+		t.Fatalf("reopen: %+v err=%v (claim must be released)", it, err)
+	}
+	if _, ok := b.Claim(1, "worker·Item-1"); !ok {
+		t.Error("a reopened item must be claimable again")
+	}
+}
+
+func TestPost_AbsorbsRepeatedFinding(t *testing.T) {
+	b := New("")
+	b.Post("worker·Item-3", 4, "signature changed")
+	b.Post("worker·Item-3", 4, "signature changed") // model repeated the call
+	b.Post("worker·Item-3", 5, "signature changed") // different scope: kept
+	b.Post("worker·Item-9", 4, "signature changed") // different sender: kept
+	if got := len(b.Findings()); got != 3 {
+		t.Errorf("findings = %d, want 3 (only the exact repeat absorbed)", got)
+	}
+}

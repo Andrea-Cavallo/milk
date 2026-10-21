@@ -44,7 +44,11 @@ vars:
     of intent.
 
     Keep the number of items to the minimum needed -- do not split work into more items than
-    there are genuinely independent (or dependency-ordered) units of work.
+    there are genuinely independent (or dependency-ordered) units of work. Items start the
+    moment their own dependencies finish, so a single catch-all item that depends on every
+    other item serializes the whole tail of the run: prefer defining the contracts between
+    items up front in the spec, and keep any unavoidable integration item small (assembly
+    and wiring only, no new subsystems).
 
 name: team
 board: true
@@ -115,11 +119,14 @@ stages:
         from: plan
         max_concurrency: 4
         save_as: worker_results
+        # A later pass re-runs only the items the stand-up reopened (todo);
+        # settled items keep their last result in worker_results.
+        skip_if_board_status: [done]
         body:
-          - id: worker_pass_loop
+          - id: worker_attempt_loop
             kind: loop
             max_iterations: 3
-            iteration_var: pass
+            iteration_var: attempt
             body:
               - id: worker
                 kind: agent_turn
@@ -143,7 +150,7 @@ stages:
                   need the live picture; findings marked for your item matter):
                   {{.board}}
 
-                  {{if and (gt .pass 1) .worker_findings}}## Evaluator findings from previous pass
+                  {{if and (gt .attempt 1) .worker_findings}}## Evaluator findings from previous attempt
                   {{.worker_findings}}
 
                   {{end -}} Implement this item's deliverables as described above.
@@ -175,7 +182,7 @@ stages:
                 role: evaluator
                 save_as: worker_findings
                 prompt: |
-                  You are the evaluator. Review Item {{.item}} (pass {{.pass}}).
+                  You are the evaluator. Review Item {{.item}} (attempt {{.attempt}} of 3).
 
                   ## Item
                   {{.item_section}}
@@ -209,9 +216,9 @@ stages:
 
                   Use "good_to_go" when all acceptance criteria are met, or this is the final pass and
                   remaining issues are minor or impractical to resolve in one more iteration.
-                  Use "needs_refinement" only when there are fixable issues AND passes remain.
+                  Use "needs_refinement" only when there are fixable issues AND attempts remain.
 
-                  IMPORTANT: if this is the final pass (pass {{.pass}} = 3), do NOT return
+                  IMPORTANT: if this is the final attempt (attempt {{.attempt}} = 3), do NOT return
                   "needs_refinement" — use "good_to_go" instead, since no further refinement will
                   occur. This only controls whether the workflow retries, not whether the work is
                   actually complete — if a required deliverable is still missing or substantially
@@ -221,8 +228,11 @@ stages:
                   written.
                 verdict:
                   good_to_go: {action: break}
-                  needs_refinement: {action: retry}
-                  unknown: {action: retry, warn: true}
+                  # A retry reopens the item on the board (todo releases the claim)
+                  # so the worker's mandatory board_claim is accepted again —
+                  # the worker marked it done before this evaluation.
+                  needs_refinement: {action: retry, board_status: todo}
+                  unknown: {action: retry, warn: true, board_status: todo}
 
       - id: standup
         kind: agent_turn
@@ -235,7 +245,7 @@ stages:
           ## Board (live)
           {{.board}}
 
-          ## Per-item results this pass
+          ## Per-item results (latest per item; items settled on the board are not re-run)
           {{range .worker_results}}## Item {{.Index}} -- {{.Status}}
           {{.Output}}
 
@@ -244,7 +254,9 @@ stages:
           output is missing, a blocker nobody picked up, two items that duplicated work),
           post your announcements and guidance with board_post so the NEXT pass's workers see
           them, and fix statuses with board_update where reality differs (e.g. stuck
-          in_progress items back to todo so they can be re-claimed).
+          in_progress items back to todo so they can be re-claimed). The NEXT pass runs
+          ONLY the items whose status is not done: set an item to todo to have it reworked
+          (with a board_post saying what is wrong); an item left done is not run again.
 
           Then end your response with exactly ONE of these verdict lines:
           - all_done

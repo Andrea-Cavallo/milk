@@ -130,3 +130,114 @@ func TestWorkflowPanel_ShowsRunningItemsOfLaterWave(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 }
+
+// Loop stages are labelled from their own ids ("<noun>_loop[N]" → "<noun> N"),
+// so a definition's inner retry loop and its outer pass loop read differently.
+func TestDisplayStageLabel_LoopsUseTheirOwnNoun(t *testing.T) {
+	tests := map[string]string{
+		"team_pass_loop[2]":       "pass 2",
+		"worker_attempt_loop[1]":  "attempt 1",
+		"sprint_loop[3]":          "sprint 3",
+		"pass_loop[1]":            "pass 1",
+		"worker_attempt_loop":     "attempt loop",
+		"worker_fanout item[4]":   "item 4",
+		"worker_fanout (5 items)": "fanout",
+	}
+	for in, want := range tests {
+		if got := displayStageLabel(in); got != want {
+			t.Errorf("displayStageLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Every built-in workflow shows a run in progress as in progress: while a
+// stage is mid-turn the root and the path down to it are active (▸), not
+// drawn as already done. Guards the shared snapshot-root rule across dev,
+// pair, swarm and team rather than one definition.
+func TestWorkflowPanel_BuiltinsShowRunInProgress(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	reg, errs := workflow.LoadRegistry()
+	if len(errs) != 0 {
+		t.Fatalf("LoadRegistry: %v", errs)
+	}
+	const sprintPlan = "NO_QUESTIONS\n## Spec\nx\n\n## Sprint 1\nbuild a\n\n## Sprint 2\nbuild b\n\nmax_passes: 2\n"
+	const itemPlan = "NO_QUESTIONS\n## Spec\nx\n\n## Item Plan\n## Item 1\na\n\n## Item 2\nb\n"
+	tests := []struct {
+		name  string
+		plan  string
+		block string // the role whose first turn parks
+	}{
+		{"dev", sprintPlan, "generator"},
+		{"pair", sprintPlan, "generator"},
+		{"swarm", itemPlan, "worker"},
+		{"team", itemPlan, "worker"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def, ok := reg.Lookup(tt.name)
+			if !ok {
+				t.Fatalf("built-in %q missing", tt.name)
+			}
+			release := make(chan struct{})
+			reached := make(chan struct{}, 1)
+			runners := map[string]workflow.TurnRunner{}
+			for _, role := range def.Roles {
+				switch role {
+				case "designer":
+					runners[role] = &stagedRunner{resp: tt.plan}
+				case tt.block:
+					runners[role] = &stagedRunner{resp: "did", blockFrom: 1, release: release, reached: reached}
+				default:
+					runners[role] = &stagedRunner{resp: "good_to_go"}
+				}
+			}
+			var mu sync.Mutex
+			st := &workflow.State{StageTree: definitionStageTree(def.Stages)}
+			send := func(msg tea.Msg) {
+				if pm, ok := msg.(workflow.ProgressMsg); ok {
+					mu.Lock()
+					st.ApplyProgress(pm)
+					mu.Unlock()
+				}
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- interp.New(def, "task").Run(context.Background(), workflow.RunConfig{Runners: runners, Send: send})
+			}()
+			t.Cleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			})
+			select {
+			case <-reached:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s: the %s stage never started", tt.name, tt.block)
+			}
+			time.Sleep(100 * time.Millisecond)
+
+			mu.Lock()
+			rows := buildGenericWorkflowPanelLines(st, 40)
+			mu.Unlock()
+			for i := range rows {
+				rows[i] = ansi.Strip(rows[i])
+			}
+			panel := strings.Join(rows, "\n")
+			if !strings.Contains(panel, "▸ workflow") {
+				t.Errorf("root not shown active mid-run:\n%s", panel)
+			}
+			if strings.Contains(panel, "✓ workflow") {
+				t.Errorf("run still going, but the root is drawn done:\n%s", panel)
+			}
+			if strings.Count(panel, "▸") < 3 {
+				t.Errorf("path down to the running stage not shown active:\n%s", panel)
+			}
+			close(release)
+			<-done
+		})
+	}
+}
