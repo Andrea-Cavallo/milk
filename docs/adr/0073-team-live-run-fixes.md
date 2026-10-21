@@ -19,10 +19,18 @@ smaller rough edges:
    `board_claim` was refused and it did no work.
 2. **A second pass re-ran the whole fan-out.** `more_work` reopened one item,
    but all six were dispatched again; five workers answered `SKIPPED` and their
-   evaluators still ran (≈10 min, 5 wasted evaluator turns). The aggregate used
-   by the final evaluation also only described the last pass.
-3. **Dependency waves were barriers.** Items 4 and 5 finished long before
-   item 6 started, because it waited for item 3's wave to end: 25–35 min idle.
+   evaluators still ran (36 requests, ≈38K completion tokens, ≈11 min). Item 6,
+   the only item with real work, depends on all five, so its rework could not
+   start until their wasted chains had finished — it began 10.7 min after the
+   stand-up instead of at once. The same dead retry had earlier turned item 6's
+   refinement attempt into a no-op even though its evaluator had already
+   diagnosed the defect (and the fix); the coordinator then rediscovered it.
+3. **Dependency waves were barriers.** Items were scheduled wave by wave, so an
+   item waited for unrelated members of an earlier wave. In this plan the effect
+   was small — item 6 depends on every other item and so waits for the slowest
+   (item 3) either way; only item 5 (depends on item 1 alone) started ≈3 min
+   later than possible — but it is a general inefficiency for plans with partial
+   dependencies.
 4. Rough edges: the inner retry loop and the outer pass loop both exposed a
    variable called `pass` (the coordinator's "pass 2/3" read oddly and the panel
    labelled both loops "pass N"); board labels kept the plan's `**bold**`; a
@@ -47,7 +55,8 @@ path keys on a workflow name; `team.yaml` just uses the new fields.
   always describes every item. The coordinator reopens what needs rework
   (`todo`); everything else is left alone — no `SKIPPED` worker turns, no
   due-diligence evaluator turns.
-- **Dataflow scheduling.** The fan-out starts an item as soon as its own
+- **Dataflow scheduling.** (A general improvement; it does not shorten this
+  run's critical path, see above.) The fan-out starts an item as soon as its own
   `depends_on` items have finished, bounded by `max_concurrency`; waves remain
   only as the up-front cycle / missing-reference check. A failed dependency
   still releases its dependents (unchanged).
@@ -65,8 +74,11 @@ path keys on a workflow name; `team.yaml` just uses the new fields.
 
 ## Consequences
 
-- A `team` run does less redundant work (fewer turns in later passes) and
-  finishes sooner when items have uneven durations.
+- A `team` run does less redundant work in later passes. Replaying the first
+  live run's timeline: ≈5–7 % fewer completion tokens, ≈6–8 % fewer fresh prompt
+  tokens, ≈2–3 % fewer cached input tokens, and ≈14–24 min (≈7–12 %) less wall
+  time — the dominant cost, the plan's serial item-3 → item-6 chain, is untouched
+  (see the planner guidance).
 - Existing definitions are unaffected: both new fields are optional, an unset
   `skip_if_board_status` dispatches every item, and a definition without
   `board_status` behaves as before.
