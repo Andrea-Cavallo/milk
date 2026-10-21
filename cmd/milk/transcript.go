@@ -9,7 +9,6 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/aymanbagabas/go-osc52/v2"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/session"
@@ -150,7 +149,7 @@ func (m *model) wrappedTranscript() string {
 		return raw
 	}
 	if m.colorizeMode == ColorizeOff {
-		return m.applySelectionHighlight(tintFullRows(ansi.Wrap(expandTabsForWrap(raw), vw, ""), vw))
+		return m.applySelectionHighlight(tintFullRows(wrapRows(raw, vw), vw))
 	}
 
 	txLen := len(raw)
@@ -182,17 +181,10 @@ func (m *model) wrappedTranscript() string {
 		// Return cached result — append plain-wrapped new text as a fast suffix
 		// so the user sees new content immediately even without re-colorizing.
 		if txGrew > 0 {
-			newText := ansi.Wrap(expandTabsForWrap(raw[m.colorizeTransLen:]), vw, "")
-			// Close any open ANSI sequence from the cache before appending raw
-			// text, so a trailing dim/color from e.g. a tool hint line doesn't
-			// bleed into the next chunk of streamed content. The cache boundary
-			// itself never lands mid-escape (see the full-recolor branch below),
-			// so it always ends either with ansiReset or with plain text.
-			base := m.colorizeCached
-			if !strings.HasSuffix(base, ansiReset) {
-				base += ansiReset
-			}
-			return m.applySelectionHighlight(tintFullRows(base+newText, vw))
+			// The cache holds self-contained rows (wrapRows), so it never ends
+			// with a style open and the fresh suffix can simply follow it.
+			newText := wrapRows(raw[m.colorizeTransLen:], vw)
+			return m.applySelectionHighlight(tintFullRows(m.colorizeCached+newText, vw))
 		}
 		return m.applySelectionHighlight(tintFullRows(m.colorizeCached, vw))
 	}
@@ -259,7 +251,7 @@ func (m *model) wrappedTranscript() string {
 		m.turnRawCache = m.turnRawCache[:len(segments)-1]
 	}
 
-	wrapped := ansi.Wrap(expandTabsForWrap(colorized.String()), vw, "")
+	wrapped := wrapRows(colorized.String(), vw)
 
 	// Update cache. The cache stores the untinted wrap: the full-row pads
 	// (tintFullRows — thinking surface and diff backgrounds) are width-
@@ -274,12 +266,7 @@ func (m *model) wrappedTranscript() string {
 	if effLen == txLen {
 		return m.applySelectionHighlight(tintFullRows(wrapped, vw))
 	}
-	newText := ansi.Wrap(expandTabsForWrap(raw[effLen:]), vw, "")
-	base := wrapped
-	if !strings.HasSuffix(base, ansiReset) {
-		base += ansiReset
-	}
-	return m.applySelectionHighlight(tintFullRows(base+newText, vw))
+	return m.applySelectionHighlight(tintFullRows(wrapped+wrapRows(raw[effLen:], vw), vw))
 }
 
 // danglingEscapeStart returns the byte offset of an incomplete trailing ANSI
@@ -320,90 +307,21 @@ func (m *model) transcriptPlainLines() []string {
 	return lines
 }
 
-// selectionText extracts the plain text between the selection anchor and end,
-// respecting column boundaries on the first and last lines. It uses
-// transcriptPlainLines so that coordinates match the rendered viewport exactly,
-// avoiding drift caused by table padding or markdown colorization changing line
-// lengths relative to the raw transcript.
+// selectionText extracts the plain text between the selection anchor and end.
+// It uses transcriptPlainLines so that coordinates match the rendered viewport
+// exactly, avoiding drift caused by table padding or markdown colorization
+// changing line lengths relative to the raw transcript.
 func (m *model) selectionText() string {
-	lines := m.transcriptPlainLines()
-	loLine, loCol := m.selAnchorLine, m.selAnchorCol
-	hiLine, hiCol := m.selEndLine, m.selEndCol
-	if hiLine < loLine || (hiLine == loLine && hiCol < loCol) {
-		loLine, loCol, hiLine, hiCol = hiLine, hiCol, loLine, loCol
-	}
-	if loLine < 0 {
-		loLine = 0
-	}
-	if hiLine >= len(lines) {
-		hiLine = len(lines) - 1
-	}
-	var sb strings.Builder
-	for i := loLine; i <= hiLine; i++ {
-		plain := []rune(lines[i]) // already stripped by transcriptPlainLines
-		start, end := 0, len(plain)
-		if i == loLine {
-			if loCol < len(plain) {
-				start = loCol
-			} else {
-				start = len(plain)
-			}
-		}
-		if i == hiLine {
-			if hiCol < len(plain) {
-				end = hiCol
-			}
-		}
-		if start > end {
-			start = end
-		}
-		sb.WriteString(string(plain[start:end]))
-		if i < hiLine {
-			sb.WriteByte('\n')
-		}
-	}
-	return sb.String()
+	return selectedText(m.transcriptPlainLines(), m.selAnchorLine, m.selAnchorCol, m.selEndLine, m.selEndCol)
 }
 
-// applySelectionHighlight applies the selection background highlight to the
-// given content string. Returns content unchanged if no selection is active.
+// applySelectionHighlight applies the selection highlight to the given
+// content string. Returns content unchanged if no selection is active.
 func (m *model) applySelectionHighlight(content string) string {
 	if m.selAnchorLine < 0 || m.selEndLine < 0 {
 		return content
 	}
-	loLine, loCol := m.selAnchorLine, m.selAnchorCol
-	hiLine, hiCol := m.selEndLine, m.selEndCol
-	if hiLine < loLine || (hiLine == loLine && hiCol < loCol) {
-		loLine, loCol, hiLine, hiCol = hiLine, hiCol, loLine, loCol
-	}
-	lines := strings.Split(content, "\n")
-	selStyle := lipgloss.NewStyle().Reverse(true)
-	for i := range lines {
-		if i < loLine || i > hiLine {
-			continue
-		}
-		plain := []rune(ansi.Strip(lines[i]))
-		start, end := 0, len(plain)
-		if i == loLine {
-			if loCol < len(plain) {
-				start = loCol
-			} else {
-				start = len(plain)
-			}
-		}
-		if i == hiLine {
-			if hiCol < len(plain) {
-				end = hiCol
-			}
-		}
-		if start > end {
-			start = end
-		}
-		before := string(plain[:start])
-		sel := selStyle.Render(string(plain[start:end]))
-		after := string(plain[end:])
-		lines[i] = before + sel + after
-	}
+	lines := highlightSelection(strings.Split(content, "\n"), m.selAnchorLine, m.selAnchorCol, m.selEndLine, m.selEndCol)
 	return strings.Join(lines, "\n")
 }
 

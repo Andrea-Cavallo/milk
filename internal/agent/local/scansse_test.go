@@ -198,3 +198,30 @@ func TestScanSSE_PropagatesMidStreamReadError(t *testing.T) {
 		t.Errorf("expected the content received before the failure to still be accumulated, got %q", textBuf.String())
 	}
 }
+
+func TestScanSSE_NativeToolCallWithObjectArguments(t *testing.T) {
+	sse := "" +
+		`data: {"choices":[{"delta":{"reasoning_content":"Let me inspect it:"}}]}` + "\n" +
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc1","type":"function","function":{"name":"read_file","arguments":{"path":"/tmp/sample.txt"}}}]}}]}` + "\n" +
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n" +
+		"data: [DONE]\n"
+
+	a := &Agent{}
+	scanner := bufio.NewScanner(strings.NewReader(sse))
+	det := NewStreamDetector(ToolFormatUnknown)
+	var textBuf strings.Builder
+
+	toolCalls, _, _, _, _, _, finishReason, err := a.scanSSE(scanner, det, map[int]*toolCall{}, &textBuf, io.Discard, time.Time{}, nil)
+	if err != nil {
+		t.Fatalf("scanSSE returned error: %v", err)
+	}
+	if finishReason != "tool_calls" {
+		t.Fatalf("expected finishReason=tool_calls, got %q", finishReason)
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected one native tool call, got %d", len(toolCalls))
+	}
+	if got := toolCalls[0].Function.Arguments; got != `{"path":"/tmp/sample.txt"}` {
+		t.Fatalf("expected object arguments to be normalized, got %q", got)
+	}
+}

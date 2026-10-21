@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/session"
 	"github.com/scoutme/milk/internal/workflow"
@@ -309,7 +311,7 @@ func TestTintBlock_PadsShortLinesAndAppliesBackground(t *testing.T) {
 		if !strings.HasSuffix(line, ansiReset) {
 			t.Errorf("line %d = %q, want it to end with a reset", i, line)
 		}
-		if plain := stripANSI(line); utf8.RuneCountInString(plain) != 20 {
+		if plain := ansi.Strip(line); utf8.RuneCountInString(plain) != 20 {
 			t.Errorf("line %d visible width = %d, want padded to 20 (%q)", i, utf8.RuneCountInString(plain), plain)
 		}
 	}
@@ -403,5 +405,40 @@ func TestHandleMouse_WheelScrollsAttachedViewportNotMain(t *testing.T) {
 	}
 	if mm.attached.vp.YOffset >= attachOffsetBefore {
 		t.Errorf("attached viewport YOffset = %d, want less than %d (scrolled up)", mm.attached.vp.YOffset, attachOffsetBefore)
+	}
+}
+
+// A workflow's reasoning arrives as one dim span per streamed chunk, and the
+// wrap splits spans across rows: every body row must still open its own dim —
+// the attach tint closes each row with a reset, so a row that merely inherited
+// dim from the one above would render white.
+func TestAttachContentLines_WrappedDimChunksStayDim(t *testing.T) {
+	old := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = old })
+
+	m := layoutTestModel(t, 60, 30)
+	mgr := local.NewManager(context.Background(), 1)
+	var content strings.Builder
+	for _, w := range strings.Fields(strings.Repeat("evaluator checks each item in isolation from the others and ", 8)) {
+		content.WriteString(dim(w + " "))
+	}
+	job := spawnJobWithLiveContent(t, mgr, "job", content.String())
+	m.startAttach(attachBackground, job.ID, "job", job.Live)
+
+	body := m.attachContentLines()[2:] // header line + blank separator
+	if len(body) < 3 {
+		t.Fatalf("expected the reasoning to wrap, got %d rows", len(body))
+	}
+	for i, row := range body {
+		if ansi.Strip(row) == "" {
+			continue
+		}
+		if !strings.HasPrefix(row, ansiDim) {
+			t.Errorf("row %d does not open dim: %q", i, row)
+		}
+		if !rowBalanced(row) {
+			t.Errorf("row %d leaves styling open: %q", i, row)
+		}
 	}
 }

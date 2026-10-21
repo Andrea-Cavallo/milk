@@ -12,6 +12,7 @@ import (
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/livebuf"
 	"github.com/scoutme/milk/internal/obs"
+	"github.com/scoutme/milk/internal/sgr"
 )
 
 // attachKind identifies what an attachState is showing.
@@ -130,7 +131,7 @@ func (m *model) attachContentLines() []string {
 	}
 	body := m.attached.buf.Snapshot()
 	if vw > 0 {
-		body = ansi.Wrap(expandTabsForWrap(body), vw, "")
+		body = wrapRows(body, vw)
 	}
 	return strings.Split(header+"\n\n"+body, "\n")
 }
@@ -142,7 +143,7 @@ func (m *model) attachSelectionText() string {
 	if m.attached == nil || m.attachSelAnchorLine < 0 {
 		return ""
 	}
-	return panelSelectionText(m.attachContentLines(), m.attachSelAnchorLine, m.attachSelAnchorCol, m.attachSelEndLine, m.attachSelEndCol)
+	return selectedText(m.attachContentLines(), m.attachSelAnchorLine, m.attachSelAnchorCol, m.attachSelEndLine, m.attachSelEndCol)
 }
 
 // syncAttachedContent rebuilds the attach viewport's content from the live
@@ -168,7 +169,7 @@ func (m *model) syncAttachedContent() {
 	atBottom := m.attached.vp.AtBottom()
 	lines := m.attachContentLines()
 	if m.attachSelAnchorLine >= 0 && m.attachSelEndLine >= 0 {
-		lines = applyPanelSelectionHighlight(lines, m.attachSelAnchorLine, m.attachSelAnchorCol, m.attachSelEndLine, m.attachSelEndCol)
+		lines = highlightSelection(lines, m.attachSelAnchorLine, m.attachSelAnchorCol, m.attachSelEndLine, m.attachSelEndCol)
 	}
 	content := strings.Join(lines, "\n")
 	// Full-row surfaces (the /think view's thinking rows, and any diff rows
@@ -203,7 +204,7 @@ func tintBlock(content string, width int, bg string) string {
 		if lineW := ansi.StringWidth(line); width > 0 && lineW < width {
 			line += strings.Repeat(" ", width-lineW)
 		}
-		lines[i] = withPanelBackground(line, bg)
+		lines[i] = sgr.WithBackground(line, bg)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -13,7 +13,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+
 	"github.com/scoutme/milk/internal/agent/local"
 )
 
@@ -126,7 +128,7 @@ func TestAttachSelection_HighlightReachesAttachViewport(t *testing.T) {
 		t.Errorf("attach viewport content must carry the reverse-video selection highlight, got %q", got)
 	}
 	// The selected word must still be present (highlight wraps it, doesn't eat it).
-	if plain := stripANSI(got); !strings.Contains(plain, "highlight") {
+	if plain := ansi.Strip(got); !strings.Contains(plain, "highlight") {
 		t.Errorf("attach viewport lost its text content: %q", plain)
 	}
 	// The transcript must not be rebuilt with the selection.
@@ -197,7 +199,7 @@ func TestAttachSelection_StatusBarNamesTheAttachView(t *testing.T) {
 	attachClick(m, 0, 4)
 	attachDrag(m, 4, 4) // mid-drag: the status should report live coordinates
 
-	bar := stripANSI(m.statusBar())
+	bar := ansi.Strip(m.statusBar())
 	if !strings.Contains(bar, "selecting attached view") {
 		t.Errorf("status bar must name the attach view while selecting in it, got %q", bar)
 	}

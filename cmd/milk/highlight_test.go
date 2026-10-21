@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestParseColorizeMode(t *testing.T) {
@@ -557,27 +559,9 @@ func TestRenderTableBlock_EqualWidths(t *testing.T) {
 	}
 
 	// Strip ANSI from each line to inspect padding.
-	stripANSI := func(s string) string {
-		out := []rune{}
-		i := 0
-		r := []rune(s)
-		for i < len(r) {
-			if r[i] == 0x1B && i+1 < len(r) && r[i+1] == '[' {
-				for i < len(r) && r[i] != 'm' {
-					i++
-				}
-				i++
-				continue
-			}
-			out = append(out, r[i])
-			i++
-		}
-		return string(out)
-	}
-
 	plain := make([]string, len(rendered))
 	for i, r := range rendered {
-		plain[i] = stripANSI(r)
+		plain[i] = ansi.Strip(r)
 	}
 
 	// All non-separator rows must have the same total length.

@@ -1,6 +1,7 @@
 package local
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/scoutme/milk/internal/livebuf"
+	"github.com/scoutme/milk/internal/obs"
+	"github.com/scoutme/milk/internal/workflow/board"
 )
 
 // bashbg.go — background shells started via bash(run_in_background), with
@@ -36,6 +39,7 @@ type bgShell struct {
 	id      string
 	command string // the sh -c command line — kept for panel rows and ACP titles (ADR-0064)
 	dir     string
+	owner   string // who started it (workflow identity such as "worker·Item-2"); "" when unattributed
 	cmd     *exec.Cmd
 	out     *livebuf.Buffer
 	done    chan struct{}
@@ -234,11 +238,20 @@ func ShellLive(id string) (*livebuf.Buffer, bool) {
 // shell that already exited is "found" but unchanged (its output stays
 // readable).
 func KillBackgroundShell(id string) (ShellInfo, bool) {
+	return killShell(id, "ui", "")
+}
+
+// killShell stops shell id on behalf of requester (a workflow identity, or ""
+// when unattributed) for the stated reason, logging who asked and whether the
+// requester was not the shell's owner — the shell registry is process-global,
+// so a parallel worker can stop a teammate's shell, and the log is the only
+// place that shows it happened.
+func killShell(id, reason, requester string) (ShellInfo, bool) {
 	s, ok := bgShells.get(id)
 	if !ok {
 		return ShellInfo{}, false
 	}
-	s.kill()
+	s.kill(reason, requester)
 	return s.info(), true
 }
 
@@ -247,7 +260,7 @@ func KillBackgroundShell(id string) (ShellInfo, bool) {
 // run_in_background (ADR-0063), also used by the UI layers' tests. Returns
 // the shell's initial state snapshot.
 func StartBackgroundShell(command, dir string) (ShellInfo, error) {
-	s, err := bgShells.start(command, dir)
+	s, err := bgShells.start(command, dir, "")
 	if err != nil {
 		return ShellInfo{}, err
 	}
@@ -264,8 +277,9 @@ func StopBackgroundShells() {
 	}
 	bgShells.shells = map[string]*bgShell{}
 	bgShells.mu.Unlock()
+	obs.Info("bgshell.stop_all", "shells", len(all))
 	for _, s := range all {
-		s.kill()
+		s.kill("process_exit", "")
 	}
 }
 
@@ -281,11 +295,12 @@ func (r *shellRegistry) reapLocked() {
 }
 
 // start registers and starts a background shell running sh -c command in dir.
-func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
+func (r *shellRegistry) start(command, dir, owner string) (*bgShell, error) {
 	r.mu.Lock()
 	r.reapLocked()
 	if len(r.shells) >= maxBackgroundShells {
 		r.mu.Unlock()
+		obs.Warn("bgshell.start_refused", "reason", "too many shells", "limit", maxBackgroundShells, "owner", owner, "command", command)
 		return nil, fmt.Errorf("too many background shells (%d) — stop one with kill_bash", maxBackgroundShells)
 	}
 	r.nextID++
@@ -293,6 +308,7 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 		id:      fmt.Sprintf("s%d", r.nextID),
 		command: command,
 		dir:     dir,
+		owner:   owner,
 		out:     livebuf.New(bgShellOutputBufferByte),
 		done:    make(chan struct{}),
 		started: time.Now(),
@@ -311,8 +327,10 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 		r.mu.Lock()
 		delete(r.shells, s.id)
 		r.mu.Unlock()
+		obs.Warn("bgshell.start_failed", "shell", s.id, "owner", owner, "dir", dir, "command", command, "err", err.Error())
 		return nil, err
 	}
+	obs.Info("bgshell.start", "shell", s.id, "owner", owner, "pid", s.cmd.Process.Pid, "dir", dir, "command", command)
 
 	// Fire shell-started before the Wait goroutine exists, so listeners
 	// always see started→finished in order even for instantly-exiting
@@ -331,8 +349,15 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 				s.exitErr = err
 			}
 		}
+		killed, exitCode, exitErr := s.killed, s.exitCode, s.exitErr
 		s.mu.Unlock()
 		close(s.done)
+		attrs := []any{"shell", s.id, "owner", s.owner, "exit_code", exitCode, "killed", killed,
+			"ran_ms", time.Since(s.started).Milliseconds(), "command", s.command}
+		if exitErr != nil {
+			attrs = append(attrs, "err", exitErr.Error())
+		}
+		obs.Info("bgshell.exit", attrs...)
 		r.fire(s.info(), false) // ADR-0064: shell-finished lifecycle event
 	}()
 
@@ -341,7 +366,7 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 		select {
 		case <-s.done:
 		case <-time.After(bgShellMaxLifetime):
-			s.kill()
+			s.kill("lifetime_cap", "")
 		}
 	}()
 
@@ -350,15 +375,18 @@ func (r *shellRegistry) start(command, dir string) (*bgShell, error) {
 
 // kill stops the shell's process group; a shell that already exited is left
 // as-is (its output stays readable).
-func (s *bgShell) kill() {
+func (s *bgShell) kill(reason, requester string) {
 	s.mu.Lock()
 	if s.finished {
 		s.mu.Unlock()
+		obs.Debug("bgshell.kill_ignored", "shell", s.id, "why", "already exited", "reason", reason, "requester", requester)
 		return
 	}
 	s.killed = true
 	proc := s.cmd.Process
 	s.mu.Unlock()
+	obs.Info("bgshell.kill", "shell", s.id, "reason", reason, "requester", requester, "owner", s.owner,
+		"cross_owner", requester != "" && s.owner != "" && requester != s.owner)
 	if proc != nil {
 		killProcGroup(s.cmd)
 	}
@@ -370,6 +398,11 @@ func (r *shellRegistry) get(id string) (*bgShell, bool) {
 	s, ok := r.shells[id]
 	return s, ok
 }
+
+// shellActor names who a tool call acts for: the workflow identity the
+// interpreter put on the turn's ctx ("worker·Item-2"), or "" outside a board
+// workflow.
+func shellActor(ctx context.Context) string { return board.IdentityFrom(ctx) }
 
 // runBashOutput implements the bash_output tool.
 func runBashOutput(args map[string]any) (string, bool) {
@@ -393,9 +426,10 @@ func runBashOutput(args map[string]any) (string, bool) {
 }
 
 // runKillBash implements the kill_bash tool.
-func runKillBash(args map[string]any) (string, bool) {
+func runKillBash(ctx context.Context, args map[string]any) (string, bool) {
 	id, _ := args["shell_id"].(string)
-	if _, ok := KillBackgroundShell(id); !ok {
+	if _, ok := killShell(id, "kill_bash", shellActor(ctx)); !ok {
+		obs.Warn("bgshell.kill_unknown", "shell", id, "requester", shellActor(ctx))
 		return toolResult{Error: fmt.Sprintf("no background shell %q", id)}.String(), false
 	}
 	return toolResult{Output: fmt.Sprintf("killed background shell %s", id)}.String(), false

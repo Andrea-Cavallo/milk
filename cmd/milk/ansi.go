@@ -29,29 +29,29 @@ const (
 // colorize wraps s in code/ansiReset, closing the reset before any embedded
 // newline rather than after it — an SGR reset placed after a newline byte
 // leaves the color "open" for the terminal until some later, unrelated
-// escape happens to cancel it.
-func colorize(s, code string) string {
+// escape happens to cancel it. Blank lines stay unstyled.
+func colorize(s, code string) string { return paintLines(s, code, false) }
+
+// paintLines is colorize's implementation: every line of s becomes its own
+// self-contained code…ansiReset span. styleBlank decides whether an empty line
+// gets a code+reset pair too — the thinking surface needs it (a blank
+// reasoning line is a row of the surface and must carry its background),
+// plain colouring does not.
+func paintLines(s, code string, styleBlank bool) string {
 	if !isTTY || s == "" {
 		return s
 	}
-	lines := strings.SplitAfter(s, "\n")
 	var out strings.Builder
-	for _, line := range lines {
-		if line == "" {
-			continue
+	for _, line := range strings.SplitAfter(s, "\n") {
+		body, hasNL := strings.CutSuffix(line, "\n")
+		if body != "" || (hasNL && styleBlank) {
+			out.WriteString(code)
+			out.WriteString(body)
+			out.WriteString(ansiReset)
 		}
-		if body, ok := strings.CutSuffix(line, "\n"); ok {
-			if body != "" {
-				out.WriteString(code)
-				out.WriteString(body)
-				out.WriteString(ansiReset)
-			}
+		if hasNL {
 			out.WriteByte('\n')
-			continue
 		}
-		out.WriteString(code)
-		out.WriteString(line)
-		out.WriteString(ansiReset)
 	}
 	return out.String()
 }

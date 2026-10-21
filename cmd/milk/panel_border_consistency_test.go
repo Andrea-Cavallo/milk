@@ -5,6 +5,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/session"
 )
 
@@ -42,7 +44,7 @@ func TestSidePanels_AllHaveConsistentWidthAndScrollbar(t *testing.T) {
 			if strings.HasPrefix(line, "│") {
 				t.Errorf("%s panel line %d: unexpected left border, got %q", name, i, line)
 			}
-			if w := utf8.RuneCountInString(stripANSI(line)); w != p.inner {
+			if w := utf8.RuneCountInString(ansi.Strip(line)); w != p.inner {
 				t.Errorf("%s panel line %d: width %d, want %d", name, i, w, p.inner)
 			}
 		}

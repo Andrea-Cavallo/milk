@@ -12,6 +12,8 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
 	rw "github.com/mattn/go-runewidth"
+
+	"github.com/scoutme/milk/internal/sgr"
 )
 
 // highlightStyle is the chroma theme used for code blocks.
@@ -65,22 +67,19 @@ func colorizeTranscriptWrapped(text string, mode ColorizeMode) string {
 func splitTurns(text string) []string {
 	var segments []string
 	inFence := false
-	openANSI := "" // last unclosed ANSI code seen so far
+	var open sgr.State // rendition left open by the text so far
 	start := 0
 	i := 0
 	for i < len(text) {
 		// Track open ANSI sequences so we know when we're inside a dim block.
 		if text[i] == 0x1B && i+1 < len(text) && text[i+1] == '[' {
 			j := i + 2
-			for j < len(text) && text[j] != 'm' {
+			for j < len(text) && (text[j] < 0x40 || text[j] > 0x7E) {
 				j++
 			}
 			if j < len(text) {
-				code := text[i : j+1]
-				if code == ansiReset {
-					openANSI = ""
-				} else {
-					openANSI = code
+				if text[j] == 'm' {
+					open.Apply(text[i+2 : j])
 				}
 				i = j + 1
 				continue
@@ -104,7 +103,7 @@ func splitTurns(text string) []string {
 				continue
 			}
 		}
-		if !inFence && openANSI == "" && i+2 <= len(text) && text[i:i+2] == "\n\n" {
+		if !inFence && !open.Active() && i+2 <= len(text) && text[i:i+2] == "\n\n" {
 			segments = append(segments, text[start:i+2])
 			i += 2
 			start = i
@@ -425,15 +424,17 @@ func colorizeMarkdown(text string) string {
 
 // applyInlineMarkdown applies ANSI escapes for headings, bullets, bold, italic,
 // and inline code on a plain-text (no fenced blocks) segment.
-// It carries unclosed ANSI state across newlines so that dim-wrapped blocks
-// (e.g. thinking output written as dim(text)) are preserved on every line.
-// When an outer ANSI context is active (e.g. dim from a thinking block), any
-// ansiReset produced by an inline span (e.g. inline code) is followed by a
-// re-injection of the outer context so the dim is not lost within the line or
-// across subsequent lines.
+//
+// Styling already present in the text is respected line by line: the
+// rendition a line leaves open is carried into the next one (sgr.State), so a
+// multi-line dim block keeps its dim on every line, and the resets that inline
+// spans emit are followed by a re-injection of the line's outer context so they
+// don't cut it short. Inside a dim context inline styling is skipped entirely:
+// \033[1m (bold) overrides \033[2m (dim) in terminals, so **bold** in dim text
+// would render bright instead of dim.
 func applyInlineMarkdown(text string) string {
 	lines := strings.Split(text, "\n")
-	activeANSI := ""
+	var carried sgr.State // rendition the previous lines left open
 	i := 0
 	for i < len(lines) {
 		originalLine := lines[i]
@@ -460,137 +461,52 @@ func applyInlineMarkdown(text string) string {
 				for k, r := range rendered {
 					lines[i+k] = r
 				}
-				activeANSI = "" // tables always end with ansiReset
+				carried = sgr.State{} // tables always end with ansiReset
 				i = j
 				continue
 			}
 			// No separator — fall through and style each line normally.
 		}
 
-		// Determine the effective ANSI context for this line: either the
-		// carried-over context from the previous line, or the line's own
-		// leading escape (e.g. a diff line that opens with its own color).
-		// This ensures ansiReset injected by inline spans (e.g. backtick
-		// matches) is followed by a re-injection of the active color.
-		// Also used to suppress inline span styling inside dim-wrapped thinking
-		// blocks: \033[1m (bold) overrides \033[2m (dim) in terminals, so
-		// **bold** inside thinking text would render bright instead of dim.
-		lineContext := activeANSI
-		localContext := false // true when lineContext came from leadingANSI, not carry-over
-		if lineContext == "" {
-			lineContext = leadingANSI(originalLine)
-			localContext = lineContext != ""
+		// The line's outer context: what the previous lines left open, or —
+		// when nothing was — the styling the line opens with itself (e.g. a
+		// diff row). Inline-span resets are followed by a re-injection of it.
+		ctx, ownContext := carried, false
+		if !ctx.Active() {
+			ctx = sgr.Leading(originalLine)
+			ownContext = ctx.Active()
 		}
 
 		line := originalLine
-		if activeANSI != "" {
-			line = activeANSI + line
+		if carried.Active() {
+			line = carried.String() + line
 		}
-		var styled string
-		if lineContext == ansiDim {
-			styled = line
-		} else {
+		styled := line
+		if !ctx.Dim() {
 			styled = styleLine(line)
 		}
-		if lineContext != "" {
-			styled = injectANSIAfterResets(styled, lineContext)
-			// When the context was sourced from the line's own leading ANSI
-			// (not a carry-over from the previous line), ensure the styled line
-			// ends with ansiReset so the color does not bleed into the next line.
-			if localContext && !strings.HasSuffix(styled, ansiReset) {
+		if ctx.Active() {
+			styled = injectANSIAfterResets(styled, ctx.String())
+			// A context the line opened itself must not bleed into the next
+			// line: close it. (A carried one stays open — it is the block.)
+			if ownContext && !strings.HasSuffix(styled, ansiReset) {
 				styled += ansiReset
 			}
 		}
 		lines[i] = styled
-		// Carry-over: compute from the ORIGINAL (pre-prepend) line so that
-		// inline span replacements (which emit their own ansiReset) do not
-		// affect the carry-over decision. Only a true ansiReset from the
-		// source text closes the outer context.
-		activeANSI = trailingOpenANSI(originalLine)
-		// If the original line had no ANSI of its own but we entered this line
-		// with a carry-over context (e.g. a dim thinking block), preserve that
-		// context — inline span resets within the line do not end the block.
-		// But if the source line contains an explicit reset, the dim block ended
-		// here and the carry-over must not bleed into the next line.
-		if activeANSI == "" && lineContext != "" && !localContext {
-			if !strings.Contains(originalLine, ansiReset) {
-				activeANSI = lineContext
-			}
-		}
-		// If there was no carry-over at all, check whether styleLine opened a
-		// new context (e.g. a dim heading). Only consult the styled line when no
-		// context injection ran (lineContext == ""), because injectANSIAfterResets
-		// leaves a trailing context code after the last reset that would otherwise
-		// falsely propagate dim into the line after a closing tool-hint block.
-		if activeANSI == "" && lineContext == "" {
-			activeANSI = trailingOpenANSI(lines[i])
-		}
+		// What the next line inherits is decided by the source line alone —
+		// the resets inline spans add never end an outer block.
+		carried.Scan(originalLine)
 		i++
 	}
 	return strings.Join(lines, "\n")
-}
-
-// leadingANSI returns the first ANSI escape sequence at the start of s, or "".
-// Used to detect lines that open with their own color (e.g. diff output) so
-// that inline-span resets can be patched without a cross-line carry-over.
-func leadingANSI(s string) string {
-	if len(s) < 3 || s[0] != 0x1B || s[1] != '[' {
-		return ""
-	}
-	end := strings.IndexByte(s[2:], 'm')
-	if end == -1 {
-		return ""
-	}
-	return s[:end+3]
 }
 
 // injectANSIAfterResets re-injects context after every ansiReset in s.
 // This preserves the outer ANSI context (e.g. dim) when inline span
 // replacements emit their own ansiReset within a dim-wrapped block.
 func injectANSIAfterResets(s, context string) string {
-	if !strings.Contains(s, ansiReset) {
-		return s
-	}
-	resetLen := len(ansiReset)
-	var sb strings.Builder
-	offset := 0
-	for {
-		idx := strings.Index(s[offset:], ansiReset)
-		if idx == -1 {
-			sb.WriteString(s[offset:])
-			break
-		}
-		abs := offset + idx
-		sb.WriteString(s[offset : abs+resetLen])
-		sb.WriteString(context)
-		offset = abs + resetLen
-	}
-	return sb.String()
-}
-
-// trailingOpenANSI returns the last un-reset ANSI escape code in s, or ""
-// if all opened codes were closed with ansiReset. Used to carry dim/color
-// state across newline splits in multi-line ANSI-wrapped blocks.
-func trailingOpenANSI(s string) string {
-	last := ""
-	for i := 0; i < len(s); i++ {
-		if s[i] == 0x1B && i+1 < len(s) && s[i+1] == '[' {
-			j := i + 2
-			for j < len(s) && s[j] != 'm' {
-				j++
-			}
-			if j < len(s) {
-				code := s[i : j+1]
-				if code == ansiReset {
-					last = ""
-				} else {
-					last = code
-				}
-				i = j
-			}
-		}
-	}
-	return last
+	return strings.ReplaceAll(s, ansiReset, ansiReset+context)
 }
 
 func styleLine(line string) string {

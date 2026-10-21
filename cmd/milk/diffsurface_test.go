@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/scoutme/milk/internal/sgr"
 )
 
 // internal/diff's emission, verbatim — these literals pin the format the
@@ -80,11 +82,11 @@ func TestDiffSurface_FullRowCoverage(t *testing.T) {
 	}
 }
 
-// A long +/- line wraps across rows: intermediate rows keep the colour run
-// open (padded inside it), the final row closes with its own reset and gets
-// the close-then-reopen pad — and the row *after* the diff block inherits
-// nothing: no colour, no pad. This is the bleed case the per-line reset
-// exists for.
+// A long +/- line wraps across rows: every row of it is self-contained (the
+// colour is re-opened at the start of each continuation row and closed at its
+// end, wrapRows) and gets the same close-then-reopen pad — and the row *after*
+// the diff block inherits nothing: no colour, no pad. This is the bleed case
+// the per-line reset exists for.
 func TestDiffSurface_WrappedNoBleed(t *testing.T) {
 	old := isTTY
 	isTTY = true
@@ -109,22 +111,18 @@ func TestDiffSurface_WrappedNoBleed(t *testing.T) {
 	if len(diffRows) < 2 {
 		t.Fatalf("long diff line must wrap, rows = %d: %q", len(diffRows), rows)
 	}
-	// Intermediate rows: colour open at the row end (no closing reset), full width.
-	for i, row := range diffRows[:len(diffRows)-1] {
+	// Every row, continuations included, is a full-width diff row that closes
+	// its own colour: pad inside the background, then a reset.
+	for i, row := range diffRows {
 		if w := ansi.StringWidth(row); w != vw {
-			t.Errorf("continuation row %d width = %d, want %d: %q", i, w, vw, row)
+			t.Errorf("diff row %d width = %d, want %d: %q", i, w, vw, row)
 		}
-		if strings.HasSuffix(row, ansiReset) {
-			t.Errorf("continuation row %d must keep the colour run open: %q", i, row)
+		if !diffRowShape.MatchString(row) {
+			t.Errorf("diff row %d must end colour-pad-then-reset: %q", i, row)
 		}
-	}
-	// Last row: closes with the emission's own reset and pads after it.
-	last := diffRows[len(diffRows)-1]
-	if !diffRowShape.MatchString(last) {
-		t.Errorf("final diff row must end colour-pad-then-reset: %q", last)
-	}
-	if w := ansi.StringWidth(last); w != vw {
-		t.Errorf("final diff row width = %d, want %d: %q", w, vw, last)
+		if i > 0 && !strings.HasPrefix(row, "\x1b[38;5;119;48;5;22m") {
+			t.Errorf("continuation row %d must re-open the diff colours: %q", i, row)
+		}
 	}
 	// No bleed: the following row carries no colour and no pad.
 	if len(after) == 0 {
@@ -235,48 +233,32 @@ func TestDiffSurface_AttachComposition(t *testing.T) {
 	}
 }
 
-// The classifier: colour state per row, correct triplet consumption, and no
-// recognition outside internal/diff's own colours.
+// The classifier: which rows count as diff rows (and in which colour) is
+// decided by sgr.LastBackground against internal/diff's two backgrounds —
+// no recognition outside them, and a foreground colour index that happens to
+// be 48 or 22 is never mistaken for a background.
 func TestDiffRow_Classifier(t *testing.T) {
-	cases := []struct {
-		name, line, open, wantPad, wantEnd string
-	}{
-		{"closed green row", diffGreenRow, "", diffBgGreen, ""},
-		{"closed red row", diffRedRow, "", diffBgRed, ""},
-		{"continuation inherits open colour", "+part two", diffBgGreen, diffBgGreen, diffBgGreen},
-		{"continuation closes then pads", "+part two\x1b[0m", diffBgGreen, diffBgGreen, ""},
-		{"dim row untouched", diffDimCtx, "", "", ""},
-		{"plain row untouched", "after", "", "", ""},
-		{"reset clears", "\x1b[48;5;22mx\x1b[0my", "", diffBgGreen, ""},
-		{"other background takes over", "\x1b[48;5;99mx\x1b[0m", diffBgGreen, diffBgGreen, ""},
-		{
-			// A foreground colour index of 48 is a triplet element, not a
-			// background command — it must not clear the open diff state.
-			"fg triplet does not clear",
-			"\x1b[48;5;22mx\x1b[38;5;48my",
-			"", diffBgGreen, diffBgGreen,
-		},
-		{
-			// ...while an explicit reset still clears the state, fg triplet
-			// or not — the reset is the background command, not the colour.
-			"explicit reset clears",
-			"\x1b[48;5;22mx\x1b[0m\x1b[38;5;48my",
-			"", diffBgGreen, "",
-		},
+	cases := []struct{ name, line, want string }{
+		{"closed green row", diffGreenRow, diffBgGreen},
+		{"closed red row", diffRedRow, diffBgRed},
+		{"dim row untouched", diffDimCtx, ""},
+		{"plain row untouched", "after", ""},
+		{"reset after the colour still counts", "\x1b[48;5;22mx\x1b[0my", diffBgGreen},
+		{"other background", "\x1b[48;5;99mx\x1b[0m", ""},
+		{"fg triplet is not a background", "\x1b[38;5;22mx", ""},
+		{"fg index 48 does not hide the diff colour", "\x1b[48;5;22mx\x1b[38;5;48my", diffBgGreen},
 		{
 			// colorize balanced's line wrap emits the styled span a second
 			// time as an empty set+reset pair before the newline.
 			"balanced-mode empty span",
 			diffGreenRow + "\x1b[38;5;119;48;5;22m\x1b[0m",
-			"", diffBgGreen, "",
+			diffBgGreen,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			pad, end := diffRow(c.line, c.open)
-			if pad != c.wantPad || end != c.wantEnd {
-				t.Errorf("diffRow(%q, %q) = (%q, %q), want (%q, %q)",
-					c.line, c.open, pad, end, c.wantPad, c.wantEnd)
+			if got := sgr.LastBackground(c.line, isDiffBackground); got != c.want {
+				t.Errorf("LastBackground(%q) = %q, want %q", c.line, got, c.want)
 			}
 		})
 	}

@@ -5,8 +5,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/scoutme/milk/internal/sgr"
 )
 
 // panelRegion identifies which side panel (if any) a screen column falls in.
@@ -132,7 +133,7 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev tea.MouseEv
 			m.panelSelEndLine = lineIdx
 			m.panelSelEndCol = col
 			m.panelSelDragging = true
-			m.panelSelText = panelSelectionText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
+			m.panelSelText = selectedText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
 			setMouseDragMode(true)
 			m.dragResetPending = true
 			m.dragResetGen++
@@ -197,7 +198,7 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev tea.MouseEv
 		}
 		m.panelSelEndLine = lineIdx
 		m.panelSelEndCol = col
-		m.panelSelText = panelSelectionText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
+		m.panelSelText = selectedText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
 		if cmd := m.copyOnSelectRelease(m.panelSelText); cmd != nil {
 			m.clearPanelSelection()
 			dragCmd = cmd
@@ -247,45 +248,42 @@ func (m *model) clearPanelSelection() {
 	m.panelSelText = ""
 }
 
-// panelSelectionText extracts the plain text between (anchorLine,anchorCol)
-// and (endLine,endCol) from a pre-built slice of (possibly ANSI-colored)
-// panel content lines, respecting column boundaries on the first and last
-// line. Mirrors transcript.go's selectionText but for panel line slices
-// rather than the transcript viewport.
-func panelSelectionText(lines []string, anchorLine, anchorCol, endLine, endCol int) string {
-	loLine, loCol := anchorLine, anchorCol
-	hiLine, hiCol := endLine, endCol
-	if hiLine < loLine || (hiLine == loLine && hiCol < loCol) {
-		loLine, loCol, hiLine, hiCol = hiLine, hiCol, loLine, loCol
+// orderedSelection returns a selection's endpoints ordered start before end,
+// whichever way the user dragged.
+func orderedSelection(anchorLine, anchorCol, endLine, endCol int) (loLine, loCol, hiLine, hiCol int) {
+	if endLine < anchorLine || (endLine == anchorLine && endCol < anchorCol) {
+		return endLine, endCol, anchorLine, anchorCol
 	}
-	if loLine < 0 {
-		loLine = 0
+	return anchorLine, anchorCol, endLine, endCol
+}
+
+// selectionSpan returns the [start,end) range of row i's visible runes (n of
+// them) covered by a selection between the ordered endpoints: the first row
+// starts at loCol, the last ends at hiCol, rows in between are taken whole.
+func selectionSpan(i, loLine, loCol, hiLine, hiCol, n int) (start, end int) {
+	start, end = 0, n
+	if i == loLine {
+		start = min(loCol, n)
 	}
-	if hiLine >= len(lines) {
-		hiLine = len(lines) - 1
+	if i == hiLine && hiCol < n {
+		end = hiCol
 	}
-	if hiLine < loLine {
-		return ""
-	}
+	return min(start, end), end
+}
+
+// selectedText extracts the plain text between (anchorLine,anchorCol) and
+// (endLine,endCol) from a slice of (possibly ANSI-styled) content lines,
+// respecting column boundaries on the first and last line. Coordinates are
+// visible-rune offsets, so the transcript, the side panels and the attach view
+// all share it.
+func selectedText(lines []string, anchorLine, anchorCol, endLine, endCol int) string {
+	loLine, loCol, hiLine, hiCol := orderedSelection(anchorLine, anchorCol, endLine, endCol)
+	loLine = max(loLine, 0)
+	hiLine = min(hiLine, len(lines)-1)
 	var sb strings.Builder
 	for i := loLine; i <= hiLine; i++ {
 		plain := []rune(ansi.Strip(lines[i]))
-		start, end := 0, len(plain)
-		if i == loLine {
-			if loCol < len(plain) {
-				start = loCol
-			} else {
-				start = len(plain)
-			}
-		}
-		if i == hiLine {
-			if hiCol < len(plain) {
-				end = hiCol
-			}
-		}
-		if start > end {
-			start = end
-		}
+		start, end := selectionSpan(i, loLine, loCol, hiLine, hiCol, len(plain))
 		sb.WriteString(string(plain[start:end]))
 		if i < hiLine {
 			sb.WriteByte('\n')
@@ -294,47 +292,27 @@ func panelSelectionText(lines []string, anchorLine, anchorCol, endLine, endCol i
 	return sb.String()
 }
 
-// applyPanelSelectionHighlight returns a copy of lines with reverse-video
-// applied to the selected range, mirroring transcript.go's
-// applySelectionHighlight but operating on a []string of panel content lines.
-// Returns lines unchanged when no selection is active (anchorLine/endLine < 0).
-func applyPanelSelectionHighlight(lines []string, anchorLine, anchorCol, endLine, endCol int) []string {
+// Reverse video marks a selection; it is switched off again with 27 rather
+// than a full reset so the row's own styling survives around it.
+const (
+	selectionOn  = "\x1b[7m"
+	selectionOff = "\x1b[27m"
+)
+
+// highlightSelection returns a copy of lines with the selected range in
+// reverse video, leaving every row's own styling (colours, dim, the think and
+// diff backgrounds) intact underneath. Returns lines unchanged when no
+// selection is active (anchorLine/endLine < 0).
+func highlightSelection(lines []string, anchorLine, anchorCol, endLine, endCol int) []string {
 	if anchorLine < 0 || endLine < 0 {
 		return lines
 	}
-	loLine, loCol := anchorLine, anchorCol
-	hiLine, hiCol := endLine, endCol
-	if hiLine < loLine || (hiLine == loLine && hiCol < loCol) {
-		loLine, loCol, hiLine, hiCol = hiLine, hiCol, loLine, loCol
-	}
+	loLine, loCol, hiLine, hiCol := orderedSelection(anchorLine, anchorCol, endLine, endCol)
 	out := make([]string, len(lines))
 	copy(out, lines)
-	selStyle := lipgloss.NewStyle().Reverse(true)
-	for i := range out {
-		if i < loLine || i > hiLine {
-			continue
-		}
-		plain := []rune(ansi.Strip(out[i]))
-		start, end := 0, len(plain)
-		if i == loLine {
-			if loCol < len(plain) {
-				start = loCol
-			} else {
-				start = len(plain)
-			}
-		}
-		if i == hiLine {
-			if hiCol < len(plain) {
-				end = hiCol
-			}
-		}
-		if start > end {
-			start = end
-		}
-		before := string(plain[:start])
-		sel := selStyle.Render(string(plain[start:end]))
-		after := string(plain[end:])
-		out[i] = before + sel + after
+	for i := max(loLine, 0); i <= hiLine && i < len(out); i++ {
+		start, end := selectionSpan(i, loLine, loCol, hiLine, hiCol, len([]rune(ansi.Strip(out[i]))))
+		out[i] = sgr.Highlight(out[i], start, end, selectionOn, selectionOff)
 	}
 	return out
 }

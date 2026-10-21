@@ -211,7 +211,7 @@ func (m *model) finalizeDroppedDrag() tea.Cmd {
 		}
 	}
 	if m.panelSelAnchorLine >= 0 && m.panelSelDragging && m.panelSelText == "" {
-		m.panelSelText = panelSelectionText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
+		m.panelSelText = selectedText(m.panelSelLines(), m.panelSelAnchorLine, m.panelSelAnchorCol, m.panelSelEndLine, m.panelSelEndCol)
 		if copyCmd = m.copyOnSelectRelease(m.panelSelText); copyCmd != nil {
 			m.clearPanelSelection()
 		}

@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/events"
@@ -499,9 +501,9 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 			msgID := as.liveID("msg")
 			as.emitHistoryMessage(histUser, msgID, prompt)
 			if answered {
-				as.notify(acp.AgentMessageChunk(as.liveID("ask"), stripANSI(milkTag()+" ✓ answer recorded")))
+				as.notify(acp.AgentMessageChunk(as.liveID("ask"), ansi.Strip(milkTag()+" ✓ answer recorded")))
 			} else {
-				as.notify(acp.AgentMessageChunk(as.liveID("ask"), stripANSI(milkTag()+" question skipped")))
+				as.notify(acp.AgentMessageChunk(as.liveID("ask"), ansi.Strip(milkTag()+" question skipped")))
 			}
 			return acp.PromptResponse{MessageID: msgID}, nil
 		}
@@ -526,7 +528,7 @@ func (as *acpSession) prompt(ctx context.Context, req acp.PromptRequest) (acp.Pr
 				msgID := as.liveID("msg")
 				as.emitHistoryMessage(histUser, msgID, prompt)
 				cancel()
-				as.notify(acp.AgentMessageChunk(as.liveID("ask"), stripANSI(milkTag()+" ⏹ interrupting the running turn…")))
+				as.notify(acp.AgentMessageChunk(as.liveID("ask"), ansi.Strip(milkTag()+" ⏹ interrupting the running turn…")))
 				return acp.PromptResponse{MessageID: msgID}, nil
 			}
 		}
@@ -588,11 +590,11 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 		if _, _, found := extractSlashCommand(prompt); found {
 			as.pendingInit = nil
 			if !wizardSwapPrompt(prompt) {
-				wizardCancelNote = stripANSI(milkTag()) + " setup wizard cancelled — restart with /config init\n\n"
+				wizardCancelNote = ansi.Strip(milkTag()) + " setup wizard cancelled — restart with /config init\n\n"
 			}
 		} else if initWizardCancelWord(prompt) {
 			as.pendingInit = nil
-			say(stripANSI(milkTag() + " setup wizard cancelled\n"))
+			say(ansi.Strip(milkTag() + " setup wizard cancelled\n"))
 			as.notify(acp.IdleState(acp.StopReasonEndTurn))
 			return acp.PromptResponse{MessageID: msgID}, nil
 		} else {
@@ -615,7 +617,7 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 				}
 			}
 			if out != "" {
-				say(stripANSI(out))
+				say(ansi.Strip(out))
 			}
 			as.notify(acp.IdleState(acp.StopReasonEndTurn))
 			return acp.PromptResponse{MessageID: msgID}, nil
@@ -631,11 +633,11 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 		if _, _, found := extractSlashCommand(prompt); found {
 			as.pendingTelegram = nil
 			if !wizardSwapPrompt(prompt) {
-				wizardCancelNote = stripANSI(milkTag()) + " telegram setup cancelled — restart with /setup telegram\n\n"
+				wizardCancelNote = ansi.Strip(milkTag()) + " telegram setup cancelled — restart with /setup telegram\n\n"
 			}
 		} else if initWizardCancelWord(prompt) {
 			as.pendingTelegram = nil
-			say(stripANSI(milkTag() + " telegram setup cancelled\n"))
+			say(ansi.Strip(milkTag() + " telegram setup cancelled\n"))
 			as.notify(acp.IdleState(acp.StopReasonEndTurn))
 			return acp.PromptResponse{MessageID: msgID}, nil
 		} else {
@@ -644,7 +646,7 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 				as.pendingTelegram = nil
 			}
 			if out != "" {
-				say(stripANSI(out))
+				say(ansi.Strip(out))
 			}
 			as.notify(acp.IdleState(acp.StopReasonEndTurn))
 			return acp.PromptResponse{MessageID: msgID}, nil
@@ -658,9 +660,9 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 	if prompt != backgroundFollowupPrompt {
 		if consumed, answered := as.takeAskAnswer(prompt); consumed {
 			if answered {
-				say(stripANSI(milkTag() + " ✓ answer recorded"))
+				say(ansi.Strip(milkTag() + " ✓ answer recorded"))
 			} else {
-				say(stripANSI(milkTag() + " question skipped"))
+				say(ansi.Strip(milkTag() + " question skipped"))
 			}
 			as.notify(acp.IdleState(acp.StopReasonEndTurn))
 			return acp.PromptResponse{MessageID: msgID}, nil
@@ -702,7 +704,7 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string) (acp.PromptRes
 	}
 	if gateErr := gateClaude(turnCtx, as.st, rt, as.host, as.notifier()); gateErr != nil {
 		if errors.Is(gateErr, errFallbackDeclined) {
-			say(stripANSI(gateErr.Error()) + "\n")
+			say(ansi.Strip(gateErr.Error()) + "\n")
 			as.notify(acp.IdleState(acp.StopReasonEndTurn))
 			return acp.PromptResponse{MessageID: msgID}, nil
 		}
@@ -898,7 +900,7 @@ func (as *acpSession) elicitAnswer(question string, options []string) func(conte
 	}
 	return func(c context.Context) (string, bool) {
 		res, err := as.host.host.Elicit(c, acp.ElicitationRequest{
-			Message: stripANSI(msg),
+			Message: ansi.Strip(msg),
 			Schema: acp.ElicitationSchema{
 				Type:       "object",
 				Title:      "Question",

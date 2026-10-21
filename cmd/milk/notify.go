@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/scoutme/milk/internal/sgr"
 )
 
 // Toast/notification subsystem (issue #162, ADR-0048).
@@ -259,7 +261,7 @@ func padToastRow(content string, plainW, width, leftPad int) string {
 	if bg == "" {
 		return line
 	}
-	return ansiReset + withPanelBackground(line, bg)
+	return ansiReset + sgr.WithBackground(line, bg)
 }
 
 // overlayToasts paints the visible toasts over the top-right corner of the

@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/workflow"
 )
 
@@ -35,7 +37,7 @@ func dragTestModel() *model {
 
 func TestPanelSelectionText_SingleLinePartial(t *testing.T) {
 	lines := []string{"hello world"}
-	got := panelSelectionText(lines, 0, 0, 0, 5)
+	got := selectedText(lines, 0, 0, 0, 5)
 	if got != "hello" {
 		t.Errorf("got %q, want %q", got, "hello")
 	}
@@ -43,7 +45,7 @@ func TestPanelSelectionText_SingleLinePartial(t *testing.T) {
 
 func TestPanelSelectionText_MultiLine(t *testing.T) {
 	lines := []string{"line zero", "line one", "line two"}
-	got := panelSelectionText(lines, 0, 5, 2, 4)
+	got := selectedText(lines, 0, 5, 2, 4)
 	want := "zero\nline one\nline"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -52,8 +54,8 @@ func TestPanelSelectionText_MultiLine(t *testing.T) {
 
 func TestPanelSelectionText_ReversedAnchorEndIsOrderIndependent(t *testing.T) {
 	lines := []string{"abcdef"}
-	forward := panelSelectionText(lines, 0, 1, 0, 4)
-	backward := panelSelectionText(lines, 0, 4, 0, 1)
+	forward := selectedText(lines, 0, 1, 0, 4)
+	backward := selectedText(lines, 0, 4, 0, 1)
 	if forward != backward {
 		t.Errorf("expected order-independent result, got %q vs %q", forward, backward)
 	}
@@ -64,7 +66,7 @@ func TestPanelSelectionText_ReversedAnchorEndIsOrderIndependent(t *testing.T) {
 
 func TestPanelSelectionText_OutOfRangeLineClamped(t *testing.T) {
 	lines := []string{"one", "two"}
-	got := panelSelectionText(lines, 0, 0, 10, 3)
+	got := selectedText(lines, 0, 0, 10, 3)
 	want := "one\ntwo"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -73,7 +75,7 @@ func TestPanelSelectionText_OutOfRangeLineClamped(t *testing.T) {
 
 func TestPanelSelectionText_StripsANSI(t *testing.T) {
 	lines := []string{dim("hello") + " world"}
-	got := panelSelectionText(lines, 0, 0, 0, 11)
+	got := selectedText(lines, 0, 0, 0, 11)
 	if got != "hello world" {
 		t.Errorf("expected ANSI stripped, got %q", got)
 	}
@@ -81,7 +83,7 @@ func TestPanelSelectionText_StripsANSI(t *testing.T) {
 
 func TestPanelSelectionText_NegativeAnchorClampedToZero(t *testing.T) {
 	lines := []string{"hello"}
-	got := panelSelectionText(lines, -1, 0, 0, 3)
+	got := selectedText(lines, -1, 0, 0, 3)
 	if got != "hel" {
 		t.Errorf("got %q, want %q", got, "hel")
 	}
@@ -91,7 +93,7 @@ func TestPanelSelectionText_NegativeAnchorClampedToZero(t *testing.T) {
 
 func TestApplyPanelSelectionHighlight_NoSelectionReturnsUnchanged(t *testing.T) {
 	lines := []string{"one", "two"}
-	got := applyPanelSelectionHighlight(lines, -1, 0, -1, 0)
+	got := highlightSelection(lines, -1, 0, -1, 0)
 	if got[0] != "one" || got[1] != "two" {
 		t.Errorf("expected lines unchanged, got %v", got)
 	}
@@ -104,9 +106,9 @@ func TestApplyPanelSelectionHighlight_NoSelectionReturnsUnchanged(t *testing.T) 
 // `go test`), by comparing ANSI-stripped output to the original plain text.
 func TestApplyPanelSelectionHighlight_PreservesTextContent(t *testing.T) {
 	lines := []string{"hello world", "second line", "third line"}
-	got := applyPanelSelectionHighlight(lines, 0, 6, 1, 6)
+	got := highlightSelection(lines, 0, 6, 1, 6)
 	for i, l := range got {
-		if stripped := stripANSI(l); stripped != lines[i] {
+		if stripped := ansi.Strip(l); stripped != lines[i] {
 			t.Errorf("line %d: stripped result %q != original %q", i, stripped, lines[i])
 		}
 	}
@@ -114,7 +116,7 @@ func TestApplyPanelSelectionHighlight_PreservesTextContent(t *testing.T) {
 
 func TestApplyPanelSelectionHighlight_DoesNotMutateInput(t *testing.T) {
 	lines := []string{"hello"}
-	_ = applyPanelSelectionHighlight(lines, 0, 0, 0, 5)
+	_ = highlightSelection(lines, 0, 0, 0, 5)
 	if lines[0] != "hello" {
 		t.Errorf("input slice must not be mutated, got %q", lines[0])
 	}

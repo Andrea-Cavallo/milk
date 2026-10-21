@@ -3,7 +3,9 @@ package main
 import (
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	rw "github.com/mattn/go-runewidth"
+
 	"github.com/scoutme/milk/internal/workflow"
 )
 
@@ -382,7 +384,7 @@ func truncatePanel(s string, maxWidth int) string {
 	if maxWidth <= 0 {
 		return s
 	}
-	stripped := []rune(stripANSI(s))
+	stripped := []rune(ansi.Strip(s))
 	if len(stripped) <= maxWidth {
 		return s
 	}

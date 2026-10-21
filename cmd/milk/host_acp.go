@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/events"
 	"github.com/scoutme/milk/internal/transport/acp"
 )
@@ -54,10 +56,10 @@ func (h *acpHost) Notify(n events.Notification) {
 // A request the client cannot answer is reported through failed and treated
 // as a denial.
 func (h *acpHost) RequestPermission(ctx context.Context, req events.PermissionRequest) (events.PermissionOutcome, error) {
-	title, desc := strings.TrimSpace(stripANSI(req.Prompt)), ""
+	title, desc := strings.TrimSpace(ansi.Strip(req.Prompt)), ""
 	var callID acp.ToolCallID
 	if req.Tool != "" {
-		title, desc = "Allow "+req.Tool+"?", stripANSI(req.Summary)
+		title, desc = "Allow "+req.Tool+"?", ansi.Strip(req.Summary)
 		callID = acp.ToolCallID(req.ToolCallID)
 		if callID == "" && h.callID != nil {
 			callID = h.callID(req.Tool)

@@ -70,3 +70,4 @@
 * [69. Full-row diff backgrounds: the surface painter reused for +/- rows](0069-full-row-diff-backgrounds.md)
 * [70. Quiet tool styling: italic + code, no bold, in the Telegram view](0070-quiet-tool-styling.md)
 * [71. Shared workflow board + the `team` workflow](0071-shared-workflow-board.md)
+* [72. Self-contained wrapped rows: one SGR tracker instead of per-feature patches](0072-self-contained-wrapped-rows.md)

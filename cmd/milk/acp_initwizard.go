@@ -33,6 +33,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/scoutme/milk/internal/transport/acp"
 )
 
@@ -139,7 +141,7 @@ func (as *acpSession) askInitChoice(ctx context.Context, st *initWizardState, f 
 	opts = append(opts, acp.PermissionOption{OptionID: "cancel", Name: "cancel setup", Kind: acp.PermissionRejectOnce})
 	out, err := as.host.host.RequestPermission(ctx, acp.PermissionRequest{
 		Title:       "milk setup — " + f.Label,
-		Description: stripANSI(initWizardPrompt(st)),
+		Description: ansi.Strip(initWizardPrompt(st)),
 		Options:     opts,
 	})
 	switch {
@@ -183,7 +185,7 @@ func (as *acpSession) runInitDialogs(ctx context.Context, st *initWizardState) (
 		var answer string
 		if as.formElicit && !field.Secret {
 			res, err := as.host.host.Elicit(ctx, acp.ElicitationRequest{
-				Message: stripANSI(initWizardPrompt(st)),
+				Message: ansi.Strip(initWizardPrompt(st)),
 				Schema:  initWizardSchema(field),
 			})
 			if err != nil {
