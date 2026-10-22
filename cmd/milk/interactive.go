@@ -806,10 +806,16 @@ func execLearn(fact string, st *interactiveState) string {
 // execSkipPerms handles /skip-permissions [on|off].
 // execSkipPerms is /skip-permissions over the TUI: the shared grammar
 // (execSkipPermsCore), applied to the session flag and styled for the
-// transcript.
+// transcript. A real toggle also clears the session allow-all/deny-all mode
+// (issue #302) so the two "stop asking" states can't stack.
 func execSkipPerms(sub string, st *interactiveState) string {
-	next, msg := execSkipPermsCore(sub, st.skipPermissions.Load())
+	next, msg, changed := execSkipPermsCore(sub, st.skipPermissions.Load())
 	st.skipPermissions.Store(next)
+	if changed {
+		st.permMu.Lock()
+		msg += clearSessionPermMode(&st.permOverrides)
+		st.permMu.Unlock()
+	}
 	if next {
 		return milkTag() + " " + red(msg)
 	}

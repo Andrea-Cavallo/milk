@@ -111,7 +111,7 @@ func TestMakeLocalPermAsk_PromptUnchanged(t *testing.T) {
 			tool:       "bash",
 			summary:    "ls -la",
 			answer:     "",
-			wantPrompt: "\n[milk] permission request — primary agent tool: bash  (ls -la)\n[milk] Allow? [Y/n] ",
+			wantPrompt: "\n[milk] permission request — primary agent tool: bash  (ls -la)\n[milk] Allow? [Y/n/a/d] (a: allow all, d: deny all) ",
 			wantAllow:  true,
 		},
 		{
@@ -119,7 +119,7 @@ func TestMakeLocalPermAsk_PromptUnchanged(t *testing.T) {
 			tool:       "write_file",
 			summary:    "",
 			answer:     "n",
-			wantPrompt: "\n[milk] permission request — primary agent tool: write_file\n[milk] Allow? [Y/n] ",
+			wantPrompt: "\n[milk] permission request — primary agent tool: write_file\n[milk] Allow? [Y/n/a/d] (a: allow all, d: deny all) ",
 			wantAllow:  false,
 		},
 	}
@@ -131,7 +131,7 @@ func TestMakeLocalPermAsk_PromptUnchanged(t *testing.T) {
 
 			var gotPrompt, gotLabel string
 			ir := &tuiInputReader{send: fakeSyncSend(t, tt.answer, &gotPrompt, &gotLabel)}
-			ask := makeLocalPermAsk(newTUIHost(ir), nil, nil) // nil notifier = client-only (oversight.Noop)
+			ask := makeLocalPermAsk(newTUIHost(ir), nil, nil, func() permOverrides { return permOverrides{} }) // nil notifier = client-only (oversight.Noop)
 
 			allow := ask(tt.tool, tt.summary)
 

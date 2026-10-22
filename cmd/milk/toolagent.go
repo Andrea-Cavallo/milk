@@ -135,6 +135,7 @@ func buildToolRunner(ctx context.Context, ac config.AgentConfig, cfg config.Conf
 		userAsk:   wiring.userAsk,
 		bgUserAsk: wiring.bgUserAsk,
 		skipPerms: wiring.skipPerms,
+		permMode:  wiring.permMode,
 	})
 	la = la.WithSkipPermissions(cliAgentConfig(cfg).DangerouslySkipPermissions)
 

@@ -109,6 +109,13 @@ func (m *model) statusBar() string {
 	if n := len(m.pendingAttachments); n > 0 {
 		left += dim(fmt.Sprintf(" [%d attached]", n))
 	}
+	// Session permission mode (issue #302): a session left on allow-all must
+	// not be forgotten — it answers every tool ask silently.
+	if m.st != nil {
+		if mode := m.st.permOverridesNow().sessionMode; mode.decided() {
+			left += yellow(" [perms: " + mode.label() + "]")
+		}
+	}
 	if m.agents.backgroundMgr != nil {
 		if n := m.agents.backgroundMgr.ActiveCount(); n > 0 {
 			left += dim(" [⚙ " + pluralize(n, "background agent") + " running]")

@@ -306,7 +306,12 @@ func (as *acpSession) flushRemoteInputs() {
 // ACP: the client is asked via session/request_permission (as before —
 // makeLocalPermAsk's prompt text, now shared in permAskPrompt) under the
 // foreground policy — direct input and remote oversight, no timed answer.
+// The session allow-all/deny-all mode (issue #302) answers first (policy),
+// and a client's "Always allow"/"Always deny" choice sets it.
 func (as *acpSession) askPermissionWithOversight(tool, summary string) bool {
+	as.mu.Lock()
+	ov := as.permOverrides
+	as.mu.Unlock()
 	allow, _ := askPermission(context.Background(), as.notifier(),
 		oversight.PermRequest{ToolName: tool, Input: summary},
 		func(ctx context.Context) bool {
@@ -315,10 +320,27 @@ func (as *acpSession) askPermissionWithOversight(tool, summary string) bool {
 				Tool:    tool,
 				Summary: summary,
 			})
+			if outcome.Always {
+				mode := sessionPermDenyAll
+				if outcome.Allow {
+					mode = sessionPermAllowAll
+				}
+				as.setSessionPermMode(mode)
+			}
 			return outcome.Allow
 		},
-		foregroundAskPolicy)
+		foregroundPermPolicy(ov))
 	return allow
+}
+
+// setSessionPermMode records the session allow-all/deny-all mode (issue #302)
+// — the ACP counterpart of the TUI's model.setSessionPermMode. The mode is
+// silent in effect, so setting it is always announced by the caller's dialog
+// choice or command echo.
+func (as *acpSession) setSessionPermMode(mode sessionPermMode) {
+	as.mu.Lock()
+	as.permOverrides.sessionMode = mode
+	as.mu.Unlock()
 }
 
 // safetyAsk is the doom-loop gate's unattended-context channel over ACP

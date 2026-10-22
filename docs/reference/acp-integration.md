@@ -285,8 +285,12 @@ already granted, matches `bash_allowed_patterns`, or skip-permissions is on.
   and the pending tool call as subject: v2 clients get
   `subject: {type: "tool_call", toolCall: {toolCallId}}`; a v1 client (one
   that sent `protocolVersion: 1`) gets v1's `toolCall` object instead.
-  Options are `allow_once` / `reject_once`. An approval is remembered for that
-  tool, as in the TUI.
+  Options are `allow_once` / `allow_always` / `reject_once` / `reject_always`
+  (issue #302): an approval is remembered for that tool, as in the TUI, and an
+  `*_always` choice sets the session permission mode (`allow-all` /
+  `deny-all` — every later tool ask is answered without prompting; `/permissions
+  mode off` or a `/skip-permissions` toggle clears it, the TUI status bar shows
+  it as `[perms: …]`, and the doom-loop safety gate is never covered by it).
 - **A client that can't answer.** If `session/request_permission` fails (for
   instance a client that doesn't implement it), the tool is denied and milk
   says so in a message, naming the cause, rather than only reporting "denied
