@@ -106,3 +106,31 @@ the fixes below apply to both surfaces and refine the decisions above:
    enabling `"vision": true` never reached an open client session. Prompt
    entry now fingerprints both config files and rebuilds the runners through
    the `buildRunners` seam on change (with a notice), mirroring the TUI.
+
+## Amendment (image budget and context interplay, 2026-10-22)
+
+Found live: a pasted 7.4 MB screenshot read as a 2.5M-token context and a
+cached follow-up iteration was mistaken for a dropped image.
+
+7. **Images are shrunk once, at attach time** (`internal/imageprep`, stdlib
+   only): long edge ≤ 2000 px and ≤ 500 KB encoded, by area-averaging
+   downscale, EXIF orientation applied before the EXIF-dropping re-encode,
+   PNG kept for flat/transparent images and JPEG for photos. In-limit images
+   pass through byte-identical; undecodable/WebP/BMP and > 50 MP images are
+   sent as-is. The 500 KB cap (not the backend's 5 MiB) is deliberate: base64
+   of a larger image would exceed the 900 KB default request guard and make it
+   drop history on every request of the turn. MCP tool images are shrunk at
+   the one place they join the conversation (`dispatchBatch`).
+8. **Token estimates never count base64**: the pre-response estimate that
+   feeds the ADR-0058 reduction ladder counts an image as a flat ~4K tokens,
+   and the status bar's live request-size estimate excludes inlined image
+   data. Wire-size gates (the payload guard) still count real bytes.
+9. **Image-drop detection runs only on the image's first send** — later
+   tool-loop iterations are served from the backend's prompt cache and report
+   no `image_tokens`, which is not drop evidence.
+10. **`grep` no longer depends on ripgrep for correctness**: rg → `git grep`
+    (honors `.gitignore`) → a built-in Go search (no external binary, RE2
+    syntax, skips hidden/vendored/binary files), with a 2000-byte line cap on
+    every backend. A runtime ripgrep download (as MiMo-Code does) was rejected:
+    an unprompted fetch-and-execute of a binary needs pinned checksums per
+    platform and is at odds with milk's approval-first stance.

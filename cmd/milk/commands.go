@@ -1011,6 +1011,9 @@ func (m model) handleAttachFile(path, knownMIME string) model {
 	}
 	m.appendTranscript(fmt.Sprintf("%s staged %s %q (%s, %d bytes) — %d attachment(s) pending\n",
 		milkTag(), kind, a.Name, a.MIMEType, len(a.Data), len(m.pendingAttachments)))
+	if a.Note != "" {
+		m.appendTranscript(milkTag() + " " + a.Note + "\n")
+	}
 	return m
 }
 

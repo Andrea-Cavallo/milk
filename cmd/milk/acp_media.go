@@ -87,6 +87,9 @@ func parseACPPrompt(blocks []acp.ContentBlock) (string, *acpPromptMedia) {
 			}
 			seq++
 			m.images = append(m.images, att)
+			if att.Note != "" {
+				m.notes = append(m.notes, att.Note)
+			}
 			fmt.Fprintf(&sb, "\n[attached image: %s (%s)]\n", att.Name, att.MIMEType)
 
 		case "audio":
@@ -146,7 +149,7 @@ func decodeACPImage(b acp.ContentBlock, seq int) (PendingAttachment, error) {
 		mimeType = detectMIME("", data)
 	}
 	name := fmt.Sprintf("image-%d%s", seq+1, mimeExtension(mimeType))
-	return PendingAttachment{Name: name, MIMEType: mimeType, Data: data}, nil
+	return prepareImageAttachment(PendingAttachment{Name: name, MIMEType: mimeType, Data: data}), nil
 }
 
 // acpResourceLine renders a resource_link's reference line.

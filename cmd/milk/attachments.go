@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/scoutme/milk/internal/agent/local"
+	"github.com/scoutme/milk/internal/imageprep"
 )
 
 // PendingAttachment holds a file staged for inclusion in the next agent turn.
@@ -18,6 +19,7 @@ type PendingAttachment struct {
 	Name     string // base filename
 	MIMEType string // detected MIME type
 	Data     []byte // file contents
+	Note     string // set when attach-time preparation changed the payload (image resize)
 }
 
 // isImage reports whether the attachment is an image milk can deliver as a
@@ -63,7 +65,7 @@ func loadAttachmentMIME(path, knownMIME string) (PendingAttachment, error) {
 	if mime == "" {
 		mime = detectMIME(path, data)
 	}
-	return PendingAttachment{Path: path, Name: name, MIMEType: mime, Data: data}, nil
+	return prepareImageAttachment(PendingAttachment{Path: path, Name: name, MIMEType: mime, Data: data}), nil
 }
 
 // expandHome replaces a leading "~/" with the user's home directory.
@@ -390,4 +392,25 @@ func stageCLIImageRefs(parts []local.ContentPart) (string, func()) {
 		fmt.Fprintf(&b, "[attached image]\n%s\n\n", part.ImageURL.URL)
 	}
 	return b.String(), cleanup
+}
+
+// prepareImageAttachment shrinks an oversized image attachment once, at
+// attach time (see internal/imageprep), updating its payload, MIME type, name
+// extension and Note. Non-images and images within limits are unchanged.
+func prepareImageAttachment(a PendingAttachment) PendingAttachment {
+	if !a.isImage() {
+		return a
+	}
+	out, mime, note := imageprep.Shrink(a.Data, a.MIMEType)
+	if note == "" {
+		return a
+	}
+	a.Data, a.Note = out, "image "+a.Name+" "+note
+	if mime != a.MIMEType {
+		a.MIMEType = mime
+		if ext := filepath.Ext(a.Name); ext != "" {
+			a.Name = strings.TrimSuffix(a.Name, ext) + mimeExtension(mime)
+		}
+	}
+	return a
 }

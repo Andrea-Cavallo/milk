@@ -27,6 +27,7 @@ import (
 	"github.com/scoutme/milk/internal/contextreduce"
 	"github.com/scoutme/milk/internal/diff"
 	"github.com/scoutme/milk/internal/escalation"
+	"github.com/scoutme/milk/internal/imageprep"
 	"github.com/scoutme/milk/internal/instructions"
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/obs"
@@ -3097,6 +3098,13 @@ Action streak detected: %s. You are stuck in a non-progressing loop. Stop and tr
 				parts := make([]ContentPart, 0, len(outcome.images)+1)
 				parts = append(parts, ContentPart{Type: "text", Text: fmt.Sprintf("[image result from tool %q]", toolCalls[i].Function.Name)})
 				for _, img := range outcome.images {
+					// Tool images (MCP screenshots) bypass attach-time
+					// preparation; shrink them here so one full-page capture
+					// cannot dominate the request for the rest of the turn.
+					if shrunk, note := imageprep.ShrinkDataURI(img); note != "" {
+						a.logDebug("tool image shrunk", "tool", toolCalls[i].Function.Name, "detail", note)
+						img = shrunk
+					}
 					parts = append(parts, ContentPart{Type: "image_url", ImageURL: &ImageURLPart{URL: img}})
 				}
 				msgs = append(msgs, Message{Role: "user", ContentParts: parts})
@@ -4130,6 +4138,20 @@ func messagesContainImage(msgs []Message) bool {
 	return false
 }
 
+// imageDataBytes is the total size of the image_url payloads (typically
+// base64 data URLs) carried by msgs.
+func imageDataBytes(msgs []Message) int {
+	n := 0
+	for _, m := range msgs {
+		for _, p := range m.ContentParts {
+			if p.Type == "image_url" && p.ImageURL != nil {
+				n += len(p.ImageURL.URL)
+			}
+		}
+	}
+	return n
+}
+
 // imageNewInRequest reports whether the turn's image is being sent for the
 // first time in this request: the user message at userMsgIdx carries an image
 // and nothing from the assistant follows it yet. On a later tool-loop
@@ -4378,7 +4400,10 @@ func (a *Agent) streamCompletionOnce(ctx context.Context, msgs []Message, tools 
 		)
 	}
 	if a.onRequestSize != nil {
-		a.onRequestSize(int64(len(body)))
+		// Inlined image data is base64 the backend decodes into a few
+		// thousand image tokens; counting it as text (÷4) made a 7 MB
+		// screenshot read as a ~2.5M-token context.
+		a.onRequestSize(int64(len(body) - imageDataBytes(req.Messages)))
 	}
 
 	if a.logContext {

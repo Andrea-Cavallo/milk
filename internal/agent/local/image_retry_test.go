@@ -554,3 +554,28 @@ func TestStreamCompletion_NoDropNoticeOnCachedFollowUpIteration(t *testing.T) {
 		t.Errorf("false drop notice on a cached follow-up iteration: %q", out.String())
 	}
 }
+
+func TestStreamCompletion_RequestSizeExcludesImageData(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":0,"image_tokens":50}}}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	a := New(srv.URL, "test-model")
+	a.supportsVision = true
+	var reported int64
+	a.WithOnRequestSize(func(n int64) { reported = n })
+	big := "data:image/png;base64," + strings.Repeat("A", 2_000_000)
+	a.SetPendingImageParts([]ContentPart{{Type: "image_url", ImageURL: &ImageURLPart{URL: big}}})
+
+	var out strings.Builder
+	if _, err := a.Run(context.Background(), nil, "what is this", &out, &session.Session{CWD: "/tmp"}, nil); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if reported <= 0 || reported > 500_000 {
+		t.Errorf("request size should exclude the 2 MB image payload, got %d", reported)
+	}
+}
