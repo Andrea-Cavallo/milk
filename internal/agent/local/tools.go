@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/memory"
@@ -225,7 +226,7 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 			"type": "function",
 			"function": map[string]any{
 				"name":        "grep",
-				"description": "Search for a pattern inside file contents. Returns matching lines with line numbers (extended regex, e.g. 'foo|bar'). Uses ripgrep when available (honors .gitignore) and falls back to grep -E. Use find_files to locate files by name instead.",
+				"description": "Search for a pattern inside file contents. Returns matching lines with line numbers (extended regex, e.g. 'foo|bar'). Uses ripgrep when available, else git grep inside a git work tree (both honor .gitignore), else a built-in search (Go regex; skips hidden, vendored and binary files). Very long lines are truncated. Use find_files to locate files by name instead.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -1531,6 +1532,109 @@ func runFindFiles(ctx context.Context, args map[string]any, cwd string) (string,
 	return toolResult{Output: out}.String(), false
 }
 
+// grepMaxLineChars bounds one result line: a match inside minified JS/HTML or
+// a generated file can be hundreds of KB on a single line.
+const grepMaxLineChars = 2000
+
+// capLongLines truncates every line longer than max bytes (on a rune
+// boundary), marking how much was cut.
+func capLongLines(out string, max int) string {
+	if len(out) <= max {
+		return out
+	}
+	lines := strings.Split(out, "\n")
+	changed := false
+	for i, l := range lines {
+		if len(l) <= max {
+			continue
+		}
+		cut := max
+		for cut > 0 && !utf8.RuneStart(l[cut]) {
+			cut--
+		}
+		lines[i] = l[:cut] + fmt.Sprintf("… [line truncated: %d more bytes]", len(l)-cut)
+		changed = true
+	}
+	if !changed {
+		return out
+	}
+	return strings.Join(lines, "\n")
+}
+
+// gitGrepCmd builds a `git grep` invocation equivalent to the rg/grep paths
+// (extended regex, line numbers, binary files skipped) for path inside a git
+// work tree, searching tracked plus untracked-but-not-ignored files. ok is
+// false when git is missing or path is not in a work tree. root is the
+// directory git runs in; its output paths are relative to it.
+func gitGrepCmd(ctx context.Context, pattern, path string, ignoreCase bool, contextLines int, include string) (cmd *exec.Cmd, root string, ok bool) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return nil, "", false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, "", false
+	}
+	dir, spec := path, ""
+	if !info.IsDir() {
+		dir, spec = filepath.Dir(path), filepath.Base(path)
+	}
+	if err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+		return nil, "", false
+	}
+	gargs := []string{"-C", dir, "grep", "--untracked", "--exclude-standard", "-I", "-n", "--heading", "--break", "-E", "--color=never"}
+	if ignoreCase {
+		gargs = append(gargs, "-i")
+	}
+	if contextLines > 0 {
+		gargs = append(gargs, "-C", strconv.Itoa(contextLines))
+	}
+	gargs = append(gargs, "-e", pattern, "--")
+	switch {
+	case spec != "":
+		gargs = append(gargs, spec)
+	case include != "":
+		gargs = append(gargs, ":(glob)**/"+include)
+	}
+	return exec.CommandContext(ctx, "git", gargs...), dir, true
+}
+
+// absolutizeGitGrep rewrites `git grep --heading --break` output (a filename
+// line, then "123:text" match / "123-text" context lines, a blank line between
+// files, "--" between context groups) into rg's one-line absolute form
+// ("/root/path:123:text" / "/root/path-123-text"). Every content line carries
+// a "<digits><sep>" prefix, so a blank line unambiguously starts a new file
+// and filenames containing ':' or '-<digits>-' cannot confuse the parse.
+func absolutizeGitGrep(out, root string) string {
+	if out == "" {
+		return out
+	}
+	var b strings.Builder
+	var abs string
+	expectFile := true
+	for _, l := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+		switch {
+		case expectFile:
+			abs = filepath.Join(root, l)
+			expectFile = false
+		case l == "":
+			expectFile = true
+		case l == "--":
+			b.WriteString("--\n")
+		default:
+			j := 0
+			for j < len(l) && l[j] >= '0' && l[j] <= '9' {
+				j++
+			}
+			sep := ":"
+			if j < len(l) && l[j] == '-' {
+				sep = "-"
+			}
+			b.WriteString(abs + sep + l + "\n")
+		}
+	}
+	return b.String()
+}
+
 func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool) {
 	pattern, _ := args["pattern"].(string)
 	path, _ := args["path"].(string)
@@ -1541,7 +1645,6 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 	if !filepath.IsAbs(path) && cwd != "" {
 		path = filepath.Join(cwd, path)
 	}
-	recursive, _ := args["recursive"].(bool)
 	ignoreCase, _ := args["ignore_case"].(bool)
 	contextLines := intArg(args, "context")
 	include, _ := args["include"].(string)
@@ -1551,6 +1654,7 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 	}
 
 	var cmd *exec.Cmd
+	var gitRoot string // set when git grep ran: it prints paths relative to this dir
 	if _, err := exec.LookPath("rg"); err == nil {
 		// ripgrep: extended regex by default, honors .gitignore/.rgignore,
 		// skips binary files and hidden dirs.
@@ -1566,33 +1670,16 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 		}
 		gargs = append(gargs, path)
 		cmd = exec.CommandContext(ctx, "rg", gargs...)
+	} else if gc, root, ok := gitGrepCmd(ctx, pattern, path, ignoreCase, contextLines, include); ok {
+		// No ripgrep: git grep gives the same .gitignore-honoring search
+		// inside a work tree, so a gitignored build/site directory never
+		// floods the result.
+		cmd = gc
+		gitRoot = root
 	} else {
-		// grep fallback: extended regex (-E) is required — the tool
-		// advertises "Regex pattern" and models write foo|bar, a+, a?.
-		// .gitignore is not honored here (no cheap POSIX way); rg or git
-		// gives that.
-		gargs := []string{"-E", "-n", "--color=never", "--binary-files=without-match",
-			"--exclude-dir=.git", "--exclude-dir=.claude",
-			"--exclude-dir=node_modules", "--exclude-dir=vendor"}
-		if ignoreCase {
-			gargs = append(gargs, "-i")
-		}
-		if contextLines > 0 {
-			gargs = append(gargs, "-C", strconv.Itoa(contextLines))
-		}
-		if include != "" {
-			gargs = append(gargs, "--include="+include)
-		}
-		if recursive {
-			gargs = append(gargs, "-r")
-		} else {
-			// If path is a directory, force recursive to avoid grep opening binary index files.
-			if info, err := os.Stat(path); err == nil && info.IsDir() {
-				gargs = append(gargs, "-r")
-			}
-		}
-		gargs = append(gargs, "-e", pattern, path)
-		cmd = exec.CommandContext(ctx, "grep", gargs...)
+		// Neither rg nor a git work tree: search natively (no external grep).
+		out, code, errMsg := nativeGrep(ctx, pattern, path, ignoreCase, contextLines, include, maxResults)
+		return toolResult{Output: capLongLines(out, grepMaxLineChars), Error: errMsg, ExitCode: code}.String(), false
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -1609,6 +1696,10 @@ func runGrep(ctx context.Context, args map[string]any, cwd string) (string, bool
 	}
 
 	out := stdout.String()
+	if gitRoot != "" {
+		out = absolutizeGitGrep(out, gitRoot)
+	}
+	out = capLongLines(out, grepMaxLineChars)
 	// Cap matching lines (context lines ride along with their match).
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if out != "" && len(lines) > maxResults {
