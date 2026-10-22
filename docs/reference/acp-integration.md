@@ -350,6 +350,17 @@ and rebuilt when `/setup telegram` changes it:
   `_milk/warning` notification (`category`, `consumption`, `message`). With
   `loop_detection.auto_interrupt: true` the running turn is cancelled too.
   Workflow steps are exempt from the reasoning check, as in the TUI.
+- **Turn idle watchdog (issue #305).** Identical semantics to the TUI: an
+  advisory no-activity notice (`… — no activity for 10m; turn still running,
+  Ctrl+C (or /interrupt) to cancel`) is sent as a message chunk when a turn
+  goes silent for `limits.turn_timeout_secs` (default 10 min) — the clock
+  resets on real activity (message chunks, tool-call updates, retries) and
+  the warning re-arms per idle stretch. A hung VS Code turn used to show
+  nothing at all. With the opt-in `limits.turn_deadline_secs`, a wrap-up
+  notice fires at the deadline, the agent is asked for a forced closing
+  summary (milk-loop agents), and the turn is hard-stopped after a grace
+  period only if it will not end. The warnings never cancel anything by
+  themselves.
 - **Custom methods.** ACP requires custom notification methods to start with
   `_`, and clients should ignore ones they don't know. milk lists the ones it
   emits in `initialize`'s `capabilities._meta.milk.notifications`.

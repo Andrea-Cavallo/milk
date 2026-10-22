@@ -1939,6 +1939,7 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 	a.malformedToolCallRetries = 0
 
 	tokenCompactRetryAt := 0 // iteration index before which a failed token compaction is not retried
+	wrapUpDone := false      // turn-deadline wrap-up (deadlineWrapUpReminder) fires at most once per turn
 	maxIter := a.memCfg.MaxToolIterations
 	if maxIter == 0 {
 		maxIter = defaultMaxToolIterations
@@ -1952,6 +1953,24 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 		// injected as user messages, so a job can react mid-task — "fix the
 		// green ball" without respawning. nil (every non-job loop) skips.
 		msgs = drainFollowups(msgs, a.bgInbox)
+
+		// Liveness + graceful wrap-up (issue #305): every iteration boundary
+		// is real activity for the host's idle watchdog (a turn that keeps
+		// iterating is not stalled), and a wrap-up signal — the opt-in turn
+		// deadline — forces one final text-only round here, the deadline
+		// sibling of the max-iteration path below.
+		activityNotify(ctx)()
+		if ch := turnWrapUp(ctx); ch != nil && !wrapUpDone {
+			select {
+			case <-ch:
+				wrapUpDone = true
+				if !a.workflowRole {
+					msgs = append(msgs, Message{Role: "user", Content: deadlineWrapUpReminder})
+					tools = nil
+				}
+			default:
+			}
+		}
 
 		if i == maxIter-1 && !a.workflowRole {
 			// Last allowed iteration: force a real closing summary instead of
@@ -3026,6 +3045,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 		if strings.HasPrefix(tc.Function.Name, "agent_") {
 			continue // agent dispatcher handled below
 		}
+		activityNotify(ctx)() // tool start is real activity for the host's idle watchdog (issue #305)
 		printToolLine(out, tc, a.termWidth)
 		if a.onToolUse != nil {
 			var argMap map[string]any
@@ -3057,6 +3077,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, msgs []Message, toolCalls 
 	// the batch. Results are stored in order via a pre-sized slice so messages
 	// are appended in the original call order.
 	outcomes := a.dispatchBatch(ctx, toolCalls, denied, userPrompt, out, sess, mem, pendingImages)
+	activityNotify(ctx)() // tool end (batch done) — same liveness signal (issue #305)
 
 	if a.onToolResult != nil {
 		for i, tc := range toolCalls {
@@ -4245,6 +4266,10 @@ func (a *Agent) streamCompletionLoop(ctx context.Context, msgs []Message, tools 
 	}
 	var last *attemptResult
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// A retry is activity even though its output is buffered (issue #305):
+		// without this a whole replayed generation streams to a buffer and the
+		// host's idle watchdog warns about a turn that is working normally.
+		activityNotify(ctx)()
 		final := attempt == maxAttempts
 		attemptOut := out
 		var buf *bytes.Buffer

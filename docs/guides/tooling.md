@@ -314,7 +314,8 @@ Relative paths and shell commands resolve against the **session working director
 | Field | Location | Default | Description |
 |---|---|---|---|
 | `tool_timeout_secs` | `agents[*].limits` | 120 | Per-tool timeout in seconds. `-1` for no limit. |
-| `turn_timeout_secs` | `agents[*].limits` | 600 | Per-turn timeout (unaffected by concurrent dispatch). |
+| `turn_timeout_secs` | `agents[*].limits` | 600 | Per-turn **idle** warning in seconds (unaffected by concurrent dispatch) — measured from the last activity event, warns once per idle stretch, never ends the turn. `-1` disables. |
+| `turn_deadline_secs` | `agents[*].limits` | off (0/-1) | Opt-in turn deadline: wrap-up summary at the deadline, hard stop if the turn will not end. See [providers.md — limits](providers.md). |
 
 ---
 

@@ -87,6 +87,11 @@ type acpSession struct {
 	// turnMu serializes turns: client prompts and automatic background
 	// follow-ups (see acp_followup.go).
 	turnMu sync.Mutex
+	// turnWatch is the idle watchdog of the currently dispatched turn (issue
+	// #305, TUI parity): every session/update notification ticks it — any
+	// client-visible event is turn activity — and it is cleared when the
+	// turn ends.
+	turnWatch atomic.Pointer[turnIdleWatch]
 	// pendingWaveFollowup / pendingUserFollowup remember a follow-up that was
 	// requested while a turn was running, to be retried when it ends.
 	pendingWaveFollowup bool
@@ -435,6 +440,9 @@ func (as *acpSession) liveStreamID(kind string) acp.MessageID {
 
 // notify sends a session/update notification for this session.
 func (as *acpSession) notify(u acp.SessionUpdate) {
+	if w := as.turnWatch.Load(); w != nil {
+		w.Touch() // any client-visible update is turn activity (issue #305)
+	}
 	n := (&acp.Mapper{Session: as.id}).Update(u)
 	as.conn.Notify(n.Method, n.Params) //nolint:errcheck // stdout write; nothing meaningful to do with the error
 }
@@ -833,12 +841,46 @@ func (as *acpSession) runTurn(ctx context.Context, prompt string, media *acpProm
 	// done + the final response at the end.
 	notify := as.notifier()
 	targetName := "local"
-	agentName := as.cfg.ActiveAgent().Name
+	agentCfg := as.cfg.ActiveAgent()
+	agentName := agentCfg.Name
 	if target == router.TargetEscalation {
 		targetName = "escalation"
-		agentName = as.cfg.EscalationAgentConfig().Name
+		agentCfg = as.cfg.EscalationAgentConfig()
+		agentName = agentCfg.Name
 	}
 	notify.NotifyTurnStart(turnCtx, agentName, targetName, prompt)
+
+	// Idle watchdog (issue #305) — the TUI's turnIdleWatch, identical
+	// semantics: an advisory "no activity" notice as a message chunk (a hung
+	// VS Code turn used to show nothing at all), re-armed per idle stretch;
+	// the opt-in limits.turn_deadline_secs wraps the turn up (forced closing
+	// summary on milk's own loop) and hard-stops it only if it will not end.
+	// Every session/update ticks it via notify, and the writers/callbacks
+	// below plus local.WithActivityNotify cover what never reaches notify.
+	wrapUp := make(chan struct{})
+	turnCtx = local.WithTurnWrapUp(turnCtx, wrapUp)
+	_, steerable := runner.(*localRunner) // milk's own tool loop can be told to wrap up
+	timeout := as.cfg.AgentTurnTimeout(agentCfg)
+	deadline := as.cfg.AgentTurnDeadline(agentCfg)
+	notice := func(text string) {
+		as.notify(acp.AgentMessageChunk(as.liveID("watch"), ansi.Strip(text+"\n")))
+	}
+	watch := newTurnIdleWatch(agentName, timeout, deadline, steerable,
+		func() { notice(turnWatchWarnText(agentName, timeout)) },
+		func() {
+			close(wrapUp)
+			notice(turnWatchWrapUpText(agentName, deadline))
+		},
+		func() {
+			notice(turnWatchStopText(agentName))
+			cancel()
+		})
+	as.turnWatch.Store(watch)
+	watch.Touch()
+	defer watch.Close()
+	defer as.turnWatch.Store(nil)
+	turnCtx = local.WithActivityNotify(turnCtx, watch.Touch)
+	go watch.Start(turnCtx)
 
 	// onResponse keeps feeding the client via say and captures the final
 	// text; onSegment notifies remote oversight per completed segment (the
