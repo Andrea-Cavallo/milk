@@ -213,3 +213,23 @@ func TestReductionLevel(t *testing.T) {
 		t.Errorf("estimated high pressure level = %d, want tools_prune", got)
 	}
 }
+
+// A single image must not read as hundreds of thousands of tokens: with no
+// provider-reported size yet, its base64 length used to count as text and
+// pushed the first request of every image turn into tool pruning.
+func TestReductionLevel_ImageIsNotCountedAsBase64Text(t *testing.T) {
+	a := &Agent{reductionPolicy: contextreduce.DefaultPolicy(), pressureDenominator: 100_000}
+	msgs := []Message{
+		{Role: "system", Content: strings.Repeat("x", 4000)},
+		{Role: "user", ContentParts: []ContentPart{
+			{Type: "text", Text: "what is this"},
+			{Type: "image_url", ImageURL: &ImageURLPart{URL: "data:image/png;base64," + strings.Repeat("A", 900_000)}},
+		}},
+	}
+	if got := a.reductionLevel(msgs, nil); got != contextreduce.LevelNone {
+		t.Errorf("one image drove reduction level to %d, want none", got)
+	}
+	if got := messagesEstimateBytes(msgs); got > 30_000 {
+		t.Errorf("image counted as %d estimate bytes", got)
+	}
+}

@@ -144,12 +144,35 @@ func (a *Agent) reductionLevel(msgs []Message, tools []map[string]any) contextre
 	}
 	promptTokens := a.lastPromptTokens
 	if promptTokens <= 0 {
-		promptTokens = int64((messagesContentBytes(msgs) + toolsContentBytes(tools)) / 4)
+		promptTokens = int64((messagesEstimateBytes(msgs) + toolsContentBytes(tools)) / 4)
 	}
 	if promptTokens <= 0 {
 		return contextreduce.LevelNone
 	}
 	return contextreduce.LevelFor(int(promptTokens), a.pressureDenominator, a.reductionPolicy)
+}
+
+// imageEstimateBytes is what one image counts as in token estimates (bytes,
+// ÷4 → ~4K tokens, the order of what vision backends charge for a ≤2000 px
+// image). Its base64 length is wire size, not context: counting it as text
+// made a single screenshot read as hundreds of thousands of tokens and
+// engaged the ADR-0058 reduction ladder (tool pruning) on the first request.
+const imageEstimateBytes = 16_000
+
+// messagesEstimateBytes is messagesContentBytes for token estimation: text
+// at its length, each image at imageEstimateBytes.
+func messagesEstimateBytes(msgs []Message) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(m.Content)
+		for _, p := range m.ContentParts {
+			n += len(p.Text)
+			if p.ImageURL != nil {
+				n += imageEstimateBytes
+			}
+		}
+	}
+	return n
 }
 
 // toolsContentBytes estimates the marshaled size of the tool schema list.
