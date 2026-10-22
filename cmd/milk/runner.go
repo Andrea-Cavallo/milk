@@ -1047,17 +1047,19 @@ func workflowJournalHasResult(journalPath string) bool {
 }
 
 // withoutDeadline returns a cancel func and a context that has no deadline but
-// cancels when ctx is cancelled for any reason other than a turn timeout.
-// Callers must call the returned cancel to release resources.
+// cancels when ctx is cancelled for any reason other than a routing timeout
+// (turn_routing.go's classifier bound — the historical cause string was the
+// misleading "turn timeout"; it never ran a turn). Callers must call the
+// returned cancel to release resources.
 func withoutDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
 	child, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	go func() {
 		select {
 		case <-ctx.Done():
-			if context.Cause(ctx) != nil && context.Cause(ctx).Error() != "turn timeout" {
+			if context.Cause(ctx) != nil && context.Cause(ctx).Error() != "routing timeout" {
 				cancel()
 			}
-			// turn timeout: leave child alive so the caller can continue.
+			// routing timeout: leave child alive so the caller can continue.
 		case <-child.Done():
 		}
 	}()

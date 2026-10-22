@@ -105,9 +105,11 @@ func routeTurn(ctx context.Context, st *interactiveState, rtr *router.Router, in
 	// escalation this way (issue #188).
 	singleTurnEscalate := st.forceEscalate
 
-	// Route first (fast); the per-agent turn timeout is applied by the caller
-	// once the target is known.
-	routeCtx, cancel := context.WithTimeoutCause(ctx, agentTimeout, fmt.Errorf("turn timeout"))
+	// Route first (fast); the per-agent idle watchdog is applied by the caller
+	// once the target is known. This timeout bounds only the routing/classifier
+	// step — its cause string is deliberately "routing timeout", never "turn
+	// timeout": it does not run the agent's turn (issue #305).
+	routeCtx, cancel := context.WithTimeoutCause(ctx, agentTimeout, fmt.Errorf("routing timeout"))
 	decision, err := rtr.Route(routeCtx, st.sess, input, forceEscalate, forcePrimary)
 	cancel()
 	if err != nil {

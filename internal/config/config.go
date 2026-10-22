@@ -772,6 +772,16 @@ type AgentLimits struct {
 	// Set to -1 for no timeout.
 	TurnTimeoutSecs *int `json:"turn_timeout_secs,omitempty"`
 
+	// TurnDeadlineSecs is an opt-in wall-clock deadline for a turn (default:
+	// off — 0 or -1). When set, milk asks the agent to wrap up with a final
+	// summary at the deadline (milk-loop agents: a forced text-only closing
+	// summary, the same mechanism as the iteration-budget wrap-up; external
+	// process agents: a wrap-up notice, their loops cannot be steered) and
+	// hard-stops the turn shortly after (see turnIdleWatch's grace) if it
+	// does not end. This is a real bound on turn length — unlike
+	// TurnTimeoutSecs, which only warns — so set it generously.
+	TurnDeadlineSecs *int `json:"turn_deadline_secs,omitempty"`
+
 	// ToolTimeoutSecs is the per-individual-tool timeout, independent of TurnTimeoutSecs.
 	// After a tool runs for this duration its context is cancelled and the tool
 	// call returns an error result to the model. Other tools in the same batch are
@@ -2189,6 +2199,23 @@ func (c Config) AgentTurnTimeout(a AgentConfig) time.Duration {
 		}
 	}
 	return 10 * time.Minute
+}
+
+// AgentTurnDeadline returns the opt-in turn deadline for the given agent
+// (limits.turn_deadline_secs). Returns 0 when unset or non-positive/-1: the
+// deadline is off by default — a wall-clock bound must never become the new
+// "stopped mid-fixes". When set, the turn is asked to wrap up gracefully at
+// the deadline and hard-stopped only if it will not end (cmd/milk's
+// turnIdleWatch).
+func (c Config) AgentTurnDeadline(a AgentConfig) time.Duration {
+	if a.Limits != nil && a.Limits.TurnDeadlineSecs != nil {
+		v := *a.Limits.TurnDeadlineSecs
+		if v <= 0 {
+			return 0 // off (0 and -1 both mean "no deadline")
+		}
+		return time.Duration(v) * time.Second
+	}
+	return 0
 }
 
 // AgentToolTimeout returns the per-individual-tool timeout for the given agent.

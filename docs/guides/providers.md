@@ -486,7 +486,7 @@ Set on any agent entry to declare the model's context window size. milk then der
 
 Explicit `limits.message_budget_chars` / `limits.max_tool_iterations` always win.
 
-When no window is known at all (no `context_window_tokens` and no models.dev catalog match for the model name), the tool-iteration budget falls back to a fixed **40** — generous for capable cloud models, still bounded by the doom-loop gate and the turn timeout. Because nothing else on screen would say so, milk prints a session-start notice (TUI transcript, or an ACP message chunk for editor-driven sessions) naming both keys whenever a milk-loop agent runs in that state.
+When no window is known at all (no `context_window_tokens` and no models.dev catalog match for the model name), the tool-iteration budget falls back to a fixed **40** — generous for capable cloud models, still bounded by the doom-loop gates, the per-tool timeout and the opt-in `limits.turn_deadline_secs`. Because nothing else on screen would say so, milk prints a session-start notice (TUI transcript, or an ACP message chunk for editor-driven sessions) naming both keys whenever a milk-loop agent runs in that state.
 
 ```json
 { "name": "qwythos-local", "url": "http://localhost:8080", "model": "qwythos", "provider": "local",
@@ -813,6 +813,10 @@ All fields optional; omitted → global value applies.
 | `included_tools` | — | (all) | Whitelist of built-in tools for this agent |
 | `excluded_tools` | — | (none) | Built-in tools to remove for this agent (applied after `included_tools`) |
 | `tool_timeout_secs` | — | 120 | See [docs/guides/tooling.md — Tool batch dispatch](tooling.md#tool-batch-dispatch-barrier-model) |
+| `turn_timeout_secs` | — | 600 | **Advisory** idle warning for a turn: measured from the last activity event (streamed output, tool start/end, retries), warned once per idle stretch and re-armed when work resumes. `-1` disables. Never ends a turn. |
+| `turn_deadline_secs` | — | off (0/-1) | **Opt-in** wall-clock turn deadline: at the deadline milk asks the agent to wrap up with a forced text-only closing summary (milk-loop agents) or sends a wrap-up notice (CLI/subprocess agents), then hard-stops the turn after a grace period if it will not end (immediately at the deadline+grace for external-process agents, which cannot be steered; a milk-loop turn that is actively writing its summary is never killed). Set generously — this is a real bound on turn length. |
+
+> **Turn bounds, all three of them**: `turn_timeout_secs` only warns (slow ≠ stuck — the clock resets on activity), `turn_deadline_secs` is the optional real bound (graceful summary first, hard stop only as a last resort), and `agentTimeout`'s 10-minute constant bounds only milk's *routing/classifier* step — it never runs or stops an agent turn. Runaway turns are otherwise bounded by the doom-loop gates (3 consecutive identical tool-call iterations, duplicate-call ladder, reasoning n-gram monitor), the per-tool timeout, and Ctrl+C / `/interrupt`.
 
 > **Large context window agents**: set `context_window_tokens` and let milk auto-derive `message_budget_chars`/`max_tool_iterations`; `limits` overrides remain available for exact values. Both `milk config init` and the TUI's `/agent add` prompt for it, proposing a models.dev catalog match as the default when the model name is recognized.
 

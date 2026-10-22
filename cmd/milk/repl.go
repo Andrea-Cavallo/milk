@@ -44,6 +44,9 @@ import (
 	"github.com/scoutme/milk/internal/workflow/interp"
 )
 
+// agentTimeout bounds only the routing/classifier step (turn_routing.go's
+// routeTurn) — not the agent's turn, which has no hard deadline by default
+// (issue #305: idle warnings + opt-in limits.turn_deadline_secs).
 const agentTimeout = 10 * time.Minute
 
 const memoryPanelWidth = 33 // chars for the memory panel (32 inner + 1 right scrollbar)
@@ -352,16 +355,18 @@ type directBashDoneMsg struct {
 // written to the VT emulator. Triggers a View() re-render of the PTY pane.
 type ptyOutputMsg struct{}
 
-// turnTimeoutWarningMsg is sent when a turn exceeds its configured timeout but
-// the turn is still running. The turn is not cancelled — this is a soft warning.
-type turnTimeoutWarningMsg struct{ agentName string }
+// turnWatchNoticeMsg carries one idle-watchdog notice line (issue #305):
+// the advisory "no activity" warning, the deadline wrap-up request, or the
+// hard-stop note. Preformatted by turnIdleWatch's shared text builders so the
+// TUI and ACP word them identically. Never cancels anything by itself.
+type turnWatchNoticeMsg struct{ text string }
 
 type spinnerTickMsg struct{}
 
 // workflowIdleCheckMsg is sent periodically while a workflow is running. It
 // checks whether the current role's turn has exceeded that agent's configured
 // turn timeout since the last streamed activity, and warns once per idle
-// stretch — the workflow equivalent of turnTimeoutWarningMsg, needed because a
+// stretch — the workflow equivalent of turnWatchNoticeMsg, needed because a
 // workflow's overall run spans many turns rather than the single turn a
 // one-shot timer could cover.
 type workflowIdleCheckMsg struct{ gen int }
@@ -1183,7 +1188,7 @@ type model struct {
 	pendingWorkflowQuestions string        // raw questions from designer (non-nil while collecting answers)
 	workflowAnswersCh        chan<- string // channel to send user answers back to workflow goroutine
 
-	// workflow idle watchdog: mirrors the turnTimeoutWarningMsg mechanism used by
+	// workflow idle watchdog: mirrors the turnWatchNoticeMsg mechanism used by
 	// normal turns, but reset on every workflow role transition/streamed chunk
 	// rather than a single one-shot timer, since a workflow runs many turns.
 	lastWorkflowActivity  time.Time
@@ -2506,9 +2511,9 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncLayout()
 		return m, nil
 
-	case turnTimeoutWarningMsg:
+	case turnWatchNoticeMsg:
 		if m.busy {
-			m.appendTranscript(dim(fmt.Sprintf("[%s is taking longer than expected — still waiting]", msg.agentName)) + "\n")
+			m.appendTranscript(dim(msg.text) + "\n")
 			m.syncLayout()
 		}
 		return m, nil
@@ -4174,26 +4179,45 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 		agentName = agentCfg.Name
 	}
 
-	// Apply the per-agent turn timeout now that we know the target.
-	// The turn context has no hard deadline — instead, a warning is sent after the
-	// timeout period if the turn is still running, and the agent continues.
-	// The turn only terminates on explicit user cancellation (Ctrl+C) or completion.
+	// Idle watchdog (issue #305), replacing the old fixed one-shot timer:
+	// the warning measures inactivity — the clock resets on real activity
+	// (streamed output via the writers below, tool start/end and stream
+	// retries via local.WithActivityNotify) — and re-arms per idle stretch.
+	// The turn context still has no hard deadline by default; only the
+	// opt-in limits.turn_deadline_secs ends a turn (wrap-up summary first,
+	// hard stop only if it will not end).
 	timeout := st.cfg.AgentTurnTimeout(agentCfg)
+	deadline := st.cfg.AgentTurnDeadline(agentCfg)
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if timeout > 0 {
-		go func() {
-			timer := time.NewTimer(timeout)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				if st.program != nil {
-					st.program.Send(turnTimeoutWarningMsg{agentName: agentName})
-				}
-			case <-turnCtx.Done():
-			}
-		}()
+	wrapUp := make(chan struct{})
+	turnCtx = local.WithTurnWrapUp(turnCtx, wrapUp)
+	var runner TurnRunner = agents.primary
+	if target == router.TargetEscalation {
+		runner = agents.escalation
 	}
+	// Steerable = milk's own tool loop (local.Agent), which can be told to
+	// wrap up with a forced closing summary; CLI/subprocess runners cannot.
+	_, steerable := runner.(*localRunner)
+	send := func(text string) {
+		if st.program != nil {
+			st.program.Send(turnWatchNoticeMsg{text: text})
+		}
+	}
+	watch := newTurnIdleWatch(agentName, timeout, deadline, steerable,
+		func() { send(turnWatchWarnText(agentName, timeout)) },
+		func() {
+			close(wrapUp)
+			send(turnWatchWrapUpText(agentName, deadline))
+		},
+		func() {
+			send(turnWatchStopText(agentName))
+			cancel()
+		})
+	watch.Touch()
+	defer watch.Close()
+	turnCtx = local.WithActivityNotify(turnCtx, watch.Touch)
+	go watch.Start(turnCtx)
 	st.notifier.NotifyTurnStart(turnCtx, agentName, targetName, input)
 
 	sourceLabel := turnSource(st)
@@ -4205,6 +4229,9 @@ func runTurn(ctx context.Context, st *interactiveState, rtr *router.Router, agen
 	} else {
 		pw = out
 	}
+	// Every byte the agent streams to the host is liveness (issue #305).
+	out = &touchWriter{w: out, touch: watch.Touch}
+	pw = &touchWriter{w: pw, touch: watch.Touch}
 	// onResponse is called by the dispatch layer with the agent's final text,
 	// giving us the exact text from this turn without re-scanning history.
 	var lastResponseText string
