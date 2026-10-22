@@ -312,6 +312,10 @@ func (as *acpSession) askPermissionWithOversight(tool, summary string) bool {
 	as.mu.Lock()
 	ov := as.permOverrides
 	as.mu.Unlock()
+	p := foregroundPermPolicy(ov)
+	p.sticky = stickySetter(as.setSessionPermMode, func(note string) {
+		as.host.Notify(events.Notification{Text: note})
+	})
 	allow, _ := askPermission(context.Background(), as.notifier(),
 		oversight.PermRequest{ToolName: tool, Input: summary},
 		func(ctx context.Context) bool {
@@ -329,7 +333,7 @@ func (as *acpSession) askPermissionWithOversight(tool, summary string) bool {
 			}
 			return outcome.Allow
 		},
-		foregroundPermPolicy(ov))
+		p)
 	return allow
 }
 

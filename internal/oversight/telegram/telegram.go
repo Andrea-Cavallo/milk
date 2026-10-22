@@ -718,7 +718,11 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 	if req.Description != "" {
 		lines = append(lines, escMD(req.Description))
 	}
-	lines = append(lines, "\nReply *y* to allow or *n* to deny\\.")
+	if req.AllowAlways {
+		lines = append(lines, "\nReply *y* to allow or *n* to deny (or *a*/*d* to answer all remaining tool asks that way)\\.")
+	} else {
+		lines = append(lines, "\nReply *y* to allow or *n* to deny\\.")
+	}
 
 	// Register the reply channel before the question goes out — same
 	// drop-the-fast-reply race as AskInput.
@@ -737,13 +741,18 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 
 	select {
 	case reply := <-ch:
-		r := strings.TrimSpace(strings.ToLower(reply))
-		if r == "y" || r == "yes" {
+		dec := parsePermReply(reply, req.AllowAlways)
+		switch dec {
+		case oversight.PermAllow:
 			n.sendAsync("✅ Allowed")
-			return oversight.PermAllow, true
+		case oversight.PermAllowAlways:
+			n.sendAsync("✅ Allowed (all remaining tool asks)")
+		case oversight.PermDenyAlways:
+			n.sendAsync("🚫 Denied (all remaining tool asks)")
+		default:
+			n.sendAsync("🚫 Denied")
 		}
-		n.sendAsync("🚫 Denied")
-		return oversight.PermDeny, true
+		return dec, true
 	case <-time.After(n.cfg.PermTimeout):
 	case <-ctx.Done():
 	}
@@ -757,6 +766,23 @@ func (n *Notifier) AskPermission(ctx context.Context, req oversight.PermRequest)
 		return oversight.PermAllow, false
 	}
 	return oversight.PermTimeout, false
+}
+
+// parsePermReply maps a permission reply onto its decision (issue #302 for
+// the sticky variants). Anything not y/yes denies, as ever; a/d are the
+// sticky answers and only exist where the ask offered them (allowAlways),
+// elsewhere they keep their old meaning (anything but y = deny).
+func parsePermReply(reply string, allowAlways bool) oversight.PermDecision {
+	r := strings.TrimSpace(strings.ToLower(reply))
+	switch {
+	case r == "y" || r == "yes":
+		return oversight.PermAllow
+	case allowAlways && (r == "a" || r == "allow" || r == "always"):
+		return oversight.PermAllowAlways
+	case allowAlways && (r == "d" || r == "deny" || r == "never"):
+		return oversight.PermDenyAlways
+	}
+	return oversight.PermDeny
 }
 
 // AskInput sends an ask_user question and waits for a free-text reply via the

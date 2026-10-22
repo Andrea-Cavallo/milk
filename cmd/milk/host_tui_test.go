@@ -131,7 +131,7 @@ func TestMakeLocalPermAsk_PromptUnchanged(t *testing.T) {
 
 			var gotPrompt, gotLabel string
 			ir := &tuiInputReader{send: fakeSyncSend(t, tt.answer, &gotPrompt, &gotLabel)}
-			ask := makeLocalPermAsk(newTUIHost(ir), nil, nil, func() permOverrides { return permOverrides{} }) // nil notifier = client-only (oversight.Noop)
+			ask := makeLocalPermAsk(newTUIHost(ir), nil, nil, &interactiveState{}) // nil notifier = client-only (oversight.Noop)
 
 			allow := ask(tt.tool, tt.summary)
 

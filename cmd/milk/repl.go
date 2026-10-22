@@ -642,15 +642,19 @@ func (r *tuiInputReader) readLineFreeText(ctx context.Context, prompt, label str
 // persisted to ps (may be nil). Session-level skipPermissions is handled by
 // the caller via WithSkipPermissions before this is ever called. n may be
 // nil — no remote surface.
-func makeLocalPermAsk(host events.Host, ps *local.PermStore, n oversight.Notifier, ov func() permOverrides) func(tool, summary string) bool {
+func makeLocalPermAsk(host events.Host, ps *local.PermStore, n oversight.Notifier, st *interactiveState) func(tool, summary string) bool {
 	return func(tool, summary string) bool {
+		p := foregroundPermPolicy(st.permOverridesNow())
+		p.sticky = stickySetter(st.setSessionPermMode, func(note string) {
+			host.Notify(events.Notification{Text: note})
+		})
 		allow, _ := askPermission(context.Background(), n,
 			oversight.PermRequest{ToolName: tool, Input: summary},
 			func(ctx context.Context) bool {
 				outcome, err := host.RequestPermission(ctx, events.PermissionRequest{Prompt: permAskPrompt(tool, summary), Tool: tool, Summary: summary})
 				return err == nil && outcome.Allow
 			},
-			foregroundPermPolicy(ov()))
+			p)
 		return allow
 	}
 }
@@ -1476,8 +1480,7 @@ func (m *model) setSessionPermMode(mode sessionPermMode) {
 	m.st.permOverrides.sessionMode = mode
 	m.st.permMu.Unlock()
 	if prev != mode {
-		m.appendTranscript(milkTag() + " session permission mode: " + mode.label() +
-			" — every tool ask answered without prompting (safety gate unaffected; /permissions mode off to clear)\n")
+		m.appendTranscript(sessionPermModeNote(mode) + "\n")
 	}
 }
 
@@ -3999,7 +4002,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 	// ask callbacks — they operate in the same cwd and grants should be shared.
 	localPermStore := st.localPerms
 	localHost := newTUIHost(ir0)
-	localPermAsk := makeLocalPermAsk(localHost, localPermStore, st.notifier, st.permOverridesNow)
+	localPermAsk := makeLocalPermAsk(localHost, localPermStore, st.notifier, st)
 	// Background asks (job and workflow-step tool asks) use the full
 	// three-source race with the timed answer (ADR-0052): the TUI prompt
 	// (countdown + bulk keys), remote oversight, and the configured default
@@ -4008,6 +4011,9 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		ctx, cancel := context.WithTimeout(context.Background(), st.cfg.EffectiveBackgroundAgentTimeout())
 		defer cancel()
 		p := bgAskPolicy(st.cfg, st.permOverridesNow())
+		p.sticky = stickySetter(st.setSessionPermMode, func(note string) {
+			localHost.Notify(events.Notification{Text: note})
+		})
 		sum := jobPermSummary(summary, jobID)
 		allow, _ := askPermission(ctx, st.notifier,
 			oversight.PermRequest{ToolName: tool, Input: sum},

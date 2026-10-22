@@ -327,6 +327,9 @@ and rebuilt when `/setup telegram` changes it:
 - **Permission prompts race the client** — `session/request_permission`
   goes to the editor as always; the first real answer wins between the
   client and the remote surface (see the Tool permissions section above).
+  The remote surface carries the session-mode choices too: a Telegram `a`/
+  `d` reply is the counterpart of the client dialog's `allow_always` /
+  `reject_always` (issue #302).
   Background asks (job/workflow tool prompts, doom-loop confirmations in
   unattended contexts) add a third source, the *timed answer*: at the
   configured deadline (default 360s) the configured default applies —

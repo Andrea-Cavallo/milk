@@ -997,6 +997,9 @@ func (as *acpSession) backgroundPermissionAsk(jobID, tool, summary string) bool 
 	cfg, ov := as.cfg, as.permOverrides
 	as.mu.Unlock()
 	p := bgAskPolicy(cfg, ov)
+	p.sticky = stickySetter(as.setSessionPermMode, func(note string) {
+		as.host.Notify(events.Notification{Text: note})
+	})
 	sum := jobPermSummary(summary, jobID)
 	allow, _ := askPermission(ctx, as.notifier(),
 		oversight.PermRequest{ToolName: tool, Input: sum},

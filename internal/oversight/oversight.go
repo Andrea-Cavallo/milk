@@ -11,7 +11,21 @@ const (
 	PermAllow PermDecision = iota
 	PermDeny
 	PermTimeout // remote did not respond within deadline
+	PermAllowAlways
+	PermDenyAlways
 )
+
+// Allow reports whether the decision approves the action — any variant,
+// including the "always" answers (issue #302), which approve this ask AND
+// ask for it to become the session's standing answer (see Always).
+func (d PermDecision) Allow() bool { return d == PermAllow || d == PermAllowAlways }
+
+// Always reports whether the answer is also meant to stick as the session's
+// standing answer for tool asks (the remote counterpart of the TUI's a/d
+// keys and ACP's allow_always/reject_always options). Callers that cannot
+// honor stickiness (the doom-loop safety gate) must treat the decision as
+// its plain value via Allow.
+func (d PermDecision) Always() bool { return d == PermAllowAlways || d == PermDenyAlways }
 
 // PermRequest carries the details of a pending permission prompt.
 type PermRequest struct {
@@ -19,6 +33,11 @@ type PermRequest struct {
 	Input       string // human-readable one-liner (from cliToolArgSummary)
 	Description string
 	BlockedPath string
+	// AllowAlways tells the remote surface it may offer a sticky answer
+	// ("answer this and everything after it the same way", issue #302) —
+	// false for asks the session mode must never cover (the doom-loop
+	// safety gate), where the prompt keeps its plain y/n wording.
+	AllowAlways bool
 }
 
 // InputRequest carries an ask_user question to the remote interface.

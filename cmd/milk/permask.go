@@ -115,6 +115,11 @@ type askPolicy struct {
 	// prompted. Only tool-ask policies set it — the doom-loop gate's
 	// safetyAskPolicy must never consult it.
 	sessionMode sessionPermMode
+	// sticky records a surface's "answer this and everything after it the
+	// same way" choice (issue #302 — the TUI a/d keys set the mode at the
+	// key handler; this is the remote-oversight and ACP-dialog path). nil
+	// means the ask offers no sticky answer (safety gate, questions).
+	sticky func(allow bool)
 }
 
 // foregroundAskPolicy is the interactive ask: direct input and remote
@@ -154,6 +159,31 @@ func clearSessionPermMode(ov *permOverrides) string {
 	return "  (session permission mode cleared)"
 }
 
+// sessionPermModeNote is the one-line announcement of a mode change — the
+// mode acts silently from then on, so setting it must never be silent.
+func sessionPermModeNote(mode sessionPermMode) string {
+	return milkTag() + " session permission mode: " + mode.label() +
+		" — every tool ask answered without prompting (safety gate unaffected; /permissions mode off to clear)"
+}
+
+// stickySetter is the askPolicy.sticky callback for hosts whose session mode
+// lives in their permOverrides (issue #302): a remote oversight "answer all
+// the same way" reply lands here. note, when non-nil, is told once about the
+// change so the surface keeps its transcript honest; it must be safe to call
+// from the ask layer's goroutines (both hosts' Notify are).
+func stickySetter(setMode func(sessionPermMode), note func(string)) func(bool) {
+	return func(allow bool) {
+		mode := sessionPermDenyAll
+		if allow {
+			mode = sessionPermAllowAll
+		}
+		setMode(mode)
+		if note != nil {
+			note(sessionPermModeNote(mode))
+		}
+	}
+}
+
 // askPermission races the direct surface and remote oversight and returns the
 // first real answer plus its source. direct may be nil (no local surface); n
 // may be nil or oversight.Noop (no remote surface). With no surface at all
@@ -167,6 +197,8 @@ func askPermission(ctx context.Context, n oversight.Notifier, req oversight.Perm
 	if p.sessionMode.decided() {
 		return p.sessionMode.allow(), permSrcSessionMode
 	}
+	// A sticky answer can only be offered where it can be honored.
+	req.AllowAlways = p.sticky != nil
 	remote := oversightRemote(n)
 	if direct == nil && !remote {
 		return p.def, permSrcNoSurface
@@ -197,10 +229,13 @@ func askPermission(ctx context.Context, n oversight.Notifier, req oversight.Perm
 			dec, answered := n.AskPermission(ctx, req)
 			switch {
 			case answered:
-				ch <- result{dec == oversight.PermAllow, permSrcRemote}
+				if dec.Always() && p.sticky != nil {
+					p.sticky(dec.Allow())
+				}
+				ch <- result{dec.Allow(), permSrcRemote}
 			case p.remoteTimeoutResolves:
 				// Foreground: the remote's timeout action is its answer.
-				ch <- result{dec == oversight.PermAllow, permSrcRemoteTimeout}
+				ch <- result{dec.Allow(), permSrcRemoteTimeout}
 			}
 			// Background: remote silence is not an answer — the direct
 			// surface or the timed answer resolves the ask.
@@ -361,6 +396,15 @@ func (st *interactiveState) permOverridesNow() permOverrides {
 	st.permMu.RLock()
 	defer st.permMu.RUnlock()
 	return st.permOverrides
+}
+
+// setSessionPermMode records the session mode (issue #302) — state only,
+// guarded by permMu so the ask layer's goroutines may set it; callers (or
+// stickySetter's note) announce the change.
+func (st *interactiveState) setSessionPermMode(mode sessionPermMode) {
+	st.permMu.Lock()
+	st.permOverrides.sessionMode = mode
+	st.permMu.Unlock()
 }
 
 // bgAskPolicy is the tool-ask policy for background work (background-job
