@@ -56,8 +56,8 @@ func TestACPHost_RequestPermission_Allow(t *testing.T) {
 		if req.Title != "allow me?" {
 			t.Errorf("Title = %q, want %q", req.Title, "allow me?")
 		}
-		if len(req.Options) != 2 {
-			t.Fatalf("Options = %v, want 2 entries", req.Options)
+		if len(req.Options) != 4 {
+			t.Fatalf("Options = %v, want 4 entries (once/always × allow/deny, issue #302)", req.Options)
 		}
 		return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Outcome: "selected", OptionID: acpPermAllowOptionID}}, nil
 	}}

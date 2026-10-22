@@ -465,6 +465,11 @@ type Agent struct {
 	isToolAgent      bool        // true when invoked stateless via RunToolCall (agent-as-tool): no escalate tool — there's no session/runner for it to escalate into
 	skipPerms        bool        // true when dangerously_skip_permissions is on: bypass all tool prompts
 	skipPermsFn      func() bool // live counterpart of skipPerms; see WithSkipPermissionsFunc
+	// permModeFn answers tool asks from the session allow-all/deny-all mode
+	// (issue #302) — consulted before the persistent grant store, so an
+	// allow-all answer never leaves a persistent grant behind. nil = no
+	// session mode. Concurrency-safe by contract (WithPermissionModeFunc).
+	permModeFn func() (decided bool, allow bool)
 	// bgPermAsk lets background jobs forked from this agent ask for tool
 	// permission; see WithBackgroundPermissionAsk. nil = jobs never ask.
 	bgPermAsk func(jobID, tool, summary string) bool
@@ -1306,6 +1311,19 @@ func (a *Agent) WithSafetyAsk(fn func(jobID, tool, summary string) SafetyOutcome
 func (a *Agent) WithSkipPermissionsFunc(fn func() bool) *Agent {
 	copy := *a
 	copy.skipPermsFn = fn
+	return &copy
+}
+
+// WithPermissionModeFunc returns a copy whose permission checks also consult
+// fn — the host's session allow-all/deny-all mode (issue #302). fn is asked
+// before the persistent grant store and before any prompt: (true, true)
+// grants with no grant written, (true, false) denies with the usual
+// "was denied by user" error, (false, _) falls through to the normal chain.
+// fn is called from turn and background-job goroutines and must be safe for
+// concurrent use. The doom-loop safety gate never consults it.
+func (a *Agent) WithPermissionModeFunc(fn func() (decided bool, allow bool)) *Agent {
+	copy := *a
+	copy.permModeFn = fn
 	return &copy
 }
 
@@ -2763,6 +2781,7 @@ func (a *Agent) cloneForBackground() *Agent {
 		escalationName:   a.escalationName, // read-only after construction; used for the usage.Agent role tag
 		skipPerms:        a.skipPerms,
 		skipPermsFn:      a.skipPermsFn, // concurrency-safe by contract
+		permModeFn:       a.permModeFn,  // concurrency-safe by contract (WithPermissionModeFunc)
 		bgPermAsk:        a.bgPermAsk,
 		safetyAsk:        a.safetyAsk, // concurrency-safe by contract (WithSafetyAsk)
 		permStore:        a.permStore, // shared, but already designed for concurrent access (concurrent tool-call batches use it today)
@@ -2839,14 +2858,29 @@ func (a *Agent) checkPermission(tool, summary, commandArg string) (allowed bool,
 	}
 	if a.skipPerms || (a.skipPermsFn != nil && a.skipPermsFn()) {
 		obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_grants",
-			attribute.String("name", tool),
-			attribute.String("source", "skip_perms"),
-		)
+			attribute.String("name", tool), attribute.String("source", "skip_perms"))
 		obs.Inc(context.Background(), inferenceScope, "milk.tools.outcomes",
-			attribute.String("name", tool),
-			attribute.String("outcome", "granted"),
-		)
+			attribute.String("name", tool), attribute.String("outcome", "granted"))
 		return true, ""
+	}
+	// Session allow-all/deny-all mode (issue #302): answered before the
+	// grant store and before any prompt, so an allow-all turn never writes a
+	// persistent grant and a deny-all turn never asks.
+	if a.permModeFn != nil {
+		if decided, allow := a.permModeFn(); decided {
+			if allow {
+				obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_grants",
+					attribute.String("name", tool), attribute.String("source", "session_mode"))
+				obs.Inc(context.Background(), inferenceScope, "milk.tools.outcomes",
+					attribute.String("name", tool), attribute.String("outcome", "granted"))
+				return true, ""
+			}
+			obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_denials",
+				attribute.String("name", tool))
+			obs.Inc(context.Background(), inferenceScope, "milk.tools.outcomes",
+				attribute.String("name", tool), attribute.String("outcome", "denied"))
+			return false, toolResult{Error: "tool " + tool + " was denied by user"}.String()
+		}
 	}
 	if a.permStore != nil && a.permStore.IsAllowed(tool) {
 		obs.Inc(context.Background(), inferenceScope, "milk.tools.permission_grants",

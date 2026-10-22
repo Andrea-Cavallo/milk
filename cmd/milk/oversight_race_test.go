@@ -53,7 +53,7 @@ func TestMakeLocalPermAsk_RemoteAnswerWins(t *testing.T) {
 			n := &fakeNotifier{permCh: make(chan oversight.PermDecision, 1)}
 			n.permCh <- tc.decision
 			host := &blockingHost{}
-			ask := makeLocalPermAsk(host, nil, n)
+			ask := makeLocalPermAsk(host, nil, n, &interactiveState{})
 
 			done := make(chan bool, 1)
 			go func() { done <- ask("bash", "ls") }()
@@ -82,7 +82,7 @@ func TestMakeLocalPermAsk_NoRemote_ClientOnly(t *testing.T) {
 
 		var gotPrompt, gotLabel string
 		ir := &tuiInputReader{send: fakeSyncSend(t, "y", &gotPrompt, &gotLabel)}
-		ask := makeLocalPermAsk(newTUIHost(ir), nil, n)
+		ask := makeLocalPermAsk(newTUIHost(ir), nil, n, &interactiveState{})
 		if !ask("bash", "ls") {
 			t.Errorf("notifier %T: expected the client's y to allow", n)
 		}

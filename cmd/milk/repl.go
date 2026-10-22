@@ -642,15 +642,19 @@ func (r *tuiInputReader) readLineFreeText(ctx context.Context, prompt, label str
 // persisted to ps (may be nil). Session-level skipPermissions is handled by
 // the caller via WithSkipPermissions before this is ever called. n may be
 // nil — no remote surface.
-func makeLocalPermAsk(host events.Host, ps *local.PermStore, n oversight.Notifier) func(tool, summary string) bool {
+func makeLocalPermAsk(host events.Host, ps *local.PermStore, n oversight.Notifier, st *interactiveState) func(tool, summary string) bool {
 	return func(tool, summary string) bool {
+		p := foregroundPermPolicy(st.permOverridesNow())
+		p.sticky = stickySetter(st.setSessionPermMode, func(note string) {
+			host.Notify(events.Notification{Text: note})
+		})
 		allow, _ := askPermission(context.Background(), n,
 			oversight.PermRequest{ToolName: tool, Input: summary},
 			func(ctx context.Context) bool {
 				outcome, err := host.RequestPermission(ctx, events.PermissionRequest{Prompt: permAskPrompt(tool, summary), Tool: tool, Summary: summary})
 				return err == nil && outcome.Allow
 			},
-			foregroundAskPolicy)
+			p)
 		return allow
 	}
 }
@@ -683,13 +687,15 @@ func makeLocalUserAsk(host events.Host, n oversight.Notifier) func(ctx context.C
 // tool ask — the text both hosts show (the TUI verbatim; over ACP it rides on
 // session/request_permission's description and on the remote-oversight
 // request). Shared so a question can't read differently depending on which
-// surface asked it.
+// surface asked it. The a/d choices are TUI keys (issue #302): they answer
+// this ask and the whole session; over ACP the same choices are the
+// "Always allow"/"Always deny" dialog options.
 func permAskPrompt(tool, summary string) string {
 	prompt := fmt.Sprintf("\n%s permission request — primary agent tool: %s", milkTag(), bold(tool))
 	if summary != "" {
 		prompt += fmt.Sprintf("  (%s)", dim(summary))
 	}
-	prompt += fmt.Sprintf("\n%s Allow? [Y/n] ", milkTag())
+	prompt += fmt.Sprintf("\n%s Allow? [Y/n/a/d] (a: allow all, d: deny all) ", milkTag())
 	return prompt
 }
 
@@ -1395,9 +1401,9 @@ func (m model) handleBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handlePermKey routes key events while a permission prompt is pending.
-// Enter submits; "a"/"d" answer every pending prompt (allow all / deny all —
-// the bulk keys a burst of background asks needs); anything else is passed to
-// the textarea normally.
+// Enter submits; "a"/"d" answer every pending prompt and set the session
+// allow-all/deny-all mode for what follows (issue #302); anything else is
+// passed to the textarea normally.
 func (m model) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -1434,17 +1440,7 @@ func (m model) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.leadingPasted = false
 		m.syncLayout()
 		m.appendTranscript(answer + "\n")
-		switch strings.ToLower(answer) {
-		case "a":
-			m.answerAllPerms("y")
-		case "d":
-			m.answerAllPerms("n")
-		default:
-			m.pendingPerm.respCh <- answer
-			m.pendingPerm = nil
-			m.dequeueNextPerm()
-			m.afterPermResolved()
-		}
+		m.answerPermPrompt(answer)
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -1452,6 +1448,40 @@ func (m model) handlePermKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmd = m.updateTA(msg)
 	m.syncLayout()
 	return m, cmd
+}
+
+// answerPermPrompt answers a y/n permission prompt's typed answer: y/n (and
+// anything else) answer just the active prompt, "a"/"d" answer the active
+// prompt plus the whole queue AND set the session allow-all/deny-all mode —
+// the same keys doing the same thing whether one ask or a burst is pending
+// (issue #302).
+func (m *model) answerPermPrompt(answer string) {
+	switch strings.ToLower(answer) {
+	case "a":
+		m.answerAllPerms("y")
+		m.setSessionPermMode(sessionPermAllowAll)
+	case "d":
+		m.answerAllPerms("n")
+		m.setSessionPermMode(sessionPermDenyAll)
+	default:
+		m.pendingPerm.respCh <- answer
+		m.pendingPerm = nil
+		m.dequeueNextPerm()
+		m.afterPermResolved()
+	}
+}
+
+// setSessionPermMode records the session allow-all/deny-all mode (issue #302)
+// and says so once in the transcript: the mode answers every later tool ask
+// silently, so setting it must never be silent.
+func (m *model) setSessionPermMode(mode sessionPermMode) {
+	m.st.permMu.Lock()
+	prev := m.st.permOverrides.sessionMode
+	m.st.permOverrides.sessionMode = mode
+	m.st.permMu.Unlock()
+	if prev != mode {
+		m.appendTranscript(sessionPermModeNote(mode) + "\n")
+	}
 }
 
 // answerAllPerms answers the active prompt and the whole queue with answer —
@@ -1488,6 +1518,20 @@ func (m *model) dequeueNextPerm() {
 const permQueueMax = 5
 
 func (m model) handlePermRequest(msg permRequestMsg) (tea.Model, tea.Cmd) {
+	// Session allow-all/deny-all mode (issue #302) answers tool asks as they
+	// arrive: never queued, never shown, one line of audit trail. Questions
+	// (the ask_user tool) are not permissions and are never auto-answered.
+	if !msg.freeText {
+		if mode := m.st.permOverridesNow().sessionMode; mode.decided() {
+			ans, verb := "n", "denied"
+			if mode.allow() {
+				ans, verb = "y", "allowed"
+			}
+			m.appendTranscript(fmt.Sprintf("%s permission %s (session mode %s)\n", milkTag(), verb, mode.label()))
+			msg.respCh <- ans
+			return m, nil
+		}
+	}
 	if m.pendingPerm != nil {
 		if len(m.permQueue) >= permQueueMax && (msg.autoDefault != "" || (msg.freeText && !msg.autoAt.IsZero())) {
 			// Background ask overflow: the timed answer resolves it now —
@@ -3958,7 +4002,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 	// ask callbacks — they operate in the same cwd and grants should be shared.
 	localPermStore := st.localPerms
 	localHost := newTUIHost(ir0)
-	localPermAsk := makeLocalPermAsk(localHost, localPermStore, st.notifier)
+	localPermAsk := makeLocalPermAsk(localHost, localPermStore, st.notifier, st)
 	// Background asks (job and workflow-step tool asks) use the full
 	// three-source race with the timed answer (ADR-0052): the TUI prompt
 	// (countdown + bulk keys), remote oversight, and the configured default
@@ -3967,6 +4011,9 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		ctx, cancel := context.WithTimeout(context.Background(), st.cfg.EffectiveBackgroundAgentTimeout())
 		defer cancel()
 		p := bgAskPolicy(st.cfg, st.permOverridesNow())
+		p.sticky = stickySetter(st.setSessionPermMode, func(note string) {
+			localHost.Notify(events.Notification{Text: note})
+		})
 		sum := jobPermSummary(summary, jobID)
 		allow, _ := askPermission(ctx, st.notifier,
 			oversight.PermRequest{ToolName: tool, Input: sum},
@@ -4062,6 +4109,7 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 		userAsk:             makeLocalUserAsk(localHost, st.notifier),
 		bgUserAsk:           localBgUserAsk,
 		skipPerms:           st.skipPermissions.Load,
+		permMode:            sessionPermModeGetter(st.permOverridesNow),
 		onOpenFile:          localOpenFile,
 		onRetract:           localOnRetract,
 		onToolUse:           localOnToolUse,

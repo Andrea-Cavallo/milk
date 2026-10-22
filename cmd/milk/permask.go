@@ -27,6 +27,52 @@ import (
 	"github.com/scoutme/milk/internal/oversight"
 )
 
+// sessionPermMode is the session-wide "answer every tool ask the same way"
+// mode (issue #302): the a/d prompt keys and /permissions mode … set it so a
+// multi-tool turn stops asking one prompt after another. Session-only — like
+// /skip-permissions it never writes the persistent grant store — and scoped
+// to tool asks only: the doom-loop safety gate (safetyAskPolicy) deliberately
+// does not consult it, so "allow all" can never re-enable unattended runaway
+// loops. Off by default; /permissions mode off (or a /skip-permissions
+// toggle) clears it.
+type sessionPermMode int
+
+const (
+	sessionPermOff sessionPermMode = iota
+	sessionPermAllowAll
+	sessionPermDenyAll
+)
+
+// decided reports whether the mode answers tool asks without prompting.
+func (m sessionPermMode) decided() bool { return m != sessionPermOff }
+
+// allow reports the mode's answer (only meaningful when decided).
+func (m sessionPermMode) allow() bool { return m == sessionPermAllowAll }
+
+// label is the mode's short name for prompts, listings and the status bar.
+func (m sessionPermMode) label() string {
+	switch m {
+	case sessionPermAllowAll:
+		return "allow-all"
+	case sessionPermDenyAll:
+		return "deny-all"
+	}
+	return "off"
+}
+
+// parseSessionPermMode maps the /permissions mode argument onto a mode.
+func parseSessionPermMode(s string) (sessionPermMode, bool) {
+	switch s {
+	case "allow-all":
+		return sessionPermAllowAll, true
+	case "deny-all":
+		return sessionPermDenyAll, true
+	case "off":
+		return sessionPermOff, true
+	}
+	return sessionPermOff, false
+}
+
 // oversightAskMu serializes the *remote* side of asks process-wide: the
 // Telegram backend has a single prompt slot (internal/oversight/telegram's
 // permCh, shared by AskPermission and AskInput), so two concurrent remote
@@ -47,6 +93,7 @@ const (
 	permSrcRemoteTimeout permSource = "remote_timeout" // silence resolved by the remote's timeout_action (foreground asks only)
 	permSrcDefault       permSource = "timeout_default"
 	permSrcNoSurface     permSource = "no_surface"
+	permSrcSessionMode   permSource = "session_mode" // the allow-all/deny-all session mode answered without prompting (issue #302)
 )
 
 // askPolicy describes who answers an ask and what silence means.
@@ -63,12 +110,79 @@ type askPolicy struct {
 	// the ask open for the direct surface until the deadline, which then
 	// applies def instead (the timed answer owns silence there).
 	remoteTimeoutResolves bool
+	// sessionMode is the session allow-all/deny-all mode (issue #302): when
+	// decided it answers the ask immediately, before any surface is
+	// prompted. Only tool-ask policies set it — the doom-loop gate's
+	// safetyAskPolicy must never consult it.
+	sessionMode sessionPermMode
+	// sticky records a surface's "answer this and everything after it the
+	// same way" choice (issue #302 — the TUI a/d keys set the mode at the
+	// key handler; this is the remote-oversight and ACP-dialog path). nil
+	// means the ask offers no sticky answer (safety gate, questions).
+	sticky func(allow bool)
 }
 
 // foregroundAskPolicy is the interactive ask: direct input and remote
 // oversight, no deadline, remote timeout_action resolves remote-side silence
 // (the pre-ADR-0052 behavior, unchanged).
 var foregroundAskPolicy = askPolicy{remoteTimeoutResolves: true}
+
+// foregroundPermPolicy is foregroundAskPolicy plus the session allow-all /
+// deny-all mode (issue #302) from the host's live override snapshot — tool
+// asks only; questions (askUserQuestion) never consult the mode.
+func foregroundPermPolicy(ov permOverrides) askPolicy {
+	p := foregroundAskPolicy
+	p.sessionMode = ov.sessionMode
+	return p
+}
+
+// sessionPermModeGetter adapts a host's override snapshot accessor onto the
+// local agent's permission-mode hook (local.WithPermissionModeFunc): the
+// tool loop consults it before the persistent grant store, so an allow-all
+// answer never leaves a persistent grant behind (issue #302).
+func sessionPermModeGetter(ov func() permOverrides) func() (bool, bool) {
+	return func() (bool, bool) {
+		m := ov().sessionMode
+		return m.decided(), m.allow()
+	}
+}
+
+// clearSessionPermMode drops the session allow-all/deny-all mode and returns
+// a note when one was active (issue #302) — used by the /skip-permissions
+// handlers so the two "stop asking" states can't stack. Callers hold their
+// override lock.
+func clearSessionPermMode(ov *permOverrides) string {
+	if !ov.sessionMode.decided() {
+		return ""
+	}
+	ov.sessionMode = sessionPermOff
+	return "  (session permission mode cleared)"
+}
+
+// sessionPermModeNote is the one-line announcement of a mode change — the
+// mode acts silently from then on, so setting it must never be silent.
+func sessionPermModeNote(mode sessionPermMode) string {
+	return milkTag() + " session permission mode: " + mode.label() +
+		" — every tool ask answered without prompting (safety gate unaffected; /permissions mode off to clear)"
+}
+
+// stickySetter is the askPolicy.sticky callback for hosts whose session mode
+// lives in their permOverrides (issue #302): a remote oversight "answer all
+// the same way" reply lands here. note, when non-nil, is told once about the
+// change so the surface keeps its transcript honest; it must be safe to call
+// from the ask layer's goroutines (both hosts' Notify are).
+func stickySetter(setMode func(sessionPermMode), note func(string)) func(bool) {
+	return func(allow bool) {
+		mode := sessionPermDenyAll
+		if allow {
+			mode = sessionPermAllowAll
+		}
+		setMode(mode)
+		if note != nil {
+			note(sessionPermModeNote(mode))
+		}
+	}
+}
 
 // askPermission races the direct surface and remote oversight and returns the
 // first real answer plus its source. direct may be nil (no local surface); n
@@ -77,6 +191,14 @@ var foregroundAskPolicy = askPolicy{remoteTimeoutResolves: true}
 // watching" fast path) and src is permSrcNoSurface. A policy with a deadline
 // resolves with def and src permSrcDefault when it expires.
 func askPermission(ctx context.Context, n oversight.Notifier, req oversight.PermRequest, direct func(context.Context) bool, p askPolicy) (allow bool, src permSource) {
+	// Session mode first (issue #302) — before even the no-surface fast
+	// path: a background ask with a mode set must not wait out its deadline
+	// for an answer the mode already gives, on any surface configuration.
+	if p.sessionMode.decided() {
+		return p.sessionMode.allow(), permSrcSessionMode
+	}
+	// A sticky answer can only be offered where it can be honored.
+	req.AllowAlways = p.sticky != nil
 	remote := oversightRemote(n)
 	if direct == nil && !remote {
 		return p.def, permSrcNoSurface
@@ -107,10 +229,13 @@ func askPermission(ctx context.Context, n oversight.Notifier, req oversight.Perm
 			dec, answered := n.AskPermission(ctx, req)
 			switch {
 			case answered:
-				ch <- result{dec == oversight.PermAllow, permSrcRemote}
+				if dec.Always() && p.sticky != nil {
+					p.sticky(dec.Allow())
+				}
+				ch <- result{dec.Allow(), permSrcRemote}
 			case p.remoteTimeoutResolves:
 				// Foreground: the remote's timeout action is its answer.
-				ch <- result{dec == oversight.PermAllow, permSrcRemoteTimeout}
+				ch <- result{dec.Allow(), permSrcRemoteTimeout}
 			}
 			// Background: remote silence is not an answer — the direct
 			// surface or the timed answer resolves the ask.
@@ -250,8 +375,10 @@ func safetyAskRun(ctx context.Context, n oversight.Notifier, jobID, tool, summar
 }
 
 // permOverrides are the ad-hoc session overrides for the timed answer, set
-// via /permissions default|timeout. Session-only (like /skip-permissions):
-// they never write config. The zero value means "no override".
+// via /permissions default|timeout, plus the session allow-all/deny-all mode
+// (/permissions mode …, the a/d prompt keys — issue #302). Session-only
+// (like /skip-permissions): they never write config or the persistent grant
+// store. The zero value means "no override". Guarded by the host's permMu.
 type permOverrides struct {
 	bgTimeout        time.Duration
 	bgTimeoutSet     bool
@@ -261,6 +388,7 @@ type permOverrides struct {
 	safetyTimeoutSet bool
 	safetyAllow      bool
 	safetyAllowSet   bool
+	sessionMode      sessionPermMode
 }
 
 // permOverridesNow returns a snapshot of the session's timed-answer overrides.
@@ -270,10 +398,20 @@ func (st *interactiveState) permOverridesNow() permOverrides {
 	return st.permOverrides
 }
 
+// setSessionPermMode records the session mode (issue #302) — state only,
+// guarded by permMu so the ask layer's goroutines may set it; callers (or
+// stickySetter's note) announce the change.
+func (st *interactiveState) setSessionPermMode(mode sessionPermMode) {
+	st.permMu.Lock()
+	st.permOverrides.sessionMode = mode
+	st.permMu.Unlock()
+}
+
 // bgAskPolicy is the tool-ask policy for background work (background-job
-// tool asks and workflow-step tool asks).
+// tool asks and workflow-step tool asks). The session mode answers these
+// too (issue #302) — "all subsequent permission asks" means what it says.
 func bgAskPolicy(cfg config.Config, ov permOverrides) askPolicy {
-	p := askPolicy{deadline: cfg.PermBackgroundTimeout(), def: cfg.PermBackgroundAllow()}
+	p := askPolicy{deadline: cfg.PermBackgroundTimeout(), def: cfg.PermBackgroundAllow(), sessionMode: ov.sessionMode}
 	if ov.bgTimeoutSet {
 		p.deadline = ov.bgTimeout
 	}
@@ -285,7 +423,9 @@ func bgAskPolicy(cfg config.Config, ov permOverrides) askPolicy {
 
 // safetyAskPolicy is the doom-loop gate's unattended policy. Its default is
 // config-separate from the tool default so one `allow` cannot silently
-// re-enable unattended runaway loops.
+// re-enable unattended runaway loops — and the session allow-all/deny-all
+// mode deliberately never reaches it (issue #302): the gate keeps prompting
+// no matter what the tool asks answer.
 func safetyAskPolicy(cfg config.Config, ov permOverrides) askPolicy {
 	p := askPolicy{deadline: cfg.PermSafetyTimeout(), def: cfg.PermSafetyAllow()}
 	if ov.safetyTimeoutSet {
@@ -318,13 +458,14 @@ func autoDefaultAnswer(defAllow bool) string {
 
 // permAskPromptAuto builds the TUI prompt for a background ask: the ordinary
 // permission prompt plus the timed answer and bulk-answer hints. Bulk keys
-// ("a"/"d") keep a queued burst of job prompts answerable in one keystroke.
+// ("a"/"d") answer a queued burst of job prompts in one keystroke AND set the
+// session allow-all/deny-all mode for what follows (issue #302).
 func permAskPromptAuto(tool, summary, note string) string {
 	prompt := fmt.Sprintf("\n%s permission request — primary agent tool: %s", milkTag(), bold(tool))
 	if summary != "" {
 		prompt += fmt.Sprintf("  (%s)", dim(summary))
 	}
-	prompt += fmt.Sprintf("\n%s %s — Allow? [Y/n] (a: allow all, d: deny all) %s ", milkTag(), yellow(note), milkTag())
+	prompt += fmt.Sprintf("\n%s %s — Allow? [Y/n/a/d] (a: allow all, d: deny all) %s ", milkTag(), yellow(note), milkTag())
 	return prompt
 }
 
@@ -340,8 +481,13 @@ func formatPermPolicy(cfg config.Config, ov permOverrides) string {
 	if ov.safetyTimeoutSet || ov.safetyAllowSet {
 		sfNote = "  (session override)"
 	}
+	modeLine := "  session mode (answers every tool ask):             " + ov.sessionMode.label()
+	if ov.sessionMode.decided() {
+		modeLine += "  (session override — /permissions mode off to clear)"
+	}
 	return fmt.Sprintf(
-		"  background asks (job/workflow tool prompts): %s%s\n  safety asks (doom-loop confirmations):        %s%s",
+		"%s\n  background asks (job/workflow tool prompts): %s%s\n  safety asks (doom-loop confirmations):        %s%s",
+		modeLine,
 		autoNote(bg.def, bg.deadline), bgNote,
 		autoNote(sf.def, sf.deadline), sfNote,
 	)
@@ -375,6 +521,24 @@ func execPermissionsCore(rest string, cfg config.Config, ov *permOverrides) (str
 		ov.bgAllow, ov.bgAllowSet = allow, true
 		return milkTag() + " background timed answer (job/workflow tool prompts): " + autoNote(allow, bgAskPolicy(cfg, *ov).deadline) + " — session override", false
 
+	case parts[0] == "mode":
+		if len(parts) != 2 {
+			return "usage: /permissions mode allow-all|deny-all|off", false
+		}
+		mode, ok := parseSessionPermMode(parts[1])
+		if !ok {
+			return "usage: /permissions mode allow-all|deny-all|off", false
+		}
+		ov.sessionMode = mode
+		if mode == sessionPermOff {
+			return milkTag() + " session permission mode: off — agents prompt again", false
+		}
+		verb := "allowed"
+		if mode == sessionPermDenyAll {
+			verb = "denied"
+		}
+		return milkTag() + " session permission mode: " + mode.label() + " — every tool ask is " + verb + " without prompting (doom-loop safety gate unaffected; /permissions mode off to clear)", false
+
 	case parts[0] == "timeout" && len(parts) >= 2:
 		secs, err := strconv.Atoi(parts[1])
 		if err != nil || secs <= 0 {
@@ -394,7 +558,7 @@ func execPermissionsCore(rest string, cfg config.Config, ov *permOverrides) (str
 		ov.bgTimeout, ov.bgTimeoutSet = d, true
 		return milkTag() + " background ask deadline: " + d.String() + " — session override", false
 	}
-	return "usage: /permissions [default allow|deny [safety] | timeout <seconds> [safety]]", false
+	return "usage: /permissions [mode allow-all|deny-all|off | default allow|deny [safety] | timeout <seconds> [safety]]", false
 }
 
 // handlePermissionsCmd implements /permissions over the TUI: the

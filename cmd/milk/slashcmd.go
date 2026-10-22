@@ -177,8 +177,10 @@ var commandRegistry = []cmdSpec{
 	{name: cmdForget, hosts: hostTUI, desc: "delete a percept (asks for confirmation)", hint: "<pat|#id>", help: `  /forget <pat|#id>      delete a percept (asks for confirmation)`},
 	{name: cmdSkipPerms, hosts: hostBoth, desc: "approve every tool call without asking, or go back to asking", hint: "[on|off]", help: `  /skip-permissions      show current skip-permissions state
   /skip-permissions on   all agents auto-approve tool uses (no prompts)
-  /skip-permissions off  agents prompt before running side-effecting tools`},
-	{name: cmdPermissions, hosts: hostBoth, desc: "show the permission timed-answer policy, or override it for this session", hint: "[default allow|deny [safety] | timeout <secs> [safety]]", help: `  /permissions                      show the timed-answer policy + pending asks
+  /skip-permissions off  agents prompt before running side-effecting tools
+  (a toggle also clears the /permissions mode allow-all|deny-all session mode)`},
+	{name: cmdPermissions, hosts: hostBoth, desc: "show the permission policy, or override it for this session", hint: "[mode allow-all|deny-all|off | default allow|deny [safety] | timeout <secs> [safety]]", help: `  /permissions                      show the session mode, timed-answer policy + pending asks
+  /permissions mode allow-all|deny-all|off  answer every tool ask without prompting (never the doom-loop gate)
   /permissions default allow|deny [safety]  session override of the timed default
   /permissions timeout <secs> [safety]      session override of the ask deadline`},
 	{name: cmdAgent, hosts: hostBoth, desc: "list configured agents", hint: "[list|add|remove <name>|switch <name>|tool <sub>]", help: `  /agent                 show active primary and escalation agents

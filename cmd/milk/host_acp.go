@@ -13,10 +13,39 @@ import (
 // Permission option IDs for the binary allow/deny prompt makeLocalPermAsk
 // drives — the only shape events.PermissionRequest's one caller produces
 // today (a pre-rendered yes/no prompt, no structured Title/Subject/Options).
+// The always pair carries the session allow-all/deny-all mode (issue #302).
 const (
-	acpPermAllowOptionID = "allow"
-	acpPermDenyOptionID  = "deny"
+	acpPermAllowOptionID       = "allow"
+	acpPermAlwaysAllowOptionID = "allow_always"
+	acpPermDenyOptionID        = "deny"
+	acpPermAlwaysDenyOptionID  = "deny_always"
 )
+
+// acpPermOptions is the choice set of every session/request_permission milk
+// issues: once and always for both allow and deny (issue #302) — the ACP
+// counterpart of the TUI prompt's [Y/n/a/d] keys.
+func acpPermOptions() []acp.PermissionOption {
+	return []acp.PermissionOption{
+		{OptionID: acpPermAllowOptionID, Name: "Allow", Kind: acp.PermissionAllowOnce},
+		{OptionID: acpPermAlwaysAllowOptionID, Name: "Always allow", Kind: acp.PermissionAllowAlways},
+		{OptionID: acpPermDenyOptionID, Name: "Deny", Kind: acp.PermissionRejectOnce},
+		{OptionID: acpPermAlwaysDenyOptionID, Name: "Always deny", Kind: acp.PermissionRejectAlways},
+	}
+}
+
+// acpPermChoice maps a selected option ID onto its (allow, always) meaning.
+// An unknown ID (a client inventing options) denies once — fail closed.
+func acpPermChoice(optionID string) (allow, always bool) {
+	switch optionID {
+	case acpPermAllowOptionID:
+		return true, false
+	case acpPermAlwaysAllowOptionID:
+		return true, true
+	case acpPermAlwaysDenyOptionID:
+		return false, true
+	}
+	return false, false
+}
 
 // acpHost implements events.Host for an ACP session by translating to/from
 // acp.ACPHost/acp.Conn — mirrors host_tui.go's tuiHost structurally. Built
@@ -69,10 +98,7 @@ func (h *acpHost) RequestPermission(ctx context.Context, req events.PermissionRe
 		Title:       title,
 		Description: desc,
 		ToolCallID:  callID,
-		Options: []acp.PermissionOption{
-			{OptionID: acpPermAllowOptionID, Name: "Allow", Kind: acp.PermissionAllowOnce},
-			{OptionID: acpPermDenyOptionID, Name: "Deny", Kind: acp.PermissionRejectOnce},
-		},
+		Options:     acpPermOptions(),
 	})
 	if err != nil {
 		if h.failed != nil {
@@ -83,7 +109,8 @@ func (h *acpHost) RequestPermission(ctx context.Context, req events.PermissionRe
 	if outcome.Cancelled {
 		return events.PermissionOutcome{Cancelled: true}, nil
 	}
-	return events.PermissionOutcome{Allow: outcome.OptionID == acpPermAllowOptionID}, nil
+	allow, always := acpPermChoice(outcome.OptionID)
+	return events.PermissionOutcome{Allow: allow, Always: always, OptionID: outcome.OptionID}, nil
 }
 
 // Elicit is the events.Host line-input seam and is still not wired (see the

@@ -107,6 +107,11 @@ type PermissionOutcome struct {
 	Allow     bool
 	OptionID  string
 	Cancelled bool
+	// Always marks the answer as an allow-always / reject-always choice:
+	// the asker should record it as the session's standing answer (milk's
+	// session allow-all/deny-all mode, issue #302) instead of just this ask.
+	// Hosts whose surfaces only offer one-shot choices leave it false.
+	Always bool
 }
 
 // ElicitationRequest asks the host to collect a line of structured input

@@ -43,6 +43,9 @@ type localAgentWiring struct {
 	// skipPerms is the live counterpart of the config's
 	// dangerously_skip_permissions: the host's /skip-permissions toggle.
 	skipPerms func() bool
+	// permMode is the session allow-all/deny-all mode (issue #302),
+	// consulted before the grant store and any prompt. nil = no mode.
+	permMode func() (decided bool, allow bool)
 
 	// Hooks. All optional; nil leaves the agent's no-op default.
 	onOpenFile          func(path string) error
@@ -67,6 +70,9 @@ func wireLocalAgent(a *local.Agent, w localAgentWiring) *local.Agent {
 	}
 	if w.skipPerms != nil {
 		a = a.WithSkipPermissionsFunc(w.skipPerms)
+	}
+	if w.permMode != nil {
+		a = a.WithPermissionModeFunc(w.permMode)
 	}
 	if w.permStore != nil || w.permAsk != nil {
 		a = a.WithPermissions(w.permStore, w.permAsk)

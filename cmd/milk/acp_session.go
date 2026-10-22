@@ -325,13 +325,18 @@ func (as *acpSession) buildRunners(cfg config.Config) error {
 	// in the one shared place.
 	permStore, _ := local.OpenPermStore(cwd) //nolint:errcheck // nil disables persistent grants, same as every other best-effort call site
 	wiring := localAgentWiring{
-		permStore:    permStore,
-		permAsk:      as.askPermissionWithOversight,
-		bgPermAsk:    as.backgroundPermissionAsk,
-		safetyAsk:    as.safetyAsk,
-		userAsk:      as.askUser,
-		bgUserAsk:    as.backgroundAskUser,
-		skipPerms:    as.skipPerms.Load,
+		permStore: permStore,
+		permAsk:   as.askPermissionWithOversight,
+		bgPermAsk: as.backgroundPermissionAsk,
+		safetyAsk: as.safetyAsk,
+		userAsk:   as.askUser,
+		bgUserAsk: as.backgroundAskUser,
+		skipPerms: as.skipPerms.Load,
+		permMode: sessionPermModeGetter(func() permOverrides {
+			as.mu.Lock()
+			defer as.mu.Unlock()
+			return as.permOverrides
+		}),
 		onOpenFile:   func(path string) error { return acpOpenFile(cwd, path) },
 		onToolUse:    as.onLocalToolUse,
 		onToolResult: as.onLocalToolResult,
@@ -992,6 +997,9 @@ func (as *acpSession) backgroundPermissionAsk(jobID, tool, summary string) bool 
 	cfg, ov := as.cfg, as.permOverrides
 	as.mu.Unlock()
 	p := bgAskPolicy(cfg, ov)
+	p.sticky = stickySetter(as.setSessionPermMode, func(note string) {
+		as.host.Notify(events.Notification{Text: note})
+	})
 	sum := jobPermSummary(summary, jobID)
 	allow, _ := askPermission(ctx, as.notifier(),
 		oversight.PermRequest{ToolName: tool, Input: sum},

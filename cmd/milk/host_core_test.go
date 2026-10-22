@@ -69,7 +69,7 @@ func TestExecSkipPermsCore(t *testing.T) {
 		{"bogus", false, false, "usage:"},
 	}
 	for _, c := range cases {
-		next, msg := execSkipPermsCore(c.sub, c.cur)
+		next, msg, _ := execSkipPermsCore(c.sub, c.cur)
 		if next != c.wantNext || !strings.Contains(msg, c.wantPart) {
 			t.Errorf("execSkipPermsCore(%q, %v) = (%v, %q), want (%v, …%q…)", c.sub, c.cur, next, msg, c.wantNext, c.wantPart)
 		}

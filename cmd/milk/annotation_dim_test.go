@@ -14,9 +14,9 @@ import (
 // everything else byte-identical.
 
 func TestDimMilkAnnotationRows_PlainManifestGetsStandardTag(t *testing.T) {
-	in := "reply text here\n\n[milk] tool activity in that turn: bash ×3, edit_file ×1; files: a.go\nmore text"
+	in := "reply text here\n\n[milk] tool activity: bash ×3, edit_file ×1; files: a.go\nmore text"
 	got := dimMilkAnnotationRows(in)
-	want := "reply text here\n\n" + milkTag() + " tool activity in that turn: bash ×3, edit_file ×1; files: a.go\nmore text"
+	want := "reply text here\n\n" + milkTag() + " tool activity: bash ×3, edit_file ×1; files: a.go\nmore text"
 	if got != want {
 		t.Errorf("dimMilkAnnotationRows =\n%q\nwant\n%q", got, want)
 	}
@@ -60,7 +60,7 @@ func TestDimMilkAnnotationRows_LegacyPrefixDimmed(t *testing.T) {
 }
 
 func TestDimMilkAnnotationRows_MixedRowsOnlyAnnotationsChange(t *testing.T) {
-	in := "plain one\n[milk] tool activity in that turn: grep ×2\nplain two\n[milk] another one"
+	in := "plain one\n[milk] tool activity: grep ×2\nplain two\n[milk] another one"
 	got := dimMilkAnnotationRows(in)
 	rows := strings.Split(got, "\n")
 	if len(rows) != 4 {
@@ -78,7 +78,7 @@ func TestDimMilkAnnotationRows_MixedRowsOnlyAnnotationsChange(t *testing.T) {
 // and the styling is render-only — the buffer and the plain coordinate
 // space (selection, copy) never see the escapes.
 func TestDimMilkAnnotationRows_RenderStageAndPlainSpace(t *testing.T) {
-	plain := "some reply\n\n[milk] tool activity in that turn: bash ×1"
+	plain := "some reply\n\n[milk] tool activity: bash ×1"
 
 	// Stage wiring: through tintFullRows the tag comes out dimmed.
 	rendered := tintFullRows(ansi.Strip(ansi.Wrap(plain, 80, "")), 80)
@@ -97,7 +97,7 @@ func TestDimMilkAnnotationRows_RenderStageAndPlainSpace(t *testing.T) {
 		t.Errorf("render mutated the transcript buffer: %q", got)
 	}
 	for _, l := range m.transcriptPlainLines() {
-		if l == plain || l == "[milk] tool activity in that turn: bash ×1" {
+		if l == plain || l == "[milk] tool activity: bash ×1" {
 			// plain coordinate space: exactly the original text, no escapes
 			continue
 		}

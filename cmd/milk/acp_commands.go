@@ -344,8 +344,13 @@ func (as *acpSession) runBusySafeCommand(prompt string) (resp acp.PromptResponse
 // (execSkipPermsCore), applied to the session's atomic and returned as a
 // plain slash result.
 func acpSkipPerms(as *acpSession, rest string) (string, string) {
-	next, msg := execSkipPermsCore(rest, as.skipPerms.Load())
+	next, msg, changed := execSkipPermsCore(rest, as.skipPerms.Load())
 	as.skipPerms.Store(next)
+	if changed {
+		as.mu.Lock()
+		msg += clearSessionPermMode(&as.permOverrides)
+		as.mu.Unlock()
+	}
 	return msg, ""
 }
 
