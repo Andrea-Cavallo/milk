@@ -37,7 +37,11 @@ import (
 
 const inferenceScope = "github.com/scoutme/milk"
 
-const defaultMaxToolIterations = 20
+// defaultMaxToolIterations is what a zero-valued MemConfig.MaxToolIterations
+// resolves to — milk's config layer always passes an explicit value (see
+// config.AgentMaxToolIterations: max(20, window/4096), or 40 when the window
+// is unknown); negative means unlimited.
+const defaultMaxToolIterations = 40
 
 // iterationBudgetExhaustedMarker prefixes the fallback message when
 // runToolLoop exhausts maxIter without producing a final response. Kept
@@ -286,7 +290,7 @@ type MemConfig struct {
 	ReinjectionTurns     int  // re-inject instruction after N local turns; 0 = disabled
 	ReinjectionBytes     int  // re-inject instruction after N bytes of local output; 0 = disabled
 	RelevanceGateEnabled bool // apply keyword relevance filter to get_memory results
-	MaxToolIterations    int  // max consecutive tool-call cycles per turn; 0 = use default (20)
+	MaxToolIterations    int  // max consecutive tool-call cycles per turn; 0 = use default (40); negative = unlimited (limits.max_tool_iterations: -1)
 	// ToolOutputDir is where the full output of a result cut by
 	// ToolResultMaxBytes is saved so the model can read the rest; "" disables.
 	ToolOutputDir string
@@ -1935,10 +1939,13 @@ func (a *Agent) runToolLoop(ctx context.Context, msgs []Message, tools []map[str
 
 	tokenCompactRetryAt := 0 // iteration index before which a failed token compaction is not retried
 	maxIter := a.memCfg.MaxToolIterations
-	if maxIter <= 0 {
+	if maxIter == 0 {
 		maxIter = defaultMaxToolIterations
 	}
-	for i := 0; i < maxIter; i++ {
+	// maxIter < 0 = unlimited (the config resolver's -1 signal, mapped to the
+	// negative sentinel by the runner): the loop then only ends on a final
+	// response, a loop detector, or the turn timeout.
+	for i := 0; maxIter < 0 || i < maxIter; i++ {
 		// Follow-up input delivered to a running background job (issue #250,
 		// send_background_agent): drained at iteration boundaries and
 		// injected as user messages, so a job can react mid-task — "fix the

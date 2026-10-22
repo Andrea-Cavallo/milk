@@ -206,13 +206,22 @@ func (r *localRunner) Execute(
 ) (TurnResult, error) {
 	ac := agentConfigForRole(cfg, role)
 
+	// The config resolver signals "unlimited" (limits.max_tool_iterations:
+	// -1) as 0, but local.MemConfig reads 0 as "use the built-in default" —
+	// pass the loop's negative sentinel instead, or an unlimited budget
+	// would silently behave like the default cap.
+	maxIter := cfg.AgentMaxToolIterations(ac)
+	if maxIter == 0 {
+		maxIter = -1
+	}
+
 	agent := r.agent.WithMemConfig(local.MemConfig{
 		ResultMaxBytes:       cfg.AgentMemoryResultMaxByteCount(ac),
 		ToolResultMaxBytes:   cfg.AgentToolResultMaxByteCount(ac),
 		ReinjectionTurns:     cfg.AgentMemoryReinjectionTurnThreshold(ac, role == RolePrimary),
 		ReinjectionBytes:     cfg.AgentMemoryReinjectionByteThreshold(ac, role == RolePrimary),
 		RelevanceGateEnabled: cfg.AgentPerceptRelevanceGateEnabled(ac),
-		MaxToolIterations:    cfg.AgentMaxToolIterations(ac),
+		MaxToolIterations:    maxIter,
 		ToolOutputDir:        toolOutputDir(),
 	}).WithToolTimeout(cfg.AgentToolTimeout(ac)).
 		WithMaxPayloadBytes(cfg.AgentMaxPayloadBytes(ac)).
