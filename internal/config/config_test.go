@@ -483,8 +483,8 @@ func TestAgentPerceptRelevanceGateEnabled_Override_True(t *testing.T) {
 func TestAgentMaxToolIterations_Default(t *testing.T) {
 	cfg := Config{}
 	ac := AgentConfig{}
-	if got := cfg.AgentMaxToolIterations(ac); got != 20 {
-		t.Errorf("expected default 20, got %d", got)
+	if got := cfg.AgentMaxToolIterations(ac); got != 40 {
+		t.Errorf("expected default 40 (no known window), got %d", got)
 	}
 }
 
@@ -822,28 +822,34 @@ func TestAgentMaxToolIterations_ContextWindowTokens(t *testing.T) {
 		wantIter int
 	}{
 		{
-			name:     "no context_window_tokens falls back to default 20",
+			name:     "no context_window_tokens falls back to default 40",
 			cfg:      Config{},
 			ac:       AgentConfig{},
-			wantIter: 20,
+			wantIter: 40,
 		},
 		{
-			name:     "context_window_tokens 8192 → max(5, 8192/4096)=2 → clamped to 5",
+			name:     "context_window_tokens 8192 → max(20, 8192/4096)=2 → floored to 20",
 			cfg:      Config{},
 			ac:       AgentConfig{ContextWindowTokens: 8192},
-			wantIter: 5, // 8192/4096=2, max(5,2)=5
+			wantIter: 20, // 8192/4096=2, max(20,2)=20 — a small-window model still gets a real budget
 		},
 		{
-			name:     "context_window_tokens 32768 → max(5, 32768/4096)=8",
+			name:     "context_window_tokens 32768 → max(20, 32768/4096)=20",
 			cfg:      Config{},
 			ac:       AgentConfig{ContextWindowTokens: 32768},
-			wantIter: 8, // 32768/4096=8
+			wantIter: 20, // 32768/4096=8 → floored to 20 (was 8 — capable models were being cut off mid-task)
 		},
 		{
-			name:     "context_window_tokens 131072 → max(5, 131072/4096)=32",
+			name:     "context_window_tokens 65536 → max(20, 65536/4096)=20",
+			cfg:      Config{},
+			ac:       AgentConfig{ContextWindowTokens: 65536},
+			wantIter: 20, // 65536/4096=16 → floored to 20
+		},
+		{
+			name:     "context_window_tokens 131072 → max(20, 131072/4096)=32",
 			cfg:      Config{},
 			ac:       AgentConfig{ContextWindowTokens: 131072},
-			wantIter: 32,
+			wantIter: 32, // scaling above the floor unchanged
 		},
 		{
 			name: "explicit limits.max_tool_iterations overrides auto-derivation",
@@ -875,6 +881,93 @@ func TestAgentMaxToolIterations_ContextWindowTokens(t *testing.T) {
 			got := tt.cfg.AgentMaxToolIterations(tt.ac)
 			if got != tt.wantIter {
 				t.Errorf("AgentMaxToolIterations() = %d, want %d", got, tt.wantIter)
+			}
+		})
+	}
+}
+
+// TestAgentIterationBudgetNotice pins the session-start advisory: it fires
+// only for milk-loop agents that land on the built-in fallback with nothing
+// defined, and stays silent when the window is known, the budget is forced,
+// or the agent runs its own tool loop (claude-cli / subprocess).
+func TestAgentIterationBudgetNotice(t *testing.T) {
+	unknownModel := func() AgentConfig {
+		return AgentConfig{Name: "qwen-local", Provider: "local", Model: "milk-test-unknown-model"}
+	}
+	tests := []struct {
+		name      string
+		cfg       Config
+		ac        AgentConfig
+		roleLabel string
+		wantSub   string // "" = expect no notice
+	}{
+		{
+			name:      "local agent, no window, no forced budget → notice with the fallback value",
+			cfg:       Config{DisableModelsDevLookup: true},
+			ac:        unknownModel(),
+			roleLabel: "primary",
+			wantSub:   "falls back to 40",
+		},
+		{
+			name:      "unnamed agent is labelled by the caller's role",
+			cfg:       Config{DisableModelsDevLookup: true},
+			ac:        AgentConfig{Provider: "local", Model: "milk-test-unknown-model"},
+			roleLabel: "escalation",
+			wantSub:   `agent "escalation" has no known context window`,
+		},
+		{
+			name:      "window known → silent (budget derives from it)",
+			cfg:       Config{DisableModelsDevLookup: true},
+			ac:        AgentConfig{Name: "qwen-local", Provider: "local", Model: "m", ContextWindowTokens: 32768},
+			roleLabel: "primary",
+		},
+		{
+			name: "explicit per-agent budget → silent (user already defined it)",
+			cfg:  Config{DisableModelsDevLookup: true},
+			ac: func() AgentConfig {
+				a := unknownModel()
+				a.Limits = &AgentLimits{MaxToolIterations: intPtr(-1)}
+				return a
+			}(),
+			roleLabel: "primary",
+		},
+		{
+			name:      "explicit global budget → silent",
+			cfg:       Config{DisableModelsDevLookup: true, LocalMaxToolIterations: 60},
+			ac:        unknownModel(),
+			roleLabel: "primary",
+		},
+		{
+			name:      "claude-cli escalation → silent (runs its own tool loop)",
+			cfg:       Config{DisableModelsDevLookup: true},
+			ac:        AgentConfig{Name: "claude", Provider: "claude-cli", Model: "claude-sonnet"},
+			roleLabel: "escalation",
+		},
+		{
+			name:      "subprocess agent → silent (runs its own tool loop)",
+			cfg:       Config{DisableModelsDevLookup: true},
+			ac:        AgentConfig{Name: "smol", Provider: "subprocess", Model: "x"},
+			roleLabel: "primary",
+		},
+		{
+			name:      "bearer cloud agent with unknown window → notice (the capable-model case)",
+			cfg:       Config{DisableModelsDevLookup: true},
+			ac:        AgentConfig{Name: "cloud", Provider: "bearer", Model: "milk-test-unknown-model"},
+			roleLabel: "primary",
+			wantSub:   "context_window_tokens",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.AgentIterationBudgetNotice(tt.ac, tt.roleLabel)
+			if tt.wantSub == "" {
+				if got != "" {
+					t.Errorf("AgentIterationBudgetNotice() = %q, want no notice", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.wantSub) {
+				t.Errorf("AgentIterationBudgetNotice() = %q, want it to contain %q", got, tt.wantSub)
 			}
 		})
 	}

@@ -687,7 +687,7 @@ type AgentConfig struct {
 	// limits.max_tool_iterations override is configured, milk auto-derives
 	// sensible defaults:
 	//   MessageBudgetChars = ContextWindowTokens * 3  (75% of window × 4 chars/token)
-	//   MaxToolIterations  = max(5, ContextWindowTokens/4096)
+	//   MaxToolIterations  = max(20, ContextWindowTokens/4096) — 40 when the window is unknown
 	// Set to 0 (the default) to use the global config defaults instead.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 
@@ -1162,7 +1162,9 @@ type Config struct {
 
 	// LocalMaxToolIterations caps the number of consecutive tool-call / response
 	// cycles the local agent may execute before the turn is aborted with an error.
-	// Default: 20. Set to 0 to use the default; set to -1 for unlimited.
+	// Default: 0 (unset — no global override; the per-agent resolution then
+	// derives max(20, context_window_tokens/4096), or 40 when the window is
+	// unknown). Set >0 to force a global cap; set to -1 for unlimited.
 	LocalMaxToolIterations int `json:"local_max_tool_iterations,omitempty"`
 
 	// ReturningFreshStartLocalTurns is the number of local-agent turns since the
@@ -2104,18 +2106,25 @@ func (c Config) AgentPerceptRelevanceGateEnabled(a AgentConfig) bool {
 
 // AgentMaxToolIterations returns the tool-call chain limit for the given agent.
 // Returns 0 to signal "unlimited" when the value resolves to negative.
-// Default: 20.
+// Default: 40 (built-in fallback — see the note on generous budgets below).
 //
 // When neither the per-agent limits.max_tool_iterations nor the global
-// local_max_tool_iterations is explicitly set and context_window_tokens is
-// configured on the agent, the cap is auto-derived as max(5, ContextWindowTokens/4096).
+// local_max_tool_iterations is explicitly set, the cap is auto-derived from
+// the agent's context window as max(20, ContextWindowTokens/4096), so a
+// capable model with a modest window (32k/64k) still gets a budget real
+// multi-file tasks can finish in — the window only scales the cap upward
+// from there. Context growth inside the loop is bounded separately
+// (compaction_trigger_tokens, tool-result caps), so the iteration cap no
+// longer needs to double as a context protector; the doom-loop gate and the
+// turn timeout bound runaway loops. AgentIterationBudgetNotice reports when
+// a milk-loop agent lands on the built-in fallback with nothing defined.
 func (c Config) AgentMaxToolIterations(a AgentConfig) int {
 	if a.Limits != nil && a.Limits.MaxToolIterations != nil {
 		v := *a.Limits.MaxToolIterations
 		if v < 0 {
 			return 0 // unlimited
 		}
-		return intOr(v, 20)
+		return intOr(v, 40)
 	}
 	if c.LocalMaxToolIterations < 0 {
 		return 0 // unlimited
@@ -2126,12 +2135,45 @@ func (c Config) AgentMaxToolIterations(a AgentConfig) int {
 	// Auto-derive from context_window_tokens when no explicit global override.
 	if ctw := c.AgentContextWindowTokens(a); ctw > 0 {
 		cap := ctw / 4096
-		if cap < 5 {
-			cap = 5
+		if cap < 20 {
+			cap = 20
 		}
 		return cap
 	}
-	return 20 // built-in default
+	return 40 // built-in default: no known window — be generous, stay bounded
+}
+
+// AgentIterationBudgetNotice returns a one-line suggestion for the user when
+// a milk-loop agent (local HTTP / Bedrock / bearer-token — claude-cli and
+// subprocess providers run their own tool loops and are skipped) has neither
+// a known context window (context_window_tokens, or a models.dev catalog
+// match) nor an explicit tool-iteration budget. Such an agent silently runs
+// on AgentMaxToolIterations' built-in fallback, which cannot scale with the
+// window, and nothing on screen says so. roleLabel ("primary", "escalation")
+// names the agent when its config entry has no name. Returns "" when there is
+// nothing to suggest: window known, budget forced (limits.max_tool_iterations
+// or the global local_max_tool_iterations), or an agent that does not run
+// milk's tool loop. Surfaces as a TUI session-start config warning and as an
+// ACP session/new|resume notice chunk.
+func (c Config) AgentIterationBudgetNotice(a AgentConfig, roleLabel string) string {
+	if a.IsExternalProcess() {
+		return ""
+	}
+	if a.Limits != nil && a.Limits.MaxToolIterations != nil {
+		return ""
+	}
+	if c.LocalMaxToolIterations != 0 {
+		return ""
+	}
+	if c.AgentContextWindowTokens(a) > 0 {
+		return ""
+	}
+	name := a.Name
+	if name == "" {
+		name = roleLabel
+	}
+	return fmt.Sprintf("agent %q has no known context window — the tool-iteration budget falls back to %d; set context_window_tokens (budget then derives as max(20, window/4096)) or limits.max_tool_iterations (e.g. -1 = unlimited) to define it",
+		name, c.AgentMaxToolIterations(a))
 }
 
 // AgentTurnTimeout returns the per-turn timeout for the given agent.

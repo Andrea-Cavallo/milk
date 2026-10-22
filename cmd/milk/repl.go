@@ -4639,6 +4639,16 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	for _, w := range config.Validate(cfg) {
 		m.startupWarnings = append(m.startupWarnings, w.String())
 	}
+	// Session-start advisory: a milk-loop agent with no known context window
+	// and no forced tool-iteration budget runs on the built-in fallback —
+	// say so once, with the two config keys that define it (the status bar
+	// has no room for the how-to).
+	if n := cfg.AgentIterationBudgetNotice(agentConfigForRole(cfg, RolePrimary), "primary"); n != "" {
+		m.startupWarnings = append(m.startupWarnings, n)
+	}
+	if n := cfg.AgentIterationBudgetNotice(agentConfigForRole(cfg, RoleEscalation), "escalation"); n != "" {
+		m.startupWarnings = append(m.startupWarnings, n)
+	}
 	m.colorizeMode = ParseColorizeMode(cfg.Colorization)
 	if needsAWSRefresh(cfg) {
 		m.credRefreshing = true

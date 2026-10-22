@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/oversight"
 	"github.com/scoutme/milk/internal/session"
@@ -127,6 +128,11 @@ func (s *acpServer) AfterResponse(method string, result any) {
 			// A session created after the startup check completed hears about
 			// the release now — once per session (announceUpdateTo).
 			s.announceUpdateTo(as)
+			// Session-start advisory (the ACP half of the TUI's startup
+			// warning): unknown context window + no forced tool-iteration
+			// budget — the editor's transcript is the only surface an
+			// ACP-driven setup has to be told how to define one.
+			announceWindowBudget(as)
 			// Telegram messages that arrived before any session existed run
 			// on this one (acp_oversight.go).
 			s.drainRemoteQueue(as)
@@ -138,7 +144,24 @@ func (s *acpServer) AfterResponse(method string, result any) {
 		}
 		if as := s.session(resp.sessionID); as != nil {
 			s.announceUpdateTo(as)
+			announceWindowBudget(as)
 			s.drainRemoteQueue(as)
+		}
+	}
+}
+
+// announceWindowBudget sends the session-start notice for agents running on
+// the built-in tool-iteration fallback (config.AgentIterationBudgetNotice) —
+// the ACP half of the TUI's startup warning, sent once per session alongside
+// the other post-response notices. Both roles are checked; a claude-cli or
+// subprocess agent is skipped inside the helper (it runs its own tool loop).
+func announceWindowBudget(as *acpSession) {
+	for _, r := range []struct {
+		role  AgentRole
+		label string
+	}{{RolePrimary, "primary"}, {RoleEscalation, "escalation"}} {
+		if n := as.cfg.AgentIterationBudgetNotice(agentConfigForRole(as.cfg, r.role), r.label); n != "" {
+			as.notify(acp.AgentMessageChunk(as.liveID("warn"), ansi.Strip(milkTag()+" "+n)))
 		}
 	}
 }

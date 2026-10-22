@@ -208,21 +208,32 @@ func TestACPServer_AfterResponseAdvertisesCommands(t *testing.T) {
 	server.AfterResponse("session/new", result)
 
 	sent := conn.sent()
-	if len(sent) != 1 {
-		t.Fatalf("sent %d notifications, want 1", len(sent))
+	// Post-response carries the commands update plus any session-start
+	// advisory (e.g. the unknown-context-window notice from
+	// announceWindowBudget) — count the commands update itself, not the
+	// total, so the advisory doesn't pin this test to one config.
+	var cmds int
+	for _, n := range sent {
+		wrapped, ok := n.Params.(acp.UpdateSessionNotification)
+		if !ok {
+			continue
+		}
+		upd, ok := wrapped.Update.(acp.AvailableCommandsUpdate)
+		if !ok {
+			continue
+		}
+		if len(upd.AvailableCommands) == 0 {
+			t.Fatalf("update = %+v, want non-empty AvailableCommandsUpdate", wrapped.Update)
+		}
+		cmds++
 	}
-	wrapped, ok := sent[0].Params.(acp.UpdateSessionNotification)
-	if !ok {
-		t.Fatalf("params = %T, want UpdateSessionNotification", sent[0].Params)
-	}
-	upd, ok := wrapped.Update.(acp.AvailableCommandsUpdate)
-	if !ok || len(upd.AvailableCommands) == 0 {
-		t.Fatalf("update = %+v, want non-empty AvailableCommandsUpdate", wrapped.Update)
+	if cmds != 1 {
+		t.Fatalf("sent %d AvailableCommandsUpdate notifications, want 1 (total sent: %d)", cmds, len(sent))
 	}
 
 	server.AfterResponse("session/prompt", result)
-	if n := len(conn.sent()); n != 1 {
-		t.Errorf("non-session/new method sent commands: %d notifications", n)
+	if n := len(conn.sent()); n != len(sent) {
+		t.Errorf("non-session/new method sent extra notifications: %d, want %d", n, len(sent))
 	}
 }
 
