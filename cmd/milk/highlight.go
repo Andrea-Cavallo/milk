@@ -469,12 +469,20 @@ func applyInlineMarkdown(text string) string {
 		}
 
 		// The line's outer context: what the previous lines left open, or —
-		// when nothing was — the styling the line opens with itself (e.g. a
-		// diff row). Inline-span resets are followed by a re-injection of it.
+		// when nothing was — a row-owning rendition the line opens itself: a
+		// dim note or coloured background (diff row) covering the line to its
+		// end. A finite leading span like the turn label ("mimo-pro-local:" in
+		// bold blue) is just the line's first span, NOT outer context: its own
+		// reset ends it, and re-injecting it after that reset repaints the
+		// response text that shares the label's row (the turn-prefix colour
+		// bleed). Rows still balance either way, which is why only a
+		// content-level check catches it.
 		ctx, ownContext := carried, false
 		if !ctx.Active() {
 			ctx = sgr.Leading(originalLine)
-			ownContext = ctx.Active()
+			var endState sgr.State
+			endState.Scan(originalLine)
+			ownContext = ctx.Active() && (ctx.Dim() || ctx.BG != "" || endState.Includes(ctx))
 		}
 
 		line := originalLine
@@ -485,7 +493,7 @@ func applyInlineMarkdown(text string) string {
 		if !ctx.Dim() {
 			styled = styleLine(line)
 		}
-		if ctx.Active() {
+		if ctx.Active() && (carried.Active() || ownContext) {
 			styled = injectANSIAfterResets(styled, ctx.String())
 			// A context the line opened itself must not bleed into the next
 			// line: close it. (A carried one stays open — it is the block.)

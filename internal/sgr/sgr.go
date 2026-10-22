@@ -54,6 +54,21 @@ type State struct {
 	FG, BG string
 }
 
+// Includes reports whether every rendition other sets is also set in s —
+// i.e. s still carries other's context (s may carry more).
+func (s State) Includes(other State) bool {
+	if other.attrs&^s.attrs != 0 {
+		return false
+	}
+	if other.FG != "" && other.FG != s.FG {
+		return false
+	}
+	if other.BG != "" && other.BG != s.BG {
+		return false
+	}
+	return true
+}
+
 // Active reports whether any rendition is set.
 func (s State) Active() bool { return s.attrs != 0 || s.FG != "" || s.BG != "" }
 
