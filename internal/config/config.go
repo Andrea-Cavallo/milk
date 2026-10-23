@@ -175,6 +175,9 @@ func DeepMerge(dst, src Config) Config {
 	}
 
 	// String overrides ("" = unset — never clobbers the base it merges into)
+	if src.Theme != "" {
+		dst.Theme = src.Theme
+	}
 	if src.ThinkFoldDefault != "" {
 		dst.ThinkFoldDefault = src.ThinkFoldDefault
 	}
@@ -1081,6 +1084,10 @@ type Config struct {
 	// ShowReasoning — that stays the data-plane relay toggle and never
 	// seeds TUI display.
 	ThinkFoldDefault string `json:"think_fold_default,omitempty"`
+
+	// Theme selects the TUI colour theme: ""/"off" (default, the original
+	// look) or "supermilk". Switch live with /theme.
+	Theme string `json:"theme,omitempty"`
 
 	// ShowTips controls whether the TUI's idle tip line below the input is
 	// shown (ADR-0061). Can be toggled live with /tips on|off.

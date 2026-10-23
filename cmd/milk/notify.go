@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/sgr"
@@ -187,17 +186,6 @@ func (m *model) armToastTick() tea.Cmd {
 	return tea.Tick(delay, func(time.Time) tea.Msg { return toastTickMsg{gen: gen} })
 }
 
-// toastBackgroundCode returns the raw SGR background sequence for the toast
-// band ("" when not a TTY), mirroring panelAltBackgroundCode.
-func toastBackgroundCode() string {
-	if !isTTY {
-		return ""
-	}
-	if lipgloss.HasDarkBackground() {
-		return "\033[48;2;26;38;58m" // #1A263A
-	}
-	return "\033[48;2;217;228;245m" // #D9E4F5
-}
 
 // toastContent builds the styled time + message + slash-command hint for one
 // toast, truncating the free-form message so the whole thing fits within

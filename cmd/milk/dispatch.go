@@ -230,7 +230,7 @@ func runPrimaryWithSession(
 	if len(prefixOut) > 0 && prefixOut[0] != nil {
 		pw = prefixOut[0]
 	}
-	fmt.Fprint(pw, bold(green(agentName+":"))+" ")
+	fmt.Fprint(pw, agentTag(agentName, "primary"))
 	aw := newActivityWriter(out)
 
 	var ctxMode escalation.ContextMode
@@ -438,7 +438,7 @@ func runEscalationWithSession(
 	if len(prefixOut) > 0 && prefixOut[0] != nil {
 		pw = prefixOut[0]
 	}
-	fmt.Fprint(pw, bold(blue(agentName+":"))+" ")
+	fmt.Fprint(pw, agentTag(agentName, "escalation"))
 	aw := newActivityWriter(out)
 
 	forceFresh := sess.ForceFreshEscalation

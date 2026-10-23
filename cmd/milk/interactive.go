@@ -45,6 +45,7 @@ const cmdAgent = "/agent"
 const cmdColorize = "/colorize"
 const cmdThink = "/think"
 const cmdTips = "/tips"
+const cmdTheme = "/theme"
 const cmdRestart = "/restart"
 const cmdInterrupt = "/interrupt"
 const cmdSetup = "/setup"
@@ -320,6 +321,7 @@ var busySafeCommands = map[string]bool{
 	"/help":          true,
 	cmdThink:         true,
 	cmdTips:          true,
+	cmdTheme:         true,
 	cmdColorize:      true,
 	cmdPanel:         true,
 	cmdHistory:       true,

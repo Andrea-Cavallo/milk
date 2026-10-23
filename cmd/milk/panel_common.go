@@ -4,7 +4,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/agent/local"
@@ -68,6 +67,9 @@ func panelShortcut(region panelRegion) string {
 // /panel or memorizing it. Title is truncated, not the hint, if both
 // together would overflow inner.
 func panelTitleLine(title string, region panelRegion, inner int) string {
+	if th.modern {
+		return panelTabStrip(region, inner)
+	}
 	hint := panelShortcut(region)
 	if hint == "" {
 		return stylePanelTitle.Render(truncate(title, inner))
@@ -291,20 +293,6 @@ func (m *model) panelAltBackground(region panelRegion) bool {
 	return false
 }
 
-// panelAltBackgroundCode returns the raw SGR "set background" escape for the
-// alternating panel tint, or "" when not a TTY. Deliberately a small, fixed
-// step off pure black/white rather than derived from the terminal's actual
-// background (which lipgloss/termenv can't read back) — HasDarkBackground
-// only tells us which direction to step.
-func panelAltBackgroundCode() string {
-	if !isTTY {
-		return ""
-	}
-	if lipgloss.HasDarkBackground() {
-		return "\033[48;2;24;24;28m"
-	}
-	return "\033[48;2;236;236;239m"
-}
 
 // panelOffsetPtr returns a pointer to the model's persisted scroll offset for
 // the given side-panel region, or nil for regionNone/an unknown region.
@@ -402,9 +390,9 @@ func (m *model) renderSidePanelScrollbar(region panelRegion, h int) string {
 	thumbTop, thumbBot := scrollThumb(h, total, *m.panelOffsetPtr(region))
 	for i := range h {
 		if i >= thumbTop && i <= thumbBot {
-			rows = append(rows, sgr.WithBackground(dim("▌"), bg))
+			rows = append(rows, sgr.WithBackground(scrollThumbGlyph(), bg))
 		} else {
-			rows = append(rows, sgr.WithBackground(dim("│"), bg))
+			rows = append(rows, sgr.WithBackground(scrollTrackGlyph(), bg))
 		}
 	}
 	return strings.Join(rows, "\n")

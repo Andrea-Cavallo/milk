@@ -83,6 +83,9 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	if cmd == cmdInterrupt {
 		return m.handleInterruptCmd()
 	}
+	if cmd == cmdTheme {
+		return m.handleThemeCmd(strings.TrimSpace(rest))
+	}
 	if cmd == cmdTips {
 		return m.handleTipsCmd(strings.TrimSpace(rest))
 	}

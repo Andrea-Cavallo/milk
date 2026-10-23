@@ -1365,7 +1365,7 @@ func (m model) handleBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.tabHintsBase = nil
 				m.syncLayout()
 				label := promptLabel(m.st)
-				m.appendTranscript(label + colorizeTokens(input) + "\n")
+				m.appendTranscript(userEcho(label, colorizeTokens(input)))
 				return m.handleSlashInput(cmd, rest)
 			}
 			m.busyHint = cmd + " unavailable while agent is responding"
@@ -2021,7 +2021,7 @@ func (m *model) welcomeScreen() string {
 	escalationAvail := m.agents.escalationAvail
 
 	lines := []string{
-		pulseColors[8] + "◈" + ansiReset + " " + "\033[1;38;2;255;208;96mmilk\033[0m",
+		pulseColors[8] + "◈" + ansiReset + " " + wordmark(),
 		dim("switch models, not context."),
 		"",
 	}
@@ -3776,7 +3776,7 @@ func (m model) submitInput(input, label string) (tea.Model, tea.Cmd) {
 		m.loopWarning = ""
 	}
 
-	m.appendTranscript(label + colorizeTokens(input) + "\n")
+	m.appendTranscript(userEcho(label, colorizeTokens(input)))
 
 	// Append to both histories (deduped)
 	m.sessionHistory = appendDeduped(m.sessionHistory, input, maxPersistedHistory)
@@ -4817,6 +4817,8 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 		}
 	}
 
+	setTheme(st.cfg.Theme)
+	defer applyThemeTerminal()()
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 	)

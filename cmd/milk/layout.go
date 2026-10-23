@@ -364,9 +364,9 @@ func (m *model) renderSeparator(h int) string {
 	}
 	for i := range h {
 		if scrollable && i >= thumbTop && i <= thumbBot {
-			rows = append(rows, dim("▌"))
+			rows = append(rows, scrollThumbGlyph())
 		} else {
-			rows = append(rows, dim("│"))
+			rows = append(rows, scrollTrackGlyph())
 		}
 	}
 	return strings.Join(rows, "\n")
@@ -376,6 +376,15 @@ func (m model) View() string {
 	if !m.ready {
 		return ""
 	}
+	if th.modern {
+		if bg := tkBase.sgrBg(); bg != "" {
+			return tintBlock(m.viewBody(), m.width-1, bg) // last column left to the terminal default (same colour via OSC 11): a full-width row can double-advance on ConPTY
+		}
+	}
+	return m.viewBody()
+}
+
+func (m model) viewBody() string {
 	// PTY pane: replace the transcript viewport with the VT terminal screen.
 	if m.ptyPane != nil {
 		vpH := m.viewportHeight()

@@ -61,6 +61,10 @@ func (m *model) headerBar() string {
 	rightFulPlain := repoURL + " " + version + "  " + sessLabel + "  /help"
 	rightShort := vStyled + dim("  "+sessLabel+"  /help")
 	rightShortPlain := version + "  " + sessLabel + "  /help"
+	if th.modern {
+		rightFull = vStyled + dim("  "+sessLabel+"  ") + colorize("/help", tkAccent.sgrFg())
+		rightFulPlain = version + "  " + sessLabel + "  /help"
+	}
 
 	logoPlain := ansi.Strip(logo)
 	available := m.width - 2
@@ -90,6 +94,15 @@ func (m *model) statusBar() string {
 		rolePart = dim(rolePart)
 		agentPart = dim("agent:") + m.statusAgent()
 	}
+	if th.modern {
+		roleName := strings.ToLower(sessionRole(m.st.sess.State))
+		rolePart = "● " + roleName
+		agentPart = "· " + m.statusAgent()
+		if !isPerm {
+			rolePart = colorize("●", tkAccent.sgrFg()) + dim(" "+roleName)
+			agentPart = dim("· ") + m.statusAgent()
+		}
+	}
 	left := fmt.Sprintf(" %s  %s%s", rolePart, agentPart, tokenStr)
 	right := ""
 	if m.updateInstalling {
@@ -104,6 +117,9 @@ func (m *model) statusBar() string {
 	if isPerm {
 		right += m.statusCwd() + " "
 	} else {
+		if th.modern && m.width >= 110 {
+			right += dim("Alt+↑/↓ history  ·  Ctrl+C exit  ·  ")
+		}
 		right += dim(m.statusCwd() + " ")
 	}
 	if m.credRefreshing {

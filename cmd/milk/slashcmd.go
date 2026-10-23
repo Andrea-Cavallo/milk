@@ -194,6 +194,9 @@ var commandRegistry = []cmdSpec{
   /agent tool disable <tool> [for <agent>|global]  disable a tool-agent entry
   /agent tool add <tool> description=<desc> [for <agent>|global]  add a new tool-agent entry
   /agent tool remove <tool> [for <agent>|global]  remove a tool-agent entry`},
+	{name: cmdTheme, hosts: hostTUI, desc: "switch the TUI skin (off = original look)", hint: "[off|supermilk]", help: `  /theme                 show the active theme
+  /theme off             original look (default)
+  /theme supermilk       milk-white skin, soft ink, hairlines`},
 	{name: cmdColorize, hosts: hostTUI, desc: "show or set the markdown colorization mode", hint: "[off|fenced|balanced|full]", help: `  /colorize              show current colorization mode
   /colorize off          no colorization
   /colorize fenced       highlight fenced code blocks only
@@ -334,7 +337,7 @@ var helpBlocks = []helpBlock{
 	{header: "── Permissions ──────────────────────────────────────────────────────────", names: []string{cmdPermissions}},
 	{header: "── Memory ───────────────────────────────────────────────────────────────", names: []string{cmdLearn, cmdMemory, cmdForget, cmdPanel, cmdTasks, cmdTask}},
 	{header: "── Background agents ───────────────────────────────────────────────────", names: []string{cmdBg}},
-	{header: "── Display ──────────────────────────────────────────────────────────────", names: []string{cmdColorize, cmdThink, cmdTips, cmdHistory, cmdNotifications}},
+	{header: "── Display ──────────────────────────────────────────────────────────────", names: []string{cmdColorize, cmdTheme, cmdThink, cmdTips, cmdHistory, cmdNotifications}},
 	{header: "── Observability ────────────────────────────────────────────────────────", names: []string{cmdUsage, cmdMetrics, cmdOtel}},
 	{header: "── MCP Servers ───────────────────────────────────────────────────────────", names: []string{cmdMCP}},
 	{header: "── Workflow ───────────────────────────────────────────────────────────────", names: []string{cmdWorkflow}},
