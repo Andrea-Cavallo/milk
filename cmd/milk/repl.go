@@ -762,6 +762,9 @@ type model struct {
 	// instead of cutting the browse short (the toastGen pattern).
 	tipsGen int
 
+	// palette is the open command palette (palette.go), nil when closed.
+	palette *paletteState
+
 	// blurred is true while the terminal window lacks focus (tea.BlurMsg).
 	// Zero value = focused, so a bare model behaves as before. Background
 	// polling (tips rotation, project/git refresh) pauses while it is set.
@@ -2211,6 +2214,12 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.ptyPane != nil {
 			return m.handlePTYKey(msg)
+		}
+		if m.palette != nil {
+			return m.handlePaletteKey(msg)
+		}
+		if msg.String() == paletteOpenKey && m.paletteAvailable() {
+			return m.openPalette()
 		}
 		// F1-F6: global panel show/hide shortcuts, available in any other
 		// mode (busy, permission prompt, wizards, ...) — none of them

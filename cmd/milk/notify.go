@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/sgr"
 )
@@ -318,14 +317,8 @@ func (m *model) overlayToasts(block string) string {
 		if row >= len(lines) {
 			return
 		}
-		line := ansi.Truncate(lines[row], width, "")
-		tail := ansi.TruncateLeft(lines[row], width, "")
-
-		untouched := ansi.Truncate(line, toastSideMargin+sharedCol, "")
-		rightMargin := ansi.TruncateLeft(line, width-toastSideMargin, "")
-
 		toast := padToastRow(content, plainW, avail, toastContentPadding)
-		lines[row] = untouched + toast + rightMargin + tail
+		lines[row] = overlayRowAt(lines[row], toastSideMargin+sharedCol, toast)
 	}
 
 	for i, ev := range m.toastVisible {
