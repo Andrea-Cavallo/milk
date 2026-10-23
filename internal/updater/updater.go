@@ -17,9 +17,22 @@ import (
 	"strings"
 )
 
-// ErrWindowsManual is returned by Apply on Windows because the running binary
-// cannot be replaced in-place; the caller should print the temp file path.
+// ErrWindowsManual is returned by Apply as a last resort on Windows when even
+// staging failed; the caller should print the temp file path. The normal
+// Windows path replaces the running binary by renaming it aside (see
+// Apply/StartupUpdate) and does not produce this error.
 var ErrWindowsManual = errors.New("cannot replace running binary on Windows; download saved to temp path")
+
+// ErrWindowsStaged is returned by Apply when the in-place replacement was
+// denied (antivirus, exclusive lock) but the verified download was staged as
+// dest.new for StartupUpdate to swap in at the next start. It is a deferred
+// success — callers must not treat it as a failure, but must tell the user the
+// new version becomes active on next start. The staged path is appended.
+var ErrWindowsStaged = errors.New("update staged; it will be applied on next start")
+
+// renameFile is os.Rename, a seam so tests can force the rename-denied path
+// Windows guards against (locked image, antivirus) without needing Windows.
+var renameFile = os.Rename
 
 // ReleasesURL is the GitHub releases API endpoint CheckLatest fetches. A
 // variable so tests can point it at a stub release feed — the only seam the
@@ -142,9 +155,15 @@ func CheckLatest(ctx context.Context, currentVersion string, includePrerelease b
 // progress is called with (bytesDownloaded, totalBytes); the first call is
 // always (0, contentLength). If contentLength is unknown, totalBytes is -1.
 //
-// On Windows, Apply writes the download to a temp file and returns
-// ErrWindowsManual with the temp path embedded in the error — callers should
-// print it to the user.
+// On Windows, Apply renames the running image aside (Windows locks an
+// executing binary against writes but allows renaming it — the loader opens
+// the image with FILE_SHARE_DELETE), moves the verified download into place,
+// and lets the running process keep executing the renamed old image; the
+// leftover dest.old is removed by StartupUpdate at the next start. If any
+// rename is denied, the download is staged as dest.new instead and
+// ErrWindowsStaged is returned — StartupUpdate applies it lazily on the next
+// start. Only when staging also fails does Apply return ErrWindowsManual with
+// the temp path embedded — callers should print it to the user.
 //
 // On all other platforms, the temp file is atomically renamed over dest.
 func Apply(ctx context.Context, r *Release, dest string, progress func(done, total int64)) error {
@@ -182,8 +201,7 @@ func Apply(ctx context.Context, r *Release, dest string, progress func(done, tot
 	}
 
 	if runtime.GOOS == "windows" {
-		// Cannot replace the running binary on Windows.
-		return fmt.Errorf("%w: %s", ErrWindowsManual, tmpName)
+		return replaceRunningWindows(tmpName, dest)
 	}
 
 	// chmod +x before replacing.
@@ -197,6 +215,94 @@ func Apply(ctx context.Context, r *Release, dest string, progress func(done, tot
 		return fmt.Errorf("updater: rename into place: %w", err)
 	}
 
+	return nil
+}
+
+// replaceRunningWindows installs the verified download tmpName over dest
+// while dest is very likely the running executable.
+//
+// Windows denies writes to an executing image but allows renaming it (the
+// loader opens the image with FILE_SHARE_DELETE), so the standard self-update
+// dance works: rename the current image aside to dest+".old", move the new
+// binary into place, and let this process keep executing the renamed image
+// until it exits — dest holds the new version for the next start. The .old
+// file cannot be deleted while we still run it; StartupUpdate removes it at
+// the next start (or the start after, if another milk instance was running).
+//
+// When any rename is denied (antivirus, exclusive lock, Program Files ACLs),
+// the download is staged as dest+".new" for StartupUpdate to swap in lazily
+// on the next start (ErrWindowsStaged). Only if even staging fails does it
+// fall back to ErrWindowsManual so the caller keeps the hand-replace path.
+func replaceRunningWindows(tmpName, dest string) error {
+	// Step 1: rename the running image aside. os.Rename replaces an
+	// existing dest+".old" (leftover from a crashed cycle) when it isn't
+	// itself locked by a still-running instance.
+	if err := renameFile(dest, dest+".old"); err != nil {
+		return stageWindows(tmpName, dest, fmt.Errorf("rename running binary aside: %w", err))
+	}
+	// Step 2: move the new binary into place.
+	if err := renameFile(tmpName, dest); err != nil {
+		// Put the old image back so the install leaves a working binary.
+		_ = renameFile(dest+".old", dest)
+		return stageWindows(tmpName, dest, fmt.Errorf("move new binary into place: %w", err))
+	}
+	// Step 3: best-effort cleanup — fails while this process still executes
+	// the (renamed) old image; StartupUpdate retries at the next start.
+	_ = os.Remove(dest + ".old")
+	return nil
+}
+
+// stageWindows parks tmpName at dest+".new" as the deferred-install payload.
+// cause explains why the in-place dance was denied and is kept in the error
+// chain for diagnostics.
+func stageWindows(tmpName, dest string, cause error) error {
+	if err := renameFile(tmpName, dest+".new"); err != nil {
+		return fmt.Errorf("%w (%v; staging also failed: %v): %s", ErrWindowsManual, cause, err, tmpName)
+	}
+	return fmt.Errorf("%w (%v): %s", ErrWindowsStaged, cause, dest+".new")
+}
+
+// StartupUpdate applies deferred self-update bookkeeping at process start:
+// it swaps a staged dest.new into place and clears a leftover dest.old from a
+// previous cycle. Best-effort by contract — callers ignore the error and it
+// must never block startup.
+func StartupUpdate() error {
+	dest, err := CurrentBinaryPath()
+	if err != nil {
+		return err
+	}
+	return startupUpdate(dest)
+}
+
+// startupUpdate is StartupUpdate's body over an explicit dest (the test seam
+// — tests must not resolve or touch the real running test binary).
+//
+// Staged swap: dest.new exists because replaceRunningWindows could not rename
+// the running image. Renaming here is allowed for the same reason — we are
+// executing dest — so dest moves to dest.old and dest.new becomes dest: this
+// process keeps running the old image (now dest.old) and the NEXT start runs
+// the new binary. The freshly renamed dest.old stays locked while we run, so
+// cleanup is retried every start.
+func startupUpdate(dest string) error {
+	if _, err := os.Stat(dest + ".new"); err == nil {
+		// Guard the hole case: a previous swap's restore may have failed,
+		// leaving dest missing — then the staged file just moves into place.
+		if _, statErr := os.Stat(dest); statErr == nil {
+			if err := renameFile(dest, dest+".old"); err != nil {
+				return fmt.Errorf("updater: move running binary aside: %w", err)
+			}
+		}
+		if err := renameFile(dest+".new", dest); err != nil {
+			// Put the old image back and leave the staged file for the
+			// next start to retry.
+			_ = renameFile(dest+".old", dest)
+			return fmt.Errorf("updater: apply staged update: %w", err)
+		}
+	}
+	// Remove the previous cycle's old image (unlocked now that the process
+	// which renamed it is gone; still-running siblings keep it locked and
+	// this retries every start). No-op on platforms that never create it.
+	_ = os.Remove(dest + ".old")
 	return nil
 }
 

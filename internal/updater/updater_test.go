@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -192,5 +193,221 @@ func TestVersionCmpAndNewerThan(t *testing.T) {
 		if got := newerThan(tc.a, tc.b); got != tc.want {
 			t.Errorf("newerThan(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+// --- Windows replace/stage/startup dance ---
+//
+// The dance is plain rename bookkeeping that runs on any OS; what is
+// Windows-specific is only *why* it exists (an executing image is locked
+// against writes but can be renamed). The renameFile seam forces the
+// denied-rename cases without needing Windows.
+
+// stubRename redirects os.Rename through fn; restored via t.Cleanup.
+func stubRename(t *testing.T, fn func(from, to string) error) {
+	t.Helper()
+	old := renameFile
+	renameFile = fn
+	t.Cleanup(func() { renameFile = old })
+}
+
+// denyTo makes renames whose destination ends with suffix fail.
+func denyTo(suffix string) func(from, to string) error {
+	return func(from, to string) error {
+		if strings.HasSuffix(to, suffix) {
+			return fmt.Errorf("access is denied (simulated): %s", to)
+		}
+		return os.Rename(from, to)
+	}
+}
+
+func writeUpDownFile(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte(content), 0755); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return p
+}
+
+func readFileContent(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read %s: %v", p, err)
+	}
+	return string(b)
+}
+
+func TestReplaceRunningWindows_InPlaceDance(t *testing.T) {
+	dir := t.TempDir()
+	dest := writeUpDownFile(t, dir, "milk.exe", "old-binary")
+	tmp := writeUpDownFile(t, dir, ".milk-update-x", "new-binary")
+
+	if err := replaceRunningWindows(tmp, dest); err != nil {
+		t.Fatalf("replaceRunningWindows: %v", err)
+	}
+	if got := readFileContent(t, dest); got != "new-binary" {
+		t.Errorf("dest = %q, want new-binary", got)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("tmp still exists after rename into place")
+	}
+	// The best-effort .old cleanup succeeds while nothing executes it (on
+	// Windows the running process keeps it; the test FS doesn't).
+	if _, err := os.Stat(dest + ".old"); !os.IsNotExist(err) {
+		t.Errorf("dest.old left behind although removable")
+	}
+}
+
+func TestReplaceRunningWindows_StageWhenRenameAsideDenied(t *testing.T) {
+	dir := t.TempDir()
+	dest := writeUpDownFile(t, dir, "milk.exe", "old-binary")
+	tmp := writeUpDownFile(t, dir, ".milk-update-x", "new-binary")
+	stubRename(t, denyTo(".old"))
+
+	err := replaceRunningWindows(tmp, dest)
+	if !errors.Is(err, ErrWindowsStaged) {
+		t.Fatalf("err = %v, want ErrWindowsStaged", err)
+	}
+	if got := readFileContent(t, dest); got != "old-binary" {
+		t.Errorf("dest = %q, want the old binary untouched", got)
+	}
+	if got := readFileContent(t, dest+".new"); got != "new-binary" {
+		t.Errorf("staged = %q, want new-binary", got)
+	}
+	if !strings.Contains(err.Error(), dest+".new") {
+		t.Errorf("error does not carry the staged path: %v", err)
+	}
+}
+
+func TestReplaceRunningWindows_StageWhenMoveIntoPlaceDenied(t *testing.T) {
+	dir := t.TempDir()
+	dest := writeUpDownFile(t, dir, "milk.exe", "old-binary")
+	tmp := writeUpDownFile(t, dir, ".milk-update-x", "new-binary")
+	// Only the tmp→dest move is denied; the aside-rename and its restore work.
+	stubRename(t, func(from, to string) error {
+		if from == tmp && to == dest {
+			return fmt.Errorf("access is denied (simulated): %s", to)
+		}
+		return os.Rename(from, to)
+	})
+
+	err := replaceRunningWindows(tmp, dest)
+	if !errors.Is(err, ErrWindowsStaged) {
+		t.Fatalf("err = %v, want ErrWindowsStaged", err)
+	}
+	// The old image must be restored — the install leaves a working binary.
+	if got := readFileContent(t, dest); got != "old-binary" {
+		t.Errorf("dest = %q, want the restored old binary", got)
+	}
+	if got := readFileContent(t, dest+".new"); got != "new-binary" {
+		t.Errorf("staged = %q, want new-binary", got)
+	}
+	if _, err := os.Stat(dest + ".old"); !os.IsNotExist(err) {
+		t.Errorf("dest.old left behind after restore")
+	}
+}
+
+func TestReplaceRunningWindows_ManualWhenStagingDenied(t *testing.T) {
+	dir := t.TempDir()
+	dest := writeUpDownFile(t, dir, "milk.exe", "old-binary")
+	tmp := writeUpDownFile(t, dir, ".milk-update-x", "new-binary")
+	// Both the aside-rename and staging are denied — the genuinely manual path.
+	stubRename(t, func(from, to string) error {
+		if strings.HasSuffix(to, ".old") || strings.HasSuffix(to, ".new") {
+			return fmt.Errorf("access is denied (simulated): %s", to)
+		}
+		return os.Rename(from, to)
+	})
+
+	err := replaceRunningWindows(tmp, dest)
+	if !errors.Is(err, ErrWindowsManual) {
+		t.Fatalf("err = %v, want ErrWindowsManual", err)
+	}
+	if !strings.Contains(err.Error(), tmp) {
+		t.Errorf("error does not carry the temp path for manual replace: %v", err)
+	}
+	if _, err := os.Stat(tmp); err != nil {
+		t.Errorf("downloaded binary must survive for the manual path: %v", err)
+	}
+	if got := readFileContent(t, dest); got != "old-binary" {
+		t.Errorf("dest = %q, want the old binary untouched", got)
+	}
+}
+
+func TestStartupUpdate_SwapsStagedInstall(t *testing.T) {
+	dir := t.TempDir()
+	dest := writeUpDownFile(t, dir, "milk.exe", "old-binary")
+	writeUpDownFile(t, dir, "milk.exe.new", "new-binary")
+
+	if err := startupUpdate(dest); err != nil {
+		t.Fatalf("startupUpdate: %v", err)
+	}
+	if got := readFileContent(t, dest); got != "new-binary" {
+		t.Errorf("dest = %q, want the staged new binary swapped in", got)
+	}
+	if _, err := os.Stat(dest + ".new"); !os.IsNotExist(err) {
+		t.Errorf("staged file left behind")
+	}
+	if _, err := os.Stat(dest + ".old"); !os.IsNotExist(err) {
+		t.Errorf("old image left behind although removable")
+	}
+}
+
+func TestStartupUpdate_RecoveryHoleMissingDest(t *testing.T) {
+	dir := t.TempDir()
+	// A previous swap's restore failed: dest is gone, only the staged file
+	// remains — it must move into place instead of wedging.
+	writeUpDownFile(t, dir, "milk.exe.new", "new-binary")
+
+	if err := startupUpdate(filepath.Join(dir, "milk.exe")); err != nil {
+		t.Fatalf("startupUpdate: %v", err)
+	}
+	if got := readFileContent(t, filepath.Join(dir, "milk.exe")); got != "new-binary" {
+		t.Errorf("dest = %q, want the staged new binary", got)
+	}
+}
+
+func TestStartupUpdate_CleansLeftoverOldImage(t *testing.T) {
+	dir := t.TempDir()
+	dest := writeUpDownFile(t, dir, "milk.exe", "current-binary")
+	writeUpDownFile(t, dir, "milk.exe.old", "previous-cycle")
+
+	if err := startupUpdate(dest); err != nil {
+		t.Fatalf("startupUpdate: %v", err)
+	}
+	if _, err := os.Stat(dest + ".old"); !os.IsNotExist(err) {
+		t.Errorf("dest.old from a previous cycle not removed")
+	}
+	if got := readFileContent(t, dest); got != "current-binary" {
+		t.Errorf("dest = %q, want the current binary untouched", got)
+	}
+}
+
+func TestStartupUpdate_DeniedSwapKeepsStagedForNextStart(t *testing.T) {
+	dir := t.TempDir()
+	dest := writeUpDownFile(t, dir, "milk.exe", "old-binary")
+	writeUpDownFile(t, dir, "milk.exe.new", "new-binary")
+	stubRename(t, func(from, to string) error {
+		// Only the staged file's move into place is denied; the aside-rename
+		// and its restore must keep working.
+		if strings.HasSuffix(from, ".new") && to == dest {
+			return fmt.Errorf("access is denied (simulated): %s", to)
+		}
+		return os.Rename(from, to)
+	})
+	err := startupUpdate(dest)
+	if err == nil {
+		t.Fatal("startupUpdate = nil, want the denied-swap error")
+	}
+	if got := readFileContent(t, dest); got != "old-binary" {
+		t.Errorf("dest = %q, want the old binary restored", got)
+	}
+	if _, err := os.Stat(dest + ".new"); err != nil {
+		t.Errorf("staged file must survive for the next start: %v", err)
+	}
+	if _, err := os.Stat(dest + ".old"); !os.IsNotExist(err) {
+		t.Errorf("dest.old left behind after the restore")
 	}
 }

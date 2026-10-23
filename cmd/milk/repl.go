@@ -3054,9 +3054,16 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateInstalling = false
 		m.updateProgress = 0
 		m.updateTotal = 0
-		if msg.err != nil {
+		switch {
+		case errors.Is(msg.err, updater.ErrWindowsStaged):
+			// Deferred success (Windows rename denied): the download is
+			// staged and StartupUpdate swaps it in at the next start —
+			// clear the pending notice like a completed install.
+			m.pendingUpdate = nil
+			m.appendTranscript(milkTag() + " update staged — it will be applied on next start (restart milk to move forward)\n")
+		case msg.err != nil:
 			m.appendTranscript(fmt.Sprintf("%s update failed: %v\n", milkTag(), msg.err))
-		} else {
+		default:
 			m.pendingUpdate = nil
 			m.appendTranscript(milkTag() + " update applied — restart milk to use the new version\n")
 		}

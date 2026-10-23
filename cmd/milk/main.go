@@ -74,6 +74,11 @@ var (
 const errGettingCWD = "getting cwd: %w"
 
 func main() {
+	// Deferred Windows self-update: swap a staged install into place and
+	// clear the old image a previous cycle left behind. Best-effort — it
+	// never blocks startup and is a pair of stats on platforms that never
+	// stage anything.
+	_ = updater.StartupUpdate()
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -2646,7 +2651,11 @@ func init() {
 			})
 			fmt.Println()
 			if err != nil {
-				if errors.Is(err, updater.ErrWindowsManual) {
+				switch {
+				case errors.Is(err, updater.ErrWindowsStaged):
+					fmt.Printf("staged %s — it will be applied on next start (restart milk)\n", rel.Tag)
+					return nil
+				case errors.Is(err, updater.ErrWindowsManual):
 					fmt.Printf("Windows: replace %s manually with the downloaded binary\n", dest)
 					return nil
 				}

@@ -347,3 +347,38 @@ func TestACPStartupCheck_SkippedReleaseNotAnnounced(t *testing.T) {
 		t.Errorf("skipped release announced: %q", got)
 	}
 }
+
+func TestACPUpdate_InstallWindowsStagedPath(t *testing.T) {
+	server, conn := acpTestServer(t, "ok")
+	stubReleaseFeed(t, "v9.9.9", nil)
+	id := acpNewSession(t, server)
+	acpPromptText(t, server, id, "/update check")
+
+	// Windows rename denied: Apply staged the download for the next start.
+	stubUpdateApply(t, fmt.Errorf("%w: %s", updater.ErrWindowsStaged, "/tmp/milk.exe.new"))
+	acpPromptText(t, server, id, "/update install")
+
+	staged := chunksContaining(conn, "staged")
+	if len(staged) == 0 {
+		t.Fatalf("chunks = %q, want the staged-deferred reply", acpChunks(conn))
+	}
+	// Deferred success, not a failure: carries the restart instruction and
+	// the auto-applied-on-next-start promise, never the manual path.
+	if !strings.Contains(staged[0], "restart the milk agent") {
+		t.Errorf("reply = %q, want the restart instruction", staged[0])
+	}
+	if !strings.Contains(staged[0], "on next start") {
+		t.Errorf("reply = %q, want the deferred-application note", staged[0])
+	}
+	if got := chunksContaining(conn, "manually"); len(got) != 0 {
+		t.Errorf("staged outcome fell through to the manual path: %q", got)
+	}
+	if got := chunksContaining(conn, "update failed"); len(got) != 0 {
+		t.Errorf("staged outcome reported a failure: %q", got)
+	}
+	// The pending install must be claimed so /update status shows it.
+	acpPromptText(t, server, id, "/update status")
+	if got := chunksContaining(conn, "installed (running"); len(got) == 0 {
+		t.Errorf("/update status after a staged install = %q, want the pending-install line", acpChunks(conn))
+	}
+}
