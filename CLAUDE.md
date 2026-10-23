@@ -188,7 +188,7 @@ Default behavior: resume most recent session for cwd. `--new` creates a fresh se
 
 ## Tech stack
 
-- Go 1.26+ (per `go.mod`), Cobra CLI
+- Go 1.26.2+ (per `go.mod`), Cobra CLI
 - charmbracelet/bubbletea, bubbles/viewport, bubbles/textarea, lipgloss
 - Local agent: OpenAI-compatible inference API **or** AWS Bedrock Converse API (native, not OpenAI-compat)
 - `claude` CLI binary (Claude Code) — configured as `provider: "claude-cli"` in `agents`

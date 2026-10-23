@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/scoutme/milk/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/scoutme/milk"></a>
   <a href="LICENSE.md"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
-  <img alt="Go 1.26.2" src="https://img.shields.io/badge/Go-1.26.2-00ADD8?logo=go&logoColor=white">
+  <img alt="Go module (version per go.mod)" src="https://img.shields.io/badge/Go-module-00ADD8?logo=go&logoColor=white">
   <img alt="Platforms: Linux, macOS, Windows, WSL2" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20WSL2-lightgrey">
   <a href="https://github.com/scoutme/milk"><img alt="Stars" src="https://img.shields.io/github/stars/scoutme/milk?style=flat"></a>
   <a href="https://github.com/scoutme/milk/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/scoutme/milk/total"></a>
