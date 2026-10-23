@@ -309,7 +309,12 @@ func runPrimaryWithSession(
 	sess.AddTokensFull(model, "primary", res.InputTokens, res.OutputTokens, res.CacheRead, res.CacheCreate)
 	obs.RecordTiming(ctx, model, "primary", res.TTFT, res.Decode)
 	sess.AddTiming(model, "primary", res.TTFT, res.Decode)
-	obs.Debug("tokens ("+agentName+")", "input", res.InputTokens, "output", res.OutputTokens, "cost_usd", res.CostUSD)
+	obs.LogResponse(obs.ResponseLog{
+		Agent: agentName, Model: model, Role: "primary",
+		Input: res.InputTokens, Output: res.OutputTokens,
+		CacheRead: res.CacheRead, CacheWr: res.CacheCreate,
+		TTFT: res.TTFT, Decode: res.Decode, CostUSD: res.CostUSD,
+	})
 
 	// For local HTTP runners, text is only set when a real response came back.
 	// Only add the assistant turn when there is content: skip both self-escalation
@@ -558,8 +563,12 @@ func runEscalationWithSession(
 	sess.AddTokensFull(model, "escalation", res.InputTokens, res.OutputTokens, res.CacheRead, res.CacheCreate)
 	obs.RecordTiming(ctx, model, "escalation", res.TTFT, res.Decode)
 	sess.AddTiming(model, "escalation", res.TTFT, res.Decode)
-	obs.Debug("tokens ("+agentName+")", "input", res.InputTokens, "output", res.OutputTokens,
-		"cache_read", res.CacheRead, "cache_write", res.CacheCreate, "cost_usd", res.CostUSD)
+	obs.LogResponse(obs.ResponseLog{
+		Agent: agentName, Model: model, Role: "escalation",
+		Input: res.InputTokens, Output: res.OutputTokens,
+		CacheRead: res.CacheRead, CacheWr: res.CacheCreate,
+		TTFT: res.TTFT, Decode: res.Decode, CostUSD: res.CostUSD,
+	})
 
 	// Record subagent tokens when present.
 	if res.HasSubagentTokens {

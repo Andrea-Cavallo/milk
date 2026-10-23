@@ -104,6 +104,12 @@ Where it shows: the TUI status bar (live `tok/s` estimate while streaming; `(las
 
 `otel.log_context: true` logs the full content of every request payload at DEBUG level to `~/.milk/otel/logs.jsonl` (requires `log_level: "DEBUG"`) — covers the claude-cli static/dynamic context files and prompt, the full local/Bedrock inference request body, and subprocess agents' context/prompt temp files.
 
+### Colored structured log (`log_format: "pretty"`)
+
+`milk.log` is written as `text` by default. `"log_format": "pretty"` writes the same records through Charm's `log` handler: colored level, timestamp, message and `key=value` attributes. Colors are forced into the file, so read it with `tail -f` or `less -R`. `milk otel debug enable` switches a plain format to `pretty` and `milk otel debug disable` restores the previous one (an explicit `pretty`, `json` or `off` is respected; the change applies from the next start).
+
+Every answer from an agent logs one `agent response` line at INFO, so it shows without debug: `agent`, `model`, `role`, `input`, `output`, `cache_read`/`cache_write`, `ttft_ms`, `tok_s` and `cost_usd`. Values the provider did not report are left out, never written as 0.
+
 ### Raw debug logs
 
 Separate from OTel, three flags capture raw protocol traffic verbatim:

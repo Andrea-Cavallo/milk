@@ -763,6 +763,10 @@ type model struct {
 	// instead of cutting the browse short (the toastGen pattern).
 	tipsGen int
 
+	// anim holds the spring animations (animations.go); a pointer, so the
+	// copies Bubble Tea passes around share one state. Mutated in Update only.
+	anim *animState
+
 	// palette is the open command palette (palette.go), nil when closed.
 	palette *paletteState
 
@@ -1853,9 +1857,9 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				*p--
 			}
 		} else if m.attached != nil && !m.hasPendingPrompt() {
-			m.attached.vp.ScrollUp(3)
+			dragCmd = m.smoothScroll(&m.attached.vp, -scrollWheelLines)
 		} else {
-			m.vp.ScrollUp(3)
+			dragCmd = m.smoothScroll(&m.vp, -scrollWheelLines)
 		}
 	case tea.MouseWheelDown:
 		if p := m.panelOffsetPtr(region); p != nil {
@@ -1863,9 +1867,9 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				*p++
 			}
 		} else if m.attached != nil && !m.hasPendingPrompt() {
-			m.attached.vp.ScrollDown(3)
+			dragCmd = m.smoothScroll(&m.attached.vp, scrollWheelLines)
 		} else {
-			m.vp.ScrollDown(3)
+			dragCmd = m.smoothScroll(&m.vp, scrollWheelLines)
 		}
 	case tea.MouseLeft:
 		if region != regionNone {
@@ -2182,10 +2186,20 @@ func (m model) Init() tea.Cmd {
 // return only the model, so the tick is armed centrally here rather than
 // threaded through every call site.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, isTick := msg.(animTickMsg); isTick {
+		cmd := m.stepAnimations()
+		return m, cmd
+	}
 	next, cmd := m.updateInner(msg)
 	nm, ok := next.(model)
 	if !ok {
 		return next, cmd
+	}
+	if _, resized := msg.(tea.WindowSizeMsg); !resized {
+		// A resize can show or hide a panel without anyone toggling it: no slide.
+		if c := nm.trackAnimations(&m); c != nil {
+			cmd = tea.Batch(cmd, c)
+		}
 	}
 	if c := nm.armToastTick(); c != nil {
 		return nm, tea.Batch(cmd, c)
@@ -4874,6 +4888,7 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	}
 
 	setTheme(st.cfg.Theme)
+	animationsEnabled = isTTY && st.cfg.AnimationsEnabled()
 	defer applyThemeTerminal()()
 	p := tea.NewProgram(m)
 	clipboardProgram = p

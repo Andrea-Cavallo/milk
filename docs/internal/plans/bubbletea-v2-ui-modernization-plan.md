@@ -73,3 +73,5 @@ Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its ow
 - Phase 6 done: the `ctx:` fragment gets a `bubbles/progress` meter from 130 columns (`contextMeter`, same 75/90 thresholds). `table` and a `harmonica` panel animation were dropped, see ADR-0075.
 - Phase 7 closed: `ultraviolet` has no selection primitive and selection is already content-anchored (ADR-0024), so the backlog item was stale and is removed from CLAUDE.md.
 - Left on purpose: mouse modes are still written as raw escapes (`enableMouseTracking`), `glamour` still pulls Lip Gloss v1 transitively.
+
+- Follow-up: `harmonica` (panel slide, wheel inertia) and `charm.land/log/v2` (`log_format: "pretty"`, `agent response` log line) were added after all, see ADR-0075.

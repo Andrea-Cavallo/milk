@@ -413,36 +413,12 @@ func (m model) viewBody() string {
 	// the background/workflow panel that triggered the attach stays visible,
 	// unlike the PTY-pane branch above, which is a full-screen takeover.
 	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, m.activeViewport().View(), sep)
-	if m.panelMemory {
-		panel := m.renderMemoryPanel(vpH)
-		pbar := m.renderPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, panel, pbar)
+	for _, region := range panelRenderOrder {
+		if m.panelOpen(region) {
+			mainArea = m.joinPanel(mainArea, region, vpH)
+		}
 	}
-	if m.panelTasks {
-		tpanel := m.renderTasksPanel(vpH)
-		tbar := m.renderTasksPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, tpanel, tbar)
-	}
-	if m.panelBackground {
-		bgpanel := m.renderBackgroundPanel(vpH)
-		bgbar := m.renderBackgroundPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, bgpanel, bgbar)
-	}
-	if m.workflowPanelVisible() {
-		wpanel := m.renderWorkflowPanel(vpH)
-		wbar := m.renderWorkflowPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, wpanel, wbar)
-	}
-	if m.projectPanelVisible() {
-		prpanel := m.renderProjectPanel(vpH)
-		prbar := m.renderProjectPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, prpanel, prbar)
-	}
-	if m.gitPanelVisible() {
-		gpanel := m.renderGitPanel(vpH)
-		gbar := m.renderGitPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, gpanel, gbar)
-	}
+	mainArea = m.overlayClosingPanels(mainArea)
 	// Notification toasts (issue #162) float over the top-right of the whole
 	// main area — pure render-time overlay, no layout rows consumed.
 	mainArea = m.overlayToasts(mainArea)
