@@ -75,3 +75,30 @@ Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its ow
 - Left on purpose: mouse modes are still written as raw escapes (`enableMouseTracking`), `glamour` still pulls Lip Gloss v1 transitively.
 
 - Follow-up: `harmonica` (panel slide, wheel inertia) and `charm.land/log/v2` (`log_format: "pretty"`, `agent response` log line) were added after all, see ADR-0076.
+
+## Skins and visual redesign
+
+The v2 stack made a live theme switch possible (`BackgroundColorMsg`), so the
+TUI now ships two named skins, selected with `/theme` and persisted as `theme`
+in `config.json`. Full rationale: ADR-0077.
+
+- **`off` (default).** The original look, redesigned to a neutral palette:
+  graphite chrome on dark terminals, warm cream chrome on light ones, no
+  diamond or pulse in the wordmark, and muted sage (primary) / steel
+  (escalation) agent tags. `agentTag` and `userEcho` render both the live
+  transcript and seeded session turns, so a resumed session looks like the one
+  that produced it.
+- **`supermilk` (opt-in).** Milk-white ground (`#f8f5ee`), warm ink, hairline
+  separators, one muted olive accent, slim scrollbars, quiet tool rows and
+  italic compact reasoning on a light surface. It carries its own tagline
+  (`Got models? Got milk.`) and, while active, sets the terminal's default
+  colours and 16-colour ANSI ramp via OSC; exit and `/theme off` restore them.
+
+Rules: a skin restyles chrome only (header, status bar, turn labels, panel
+tabs, scrollbars, staleness ramp, tool rows, reasoning surface) and never
+changes slash commands, config keys or session files. `rebuildStyles()` is the
+only builder of chrome styles, so `refreshThemeColors()` remains the single
+entry point for a skin or background change. The memory panel also remembers
+whether it was open (`~/.milk/memory-panel.state`, independent of the skin),
+and a double-click expands a brick or percept in place instead of dumping it
+into the transcript.
