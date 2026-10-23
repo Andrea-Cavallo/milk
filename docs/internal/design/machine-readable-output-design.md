@@ -76,7 +76,7 @@
 > `internal/transport/acp` are untouched. The ANSI-literal fix (`internal/ansi`,
 > new package) covers exactly the four `\033[...]` literal sites §11's Phase 1
 > bullet names (`cmd/milk/runner.go:596,659`, `internal/agent/local/
-> local.go`'s `⚙ calling agent` literal and its now-deleted duplicate
+> local.go`'s `» calling agent` literal and its now-deleted duplicate
 > `dimWrap`) — not the broader "~10 direct `fmt.Fprint` call sites" catalog in
 > §8.2, which is plain prose output with no ANSI, and belongs to Phase 4.
 >
@@ -162,7 +162,7 @@ To reach TUI parity an external host must reconstruct, live:
 | TUI surface | Data it renders |
 |---|---|
 | transcript | streamed text deltas, per-message agent attribution |
-| tool lines + diffs (`⚙ name: summary`) | tool lifecycle: announce → args → result → diff |
+| tool lines + diffs (`» name: summary`) | tool lifecycle: announce → args → result → diff |
 | `/think` panel | reasoning/thinking deltas (streamed, toggleable) |
 | status bar | route (primary/escalation), sticky-escalation state, token usage incl. cache, loop/consumption warnings, session state (running/idle/needs input) |
 | notification toasts (ADR-0048) | turn-unrelated notifications with command hints + history |
@@ -404,7 +404,7 @@ Base shapes are Claude Code's, normalized per provider (§8.2):
    {"type":"thinking","thinking":"…"},                      // reasoning, ADR-0042 preserved
    {"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"go.mod"}}]}}
 
-// tool result (TUI's ⚙ summary + diff are derived from these)
+// tool result (TUI's » summary + diff are derived from these)
 {"type":"user","seq":11,"parent_tool_use_id":"toolu_1",
  "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"…"}]},
  "tool_use_result":{"path":"go.mod","is_error":false,"summary":"38 lines"}}
