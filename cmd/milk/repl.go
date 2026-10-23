@@ -761,6 +761,11 @@ type model struct {
 	// scheduled before the restart carries an older gen and is dropped
 	// instead of cutting the browse short (the toastGen pattern).
 	tipsGen int
+
+	// blurred is true while the terminal window lacks focus (tea.BlurMsg).
+	// Zero value = focused, so a bare model behaves as before. Background
+	// polling (tips rotation, project/git refresh) pauses while it is set.
+	blurred bool
 	// currentTurnThinking accumulates thinking text for the current in-progress
 	// turn so it can be stored in session.Turn.Thinking when the turn completes.
 	currentTurnThinking *strings.Builder
@@ -2769,7 +2774,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// attention is elsewhere, so the tip only advances while they are
 		// actually idle (ADR-0061). An advance also ends the manual-browse
 		// pin (tipPinned), restoring contextual-hint precedence.
-		if !m.busy && !m.hasPendingPrompt() {
+		if !m.busy && !m.hasPendingPrompt() && !m.blurred {
 			m.tipIdx++
 			m.tipPinned = false
 		}
@@ -2906,16 +2911,22 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case projectRefreshMsg:
-		if m.panelProject {
-			return m, tea.Batch(projectPollTick(), refreshProjectCmd(m.st.cwd))
+		if !m.panelProject {
+			return m, nil
 		}
-		return m, nil
+		if m.blurred {
+			return m, projectPollTick() // keep the timer alive, skip the work
+		}
+		return m, tea.Batch(projectPollTick(), refreshProjectCmd(m.st.cwd))
 
 	case gitRefreshMsg:
-		if m.panelGit {
-			return m, tea.Batch(gitPollTick(), refreshGitCmd(m.st.cwd))
+		if !m.panelGit {
+			return m, nil
 		}
-		return m, nil
+		if m.blurred {
+			return m, gitPollTick()
+		}
+		return m, tea.Batch(gitPollTick(), refreshGitCmd(m.st.cwd))
 
 	case projectDataMsg:
 		m.projectFiles = msg.files
@@ -3084,6 +3095,14 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendTranscript(fmt.Sprintf("%s error: %v\n", milkTag(), msg.err))
 		return m, nil
 
+	case tea.FocusMsg:
+		m.blurred = false
+		return m, m.refreshOpenPanelsCmd()
+
+	case tea.BlurMsg:
+		m.blurred = true
+		return m, nil
+
 	case tea.BackgroundColorMsg:
 		if setDarkBackground(msg.IsDark()) {
 			refreshThemeColors()
@@ -3117,6 +3136,22 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handlePaste routes a bracketed paste. File paths become an attach prompt or
 // an @-mention; everything else goes to the textarea as one undo step.
+// refreshOpenPanelsCmd refreshes the project/git panels right away, used when
+// the window regains focus after polling was paused.
+func (m model) refreshOpenPanelsCmd() tea.Cmd {
+	if m.st == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	if m.panelProject {
+		cmds = append(cmds, refreshProjectCmd(m.st.cwd))
+	}
+	if m.panelGit {
+		cmds = append(cmds, refreshGitCmd(m.st.cwd))
+	}
+	return tea.Batch(cmds...)
+}
+
 func (m model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	// Pre-expand to terminal height so repositionView() inside ta.Update never
 	// scrolls on a large paste (updateTA's +1 is insufficient for multi-line pastes).
@@ -4840,6 +4875,7 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	setTheme(st.cfg.Theme)
 	defer applyThemeTerminal()()
 	p := tea.NewProgram(m)
+	clipboardProgram = p
 	st.program = p
 
 	// Notify the TUI the first time a *later* (post-startup) tool call hits

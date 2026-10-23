@@ -50,7 +50,7 @@ Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its ow
 
 1. **v2 core migration (done).** Switch imports to `charm.land/*/v2`. `View()` returns `tea.View`. `KeyMsg` to `KeyPressMsg`, `MouseMsg` split by action, `PasteMsg`. Move alt screen and mouse mode into the view. Update `go.mod`, keep tests green. Files: `repl.go`, `layout.go`, `attach.go`, `commands.go`, `workflow_cmd.go`, `bg_agent_wizard.go`, `direct_bash.go`, panels.
 2. **Theme (done).** `BackgroundColorMsg` plus `LightDark` tokens in `theme.go`. Remove the `HasDarkBackground()` calls.
-3. **Terminal integration.** Focus/blur gating of ticks, `SetClipboard`, `SetWindowTitle`.
+3. **Terminal integration (done).** Focus/blur gating of ticks, `SetClipboard`, `SetWindowTitle`.
 4. **Overlays.** Toasts and permission prompt on layers. Optional command palette behind a shortcut.
 5. **Key registry.** Single `KeyMap`, `help` bar, derive `tips.go` shortcut tips from it.
 6. **Widgets.** `progress` for ctx and jobs, `table` for `/usage`, `harmonica` for panel transitions.
@@ -67,4 +67,5 @@ Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its ow
 
 - Phase 1 done: imports moved to `charm.land/*/v2`, `View()` returns `tea.View` with the alt screen declared, `KeyPressMsg` and `PasteMsg` handled, `mouse.go` adapts the v2 mouse messages, `AdaptiveColor` replaced by `adaptiveColor()`, textarea and viewport on the v2 API. `go vet` and `go test ./...` pass, and a pty smoke run starts, renders and answers keys.
 - Phase 2 done: no blocking terminal query at startup any more. `Init` sends `tea.RequestBackgroundColor`, `BackgroundColorMsg` flips `darkBackground` and calls `refreshThemeColors()` (styles, think surface, pulse) and invalidates the colorize cache. Chrome styles are now filled only by `rebuildStyles()`.
+- Phase 3 done: the view declares `ReportFocus` and `WindowTitle` (`milk · <agent> · working|needs input`, `window_title.go`). `FocusMsg`/`BlurMsg` set `model.blurred`; while blurred the tips rotation and the project/git refresh pause (timers stay armed), and focus triggers one immediate panel refresh. `copyToClipboard` keeps the OS clipboard and now sets the terminal clipboard through `tea.SetClipboard` instead of writing OSC 52 to stderr.
 - Left on purpose for later phases: mouse modes are still written as raw escapes (`enableMouseTracking`), `glamour` still pulls Lip Gloss v1 transitively.

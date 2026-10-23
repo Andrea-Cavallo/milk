@@ -372,11 +372,13 @@ func (m *model) renderSeparator(h int) string {
 	return strings.Join(rows, "\n")
 }
 
-// View renders the screen. Terminal modes (alt screen) are declared here, not
+// View renders the screen. Terminal modes (alt screen, focus reporting, title) are declared here, not
 // requested with commands, so the renderer owns their lifecycle.
 func (m model) View() tea.View {
 	v := tea.NewView(m.viewString())
 	v.AltScreen = true
+	v.ReportFocus = true
+	v.WindowTitle = m.windowTitle()
 	return v
 }
 
