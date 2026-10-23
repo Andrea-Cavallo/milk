@@ -3771,7 +3771,7 @@ func (m model) spawnUserBackgroundAgent(task, spec string) (tea.Model, tea.Cmd) 
 		if err != nil {
 			msg = err.Error()
 		}
-		m.appendTranscript("\n" + dimWrap("⚙ "+msg) + "\n")
+		m.appendTranscript("\n" + dimWrap("» "+msg) + "\n")
 		return m, nil
 	}
 	cwd := m.st.cwd
@@ -4038,16 +4038,16 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 			}).
 			WithOnToolUseReady(func(id, name string, input map[string]any) {
 				// AskUserQuestion is handled entirely by milk's selection prompt —
-				// suppress the ⚙ hint here to keep the transcript clean.
+				// suppress the » hint here to keep the transcript clean.
 				if name == "AskUserQuestion" {
 					return
 				}
 				var hint string
 				summary := truncateToolSummary(name, cliToolArgSummary(input), termWidth)
 				if summary != "" {
-					hint = "\n" + dimWrap("⚙ "+name+": "+summary) + "\n"
+					hint = "\n" + dimWrap("» "+name+": "+summary) + "\n"
 				} else {
-					hint = "\n" + dimWrap("⚙ "+name) + "\n"
+					hint = "\n" + dimWrap("» "+name) + "\n"
 				}
 				if st.cfg.RemoteOversight.NotifyToolsEnabled() {
 					st.notifier.NotifyToolUse(context.Background(), name, cliToolArgSummary(input))

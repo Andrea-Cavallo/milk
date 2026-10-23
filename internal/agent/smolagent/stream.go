@@ -21,7 +21,7 @@ func handleEvent(ev subprocess.MilkEvent, out io.Writer, textBuf *strings.Builde
 		var b strings.Builder
 		b.WriteString("\n\033[2m")
 		if ev.Thought != "" {
-			fmt.Fprintf(&b, "⚙ step %d: %s\n", ev.Number, ev.Thought)
+			fmt.Fprintf(&b, "» step %d: %s\n", ev.Number, ev.Thought)
 		}
 		if ev.Code != "" {
 			fmt.Fprintf(&b, "```python\n%s\n```\n", ev.Code)
@@ -33,7 +33,7 @@ func handleEvent(ev subprocess.MilkEvent, out io.Writer, textBuf *strings.Builde
 
 	case "observation":
 		if ev.Content != "" {
-			block := fmt.Sprintf("\n\033[2m⚙ observation: %s\033[0m\n", ev.Content)
+			block := fmt.Sprintf("\n\033[2m» observation: %s\033[0m\n", ev.Content)
 			fmt.Fprint(out, block) //nolint:errcheck
 			textBuf.WriteString(block)
 		}

@@ -1585,12 +1585,12 @@ func cliToolArgSummary(args map[string]any) string {
 }
 
 // truncateToolSummary truncates a tool summary string to fit within termWidth,
-// accounting for the prefix "⚙ <name>: ". Pass termWidth=0 to skip truncation.
+// accounting for the prefix "» <name>: ". Pass termWidth=0 to skip truncation.
 func truncateToolSummary(name, summary string, termWidth int) string {
 	if termWidth <= 0 || summary == "" {
 		return summary
 	}
-	prefix := "⚙ " + name + ": "
+	prefix := "» " + name + ": "
 	maxSummary := termWidth - len(prefix) - 4 // 4 = margin
 	if maxSummary < 10 {
 		maxSummary = 10

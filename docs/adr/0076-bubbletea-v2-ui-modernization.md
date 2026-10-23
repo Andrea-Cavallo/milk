@@ -1,4 +1,4 @@
-# 75. Bubble Tea v2 UI Modernization
+# ADR-0076: Bubble Tea v2 UI modernization
 
 Date: 2026-10-23
 

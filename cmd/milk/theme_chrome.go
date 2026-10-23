@@ -64,15 +64,16 @@ func (m model) handleThemeCmd(arg string) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(tea.ClearScreen, tea.RequestBackgroundColor)
 }
 
-// toolRowRe matches a tool-activity row as the agents emit it: "⚙ name: summary"
-// inside whatever dim/colour codes wrap it.
-var toolRowRe = regexp.MustCompile(`^(?:\x1b\[[0-9;]*m)*⚙ ([^:\x1b]+?)(?:: (.*?))?(?:\x1b\[[0-9;]*m)*$`)
+// toolRowRe matches a tool-activity row as the agents emit it: "» name: summary"
+// inside whatever dim/colour codes wrap it. "⚙" still matches rows seeded from
+// sessions written before ADR-0075.
+var toolRowRe = regexp.MustCompile(`^(?:\x1b\[[0-9;]*m)*[⚙»] ([^:\x1b]+?)(?:: (.*?))?(?:\x1b\[[0-9;]*m)*$`)
 
-// modernToolRows restyles tool-activity rows for a skin: the gear becomes a
-// small accent marker, the tool name is bold muted ink, the summary muted.
+// modernToolRows restyles tool-activity rows for a skin: the marker becomes a
+// small accent glyph, the tool name is bold muted ink, the summary muted.
 // Render-only; the transcript buffer is untouched.
 func modernToolRows(content string) string {
-	if !strings.Contains(content, "⚙ ") {
+	if !strings.Contains(content, "⚙ ") && !strings.Contains(content, "» ") {
 		return content
 	}
 	rows := strings.Split(content, "\n")

@@ -170,7 +170,7 @@ func exportText(s *Session, colorize bool, opts ExportOptions) string {
 			}
 			if len(t.ToolCalls) > 0 {
 				for _, tc := range t.ToolCalls {
-					fmt.Fprintf(&b, "  ⚙ %s: %s\n", tc.Name, tc.Arguments)
+					fmt.Fprintf(&b, "  » %s: %s\n", tc.Name, tc.Arguments)
 				}
 			} else {
 				fmt.Fprintf(&b, "%s\n", t.Content)

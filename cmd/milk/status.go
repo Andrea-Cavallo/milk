@@ -147,11 +147,11 @@ func (m *model) statusBar() string {
 	}
 	if m.agents.backgroundMgr != nil {
 		if n := m.agents.backgroundMgr.ActiveCount(); n > 0 {
-			left += dim(" [⚙ " + pluralize(n, "background agent") + " running]")
+			left += dim(" [» " + pluralize(n, "background agent") + " running]")
 		}
 	}
 	if m.workflowRunning {
-		left += dim(" [⚙ " + workflowStatusLabel(m.workflowState) + "]")
+		left += dim(" [» " + workflowStatusLabel(m.workflowState) + "]")
 	}
 	// Timed answer countdown for a pending background ask (ADR-0052).
 	if m.pendingPerm != nil && !m.pendingPerm.autoAt.IsZero() {

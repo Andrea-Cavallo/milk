@@ -3373,7 +3373,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 			// if this guess is wrong too.
 			agentName = tc.Function.Name[len("agent_"):]
 		}
-		fmt.Fprintf(out, "\n%s\n", ansi.Dim(fmt.Sprintf("⚙ calling agent %s…", agentName)))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim(fmt.Sprintf("» calling agent %s…", agentName)))
 		result, err := a.toolAgentDispatcher(ctx, agentName, reqArgs.Request, pendingImages, out)
 		if err != nil {
 			obs.Inc(ctx, inferenceScope, "milk.tools.tool_agent_errors",
@@ -3692,7 +3692,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 
 // printToolLine writes a one-line dim tool-usage hint to out before a tool is
 // dispatched, mirroring what Claude shows for permission requests.
-// Format:  ⚙ <name>: <short summary of key argument>
+// Format:  » <name>: <short summary of key argument>
 // termWidth is the current terminal width (0 = no truncation).
 func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 	var args map[string]any
@@ -3700,7 +3700,7 @@ func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 
 	summary := toolArgSummary(args)
 	if summary != "" {
-		prefix := "⚙ " + tc.Function.Name + ": "
+		prefix := "» " + tc.Function.Name + ": "
 		if termWidth > 0 {
 			maxSummary := termWidth - len(prefix) - 4 // 4 = margin
 			if maxSummary < 10 {
@@ -3711,9 +3711,9 @@ func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 				summary = string(runes[:maxSummary-1]) + "…"
 			}
 		}
-		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name+": "+summary))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("» "+tc.Function.Name+": "+summary))
 	} else {
-		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("» "+tc.Function.Name))
 	}
 }
 
