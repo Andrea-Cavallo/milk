@@ -83,3 +83,18 @@ func TestPalette_BlockedWhileAPromptIsPending(t *testing.T) {
 		t.Error("the palette must not open over a pending permission prompt")
 	}
 }
+
+func TestContextMeter_FillsWithPressure(t *testing.T) {
+	empty := ansi.Strip(contextMeter(0))
+	half := ansi.Strip(contextMeter(50))
+	full := ansi.Strip(contextMeter(150)) // clamped
+	if ansi.StringWidth(empty) != contextMeterCells || ansi.StringWidth(full) != contextMeterCells {
+		t.Fatalf("meter must be %d cells, got %q / %q", contextMeterCells, empty, full)
+	}
+	if strings.Count(full, "▰") != contextMeterCells || strings.Count(empty, "▰") != 0 {
+		t.Errorf("fill must span empty..full, got %q / %q", empty, full)
+	}
+	if c := strings.Count(half, "▰"); c <= 0 || c >= contextMeterCells {
+		t.Errorf("half fill should be partial, got %q", half)
+	}
+}

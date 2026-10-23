@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/progress"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	rw "github.com/mattn/go-runewidth"
 
@@ -494,12 +497,47 @@ func (m *model) statusContextPressure(role string, promptTokens int64) string {
 	label := fmt.Sprintf("ctx:%s/%s", formatTokenCount(numerator), formatTokenCount(int64(window)))
 	switch {
 	case pct >= contextPressureCriticalPct:
-		return red(label)
+		label = red(label)
 	case pct >= contextPressureHighPct:
-		return yellow(label)
+		label = yellow(label)
 	default:
-		return dim(label)
+		label = dim(label)
 	}
+	// The meter is a glance aid; the numbers stay the source of truth, so it
+	// only shows when the bar is wide enough not to crowd them out.
+	if m.width >= contextMeterMinWidth {
+		return contextMeter(pct) + " " + label
+	}
+	return label
+}
+
+// contextMeterMinWidth is the terminal width from which the ctx fragment
+// gets a fill meter in front of its numbers.
+const contextMeterMinWidth = 130
+
+const contextMeterCells = 8
+
+// contextMeterBar is the shared meter: fill color follows the same
+// thresholds as the ctx label (dim, yellow at 75%, red at 90%).
+var contextMeterBar = progress.New(
+	progress.WithWidth(contextMeterCells),
+	progress.WithoutPercentage(),
+	progress.WithFillCharacters('▰', '▱'),
+	progress.WithColorFunc(func(total, _ float64) color.Color {
+		switch {
+		case total*100 >= contextPressureCriticalPct:
+			return lipgloss.Color("1")
+		case total*100 >= contextPressureHighPct:
+			return lipgloss.Color("3")
+		default:
+			return lipgloss.Color("8")
+		}
+	}),
+)
+
+// contextMeter renders pct (clamped to 0-100) as a short fill meter.
+func contextMeter(pct int) string {
+	return contextMeterBar.ViewAs(float64(min(max(pct, 0), 100)) / 100)
 }
 
 // activeTokenRole returns "escalation" or "primary" reflecting which agent will
