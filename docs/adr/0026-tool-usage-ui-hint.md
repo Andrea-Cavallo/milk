@@ -3,6 +3,12 @@
 **Status:** accepted  
 **Date:** 2026-05-24
 
+> **Amended 2026-10-23 — glyph only:** the marker is now `»`, not `⚙`, because
+> Windows default fonts (raster, Consolas) lack U+2699 and overdraw it onto the
+> following text. See [ADR-0075](0075-tool-status-marker-glyph.md). The decision
+> itself — one dim, single-line `name: summary` hint — stands as written below
+> (which keeps the old glyph in its examples as recorded at the time).
+
 ---
 
 ## Context

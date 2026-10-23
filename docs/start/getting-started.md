@@ -97,7 +97,7 @@ A real (lightly trimmed) transcript from a two-agent setup, showing routing, mem
 ```
 ❯ list the go files under internal/router
 mimo-local: ▸ thinking · 9 lines
-  ⚙ find_files: internal/router
+  » find_files: internal/router
 Here are the Go files under `internal/router`:
 - internal/router/router.go
 - internal/router/rules.go
@@ -121,9 +121,9 @@ GLOBAL (core)
 ```
 ❯ /escalate explain the tradeoffs of the router weighted-scorer design versus a pure keyword approach
 mimo-pro-local: ▸ thinking · 24 lines
-  ⚙ read_file: internal/router/router.go
-  ⚙ read_file: internal/router/rules.go
-  ⚙ read_file: internal/router/rules_test.go
+  » read_file: internal/router/router.go
+  » read_file: internal/router/rules.go
+  » read_file: internal/router/rules_test.go
 Here's a breakdown of the tradeoffs between the current weighted-scorer design and a pure keyword approach:
 
 ## Weighted-Scorer Design (what you have)

@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-20
 - **Related:** ADR-0026 (TUI dim tool hints — the semantic precedent), issue #290, issue #253 (result caps)
+- **Amended 2026-10-23 (glyph only):** the tool-use marker is now `»`, not `⚙` — see [ADR-0075](0075-tool-status-marker-glyph.md). Everything else in this record, including the format table below (which shows the old glyph), is unchanged.
 
 ## Context
 
