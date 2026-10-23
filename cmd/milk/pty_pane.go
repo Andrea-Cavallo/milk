@@ -1,6 +1,7 @@
 package main
 
 import (
+	"charm.land/bubbles/v2/key"
 	"errors"
 	"fmt"
 	"os"
@@ -156,7 +157,7 @@ func (m model) handlePTYKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	// Toast dismissal (issue #162) works in shell mode too — ctrl+g is not
 	// in ptyKeyToBytes (it would be dropped anyway), so intercept it first.
-	if msg.String() == "ctrl+g" && m.dismissToasts() {
+	if key.Matches(msg, keys.dismissToasts) && m.dismissToasts() {
 		return m, nil
 	}
 	if raw := ptyKeyToBytes(msg); len(raw) > 0 {

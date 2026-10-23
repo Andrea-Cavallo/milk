@@ -14,6 +14,7 @@ import (
 
 	rw "github.com/mattn/go-runewidth"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -2218,7 +2219,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.palette != nil {
 			return m.handlePaletteKey(msg)
 		}
-		if msg.String() == paletteOpenKey && m.paletteAvailable() {
+		if key.Matches(msg, keys.palette) && m.paletteAvailable() {
 			return m.openPalette()
 		}
 		// F1-F6: global panel show/hide shortcuts, available in any other
@@ -2235,24 +2236,15 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// things still live while a turn streams. bubbles' textarea binds
 		// neither key (word motion is alt+left/right and ctrl+left/right),
 		// so the browse never costs an editing key.
-		switch msg.String() {
-		case "f1":
-			return m.handlePanelCmd("memory")
-		case "f2":
-			return m.handlePanelCmd("tasks")
-		case "f3":
-			return m.handlePanelCmd("background")
-		case "f4":
-			return m.handlePanelCmd("workflow")
-		case "f5":
-			return m.handlePanelCmd("project")
-		case "f6":
-			return m.handlePanelCmd("git")
-		case "alt+up":
+		if panel := keys.panelFor(msg); panel != "" {
+			return m.handlePanelCmd(panel)
+		}
+		switch {
+		case key.Matches(msg, keys.tipPrev):
 			cmd := m.tipSeek(-1) // also restarts the cycling timer
 			m.tipBrowseEcho()
 			return m, cmd
-		case "alt+down":
+		case key.Matches(msg, keys.tipNext):
 			cmd := m.tipSeek(1) // also restarts the cycling timer
 			m.tipBrowseEcho()
 			return m, cmd
@@ -2261,7 +2253,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// like F1-F6 so it works in any mode (busy, prompt, attached…);
 		// bubbles' textarea doesn't bind ctrl+g, so nothing else wants it.
 		// Falls through untouched when no toast is open.
-		if msg.String() == "ctrl+g" && m.dismissToasts() {
+		if key.Matches(msg, keys.dismissToasts) && m.dismissToasts() {
 			return m, nil
 		}
 		// Adding a pending-state check below? Also add it to

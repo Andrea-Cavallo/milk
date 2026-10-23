@@ -89,6 +89,10 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	if cmd == cmdTips {
 		return m.handleTipsCmd(strings.TrimSpace(rest))
 	}
+	if cmd == cmdKeys {
+		m.appendTranscript("\n" + renderKeysHelp(m.vpWidth()) + "\n")
+		return m, nil
+	}
 	if cmd == cmdNotifications {
 		return m.handleNotificationsCmd(strings.TrimSpace(rest)), nil
 	}
