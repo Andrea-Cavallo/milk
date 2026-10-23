@@ -96,6 +96,12 @@ func acpUpdateInstall(t *acpTurn) (string, string) {
 	defer cancel()
 	err := updateInstall(ctx, rel, nil)
 	switch {
+	case errors.Is(err, updater.ErrWindowsStaged):
+		// Deferred success: staged at dest.new, StartupUpdate swaps it in
+		// at the next start. Claim the pending install, never a failure.
+		as.srv.setInstalledTag(rel.Tag)
+		as.srv.setUpdateRelease(nil)
+		return fmt.Sprintf("%s %s staged — restart the milk agent; it is applied automatically on next start", milkTag(), rel.Tag), ""
 	case errors.Is(err, updater.ErrWindowsManual):
 		// Never claim success: the download is saved but the running
 		// binary could not be replaced (the error carries the temp path).

@@ -48,12 +48,15 @@ func updateCheck(ctx context.Context, cfg *config.Config, dir string) (*updater.
 }
 
 // updateInstall downloads rel over the running binary. On Windows the
-// running binary cannot be replaced: the download is saved and the returned
-// error wraps updater.ErrWindowsManual with the temp path appended — callers
-// must surface it and never claim success. On success the running process is
-// still executing the old binary, so callers must tell the user to restart
-// milk itself (the process/agent — a new session would NOT pick the new
-// version up).
+// running binary is replaced by renaming it aside (the process keeps the old
+// image until it exits, so callers must tell the user to restart milk itself
+// — a new session would NOT pick the new version up). If the rename is denied
+// the download is staged for the next start: the returned error wraps
+// updater.ErrWindowsStaged, which callers must surface as a deferred success
+// ("applied on next start"), never as a failure. The same restart rule holds
+// for ErrWindowsManual's genuinely-failed path, where the error wraps
+// updater.ErrWindowsManual with the temp path appended and callers must
+// surface it and never claim success.
 func updateInstall(ctx context.Context, rel *updater.Release, progress func(done, total int64)) error {
 	dest, err := updateBinaryPath()
 	if err != nil {

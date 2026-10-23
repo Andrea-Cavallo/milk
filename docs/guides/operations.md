@@ -259,6 +259,16 @@ Two safety nets:
 
 ---
 
+## Self-update
+
+`/update install` (TUI, ACP) and `milk update install` (CLI) download the release, verify its SHA-256 and replace the running binary. The running process always keeps the old version until you **restart the milk process/agent** — a new session alone does not pick the new version up.
+
+- **POSIX**: one atomic rename over the binary; the running process keeps its (now unlinked) image and the restart lands on the new version.
+- **Windows**: an executing image is locked against writes but *can be renamed*, so milk renames the running `milk.exe` aside to `milk.exe.old`, moves the verified download into place and keeps running the renamed image until restart; the leftover `milk.exe.old` is deleted at a later start (it stays locked while any milk instance executes it).
+- **Windows, rename denied** (antivirus, exclusive lock, Program Files ACLs): the download is staged as `milk.exe.new` instead. `updater.StartupUpdate` runs at every process start and swaps the staged file in — retried each start until it succeeds, so the update applies *lazily on restart* — and `/update install` reports `staged — … applied on next start` rather than failing. Only when staging is also denied does milk fall back to the manual path (the temp file path is printed for a hand replace).
+
+---
+
 ## Graceful degradation
 
 | Primary agent | Escalation agent | Behavior |
