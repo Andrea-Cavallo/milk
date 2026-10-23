@@ -2027,7 +2027,7 @@ func (m *model) welcomeScreen() string {
 
 	lines := []string{
 		pulseColors[8] + "◈" + ansiReset + " " + wordmark(),
-		dim("switch models, not context."),
+		dim(taglineText()),
 		"",
 	}
 

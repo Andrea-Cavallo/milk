@@ -26,8 +26,8 @@ func (m *model) headerBar() string {
 		frame = m.spinnerFrame
 	}
 	logo := headerLogo(frame)
-	tagline := dim("switch models, not context.")
-	taglinePlain := "switch models, not context."
+	taglinePlain := taglineText()
+	tagline := dim(taglinePlain)
 
 	sessID := m.st.sess.ID
 	if len(sessID) > 8 {

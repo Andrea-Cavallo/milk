@@ -66,3 +66,17 @@ func TestThemeSwitch_RequestsBackgroundColor(t *testing.T) {
 	}
 	t.Error("the batch must include tea.RequestBackgroundColor")
 }
+
+func TestTagline_FollowsTheTheme(t *testing.T) {
+	oldName := th.name
+	t.Cleanup(func() { setTheme(oldName) })
+
+	setTheme("off")
+	if got := taglineText(); got != "switch models, not context." {
+		t.Errorf("default tagline = %q", got)
+	}
+	setTheme("supermilk")
+	if got := taglineText(); got != "Got models? Got milk." {
+		t.Errorf("supermilk tagline = %q", got)
+	}
+}

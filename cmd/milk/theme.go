@@ -94,8 +94,20 @@ type themeDef struct {
 	modern                                                                     bool
 	base, raised, toast, hairline, thumb, text, muted, accent, accentLo, think themeColor
 	// terminal colours handed to the emulator while the theme is active
+	tagline                    string // "" = defaultTagline
 	termBg, termFg, termCursor string
 	termAnsi                   [16]string // "" = leave the terminal's own palette
+}
+
+// defaultTagline is the line under the wordmark; a theme may carry its own.
+const defaultTagline = "switch models, not context."
+
+// taglineText is the active theme's tagline.
+func taglineText() string {
+	if th.tagline != "" {
+		return th.tagline
+	}
+	return defaultTagline
 }
 
 var themeOff = &themeDef{name: "off"}
@@ -105,7 +117,8 @@ var themeOff = &themeDef{name: "off"}
 // so coloured text (code spans, links) stays readable on the light ground.
 var themeSuperMilk = &themeDef{
 	name: "supermilk", modern: true,
-	base: fixed("#f8f5ee"), raised: fixed("#efebe0"), toast: fixed("#e8e3d5"),
+	tagline: "Got models? Got milk.",
+	base:    fixed("#f8f5ee"), raised: fixed("#efebe0"), toast: fixed("#e8e3d5"),
 	hairline: fixed("#dcd7c9"), thumb: fixed("#c2bfb4"),
 	text: fixed("#3f2a26"), muted: fixed("#7d7b74"), think: fixed("#5d6f4a"),
 	accent: fixed("#6b6140"), accentLo: fixed("#c9c5b8"),
