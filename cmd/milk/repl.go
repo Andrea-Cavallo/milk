@@ -4505,7 +4505,19 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 		cliAgent = cliAgent.WithDebugLog(dbg)
 	}
 
-	ctx := context.Background()
+	// ctx scopes everything owned by *this* process instance: the
+	// local-server launcher, MCP connects, the background-job manager
+	// (newBackgroundManager derives its base context from it — its
+	// cancellation is "milk shutting down", see local.NewManager) and the
+	// oversight poller (StartPolling runs until ctx is cancelled). It is
+	// cancelled when runREPL returns — and explicitly right before
+	// /restart relaunches: the Windows handover (restart_exec_windows.go)
+	// keeps this process alive as a waiter until the relaunched instance
+	// exits, so these subsystems must stop first — otherwise two oversight
+	// pollers fight over the bot's getUpdates stream (HTTP 409) and jobs
+	// would outlive the session they belonged to.
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
 
 	// If the primary local agent has a run_cmd, launch it when the server is
 	// not yet reachable. This happens synchronously so the Ping below reflects
@@ -4926,8 +4938,18 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	}
 	// /restart (issue #258): the TUI quit with a relaunch plan armed. The
 	// terminal is restored above (p.Run teardown + mouse-mode reset), so the
-	// exec happens here — it never returns on success.
+	// exec happens here — on Unix it never returns on success; on Windows
+	// (restart_exec_windows.go) this process returns only once the
+	// relaunched instance has exited.
 	if fm, ok := finalModel.(model); ok && fm.restartPlan != nil {
+		// Quiesce process-global subsystems before handing over: the
+		// Windows waiter path keeps this process alive for the whole
+		// next session, and a still-running oversight poller would race
+		// the relaunched instance for the bot's update stream. Same
+		// order on Unix (the exec below discards them a moment later —
+		// and cancelling first lets a running job persist its state as
+		// stopped instead of leaving a stale heartbeat behind).
+		cancelCtx()
 		if rerr := execRestart(fm.restartPlan.Argv, fm.restartPlan.Dir); rerr != nil {
 			return fmt.Errorf("restart failed: %w", rerr)
 		}
