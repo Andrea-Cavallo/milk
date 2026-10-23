@@ -53,8 +53,8 @@ Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its ow
 3. **Terminal integration (done).** Focus/blur gating of ticks, `SetClipboard`, `SetWindowTitle`.
 4. **Overlays (done).** Toasts and permission prompt on layers. Optional command palette behind a shortcut.
 5. **Key registry (done).** Single `KeyMap`, `help` bar, derive `tips.go` shortcut tips from it.
-6. **Widgets.** `progress` for ctx and jobs, `table` for `/usage`, `harmonica` for panel transitions.
-7. **Selection spike** (`ultraviolet`).
+6. **Widgets (done, trimmed).** `progress` for ctx and jobs, `table` for `/usage`, `harmonica` for panel transitions.
+7. **Selection spike (closed, not adopted)** (`ultraviolet`).
 
 ## Compatibility rules
 
@@ -70,4 +70,6 @@ Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its ow
 - Phase 3 done: the view declares `ReportFocus` and `WindowTitle` (`milk · <agent> · working|needs input`, `window_title.go`). `FocusMsg`/`BlurMsg` set `model.blurred`; while blurred the tips rotation and the project/git refresh pause (timers stay armed), and focus triggers one immediate panel refresh. `copyToClipboard` keeps the OS clipboard and now sets the terminal clipboard through `tea.SetClipboard` instead of writing OSC 52 to stderr.
 - Phase 4 done: `overlay.go` composes layers with the Lip Gloss compositor (`composeOverlays`, row widths restored because the canvas trims trailing blanks). Toasts paint through it, and the new command palette (`palette.go`, Ctrl+O) uses it for a floating box. The permission ask deliberately stays a transcript prompt: it is shared with ACP and Telegram and its y/n/a/d flow and queue are covered by many tests, so a modal copy would only duplicate it.
 - Phase 5 done: `keymap.go` is the one registry of global shortcuts (`key.Binding`). Update matches F1-F6, Alt+Up/Down, Ctrl+G and Ctrl+O through it, and the new TUI-only `/keys` renders it with `bubbles/help`. Input-editing keys inside `handleKey` (Ctrl+R/S/Z/Y/T, newline) stay string cases and are listed in the registry for documentation only.
-- Left on purpose for later phases: mouse modes are still written as raw escapes (`enableMouseTracking`), `glamour` still pulls Lip Gloss v1 transitively.
+- Phase 6 done: the `ctx:` fragment gets a `bubbles/progress` meter from 130 columns (`contextMeter`, same 75/90 thresholds). `table` and a `harmonica` panel animation were dropped, see ADR-0075.
+- Phase 7 closed: `ultraviolet` has no selection primitive and selection is already content-anchored (ADR-0024), so the backlog item was stale and is removed from CLAUDE.md.
+- Left on purpose: mouse modes are still written as raw escapes (`enableMouseTracking`), `glamour` still pulls Lip Gloss v1 transitively.

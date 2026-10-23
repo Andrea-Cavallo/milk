@@ -73,3 +73,4 @@
 * [72. Self-contained wrapped rows: one SGR tracker instead of per-feature patches](0072-self-contained-wrapped-rows.md)
 * [73. Team live-run fixes: dataflow fan-out scheduling, board-driven item gating, retry reopen](0073-team-live-run-fixes.md)
 * [74. Multimodal input over ACP: prompt content blocks ride the TUI's attachment path](0074-acp-multimodal-input.md)
+* [75. Bubble Tea v2 UI modernization: v2 stack, background detection, overlays, key registry](0075-bubbletea-v2-ui-modernization.md)
