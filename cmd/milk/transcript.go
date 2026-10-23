@@ -155,6 +155,12 @@ func (m *model) wrappedTranscript() string {
 	// key because colorization covers the full transcript regardless of scroll
 	// position, and GotoBottom legitimately advances YOffset after every append.
 	vpChanged := vw != m.colorizeVPWidth
+	if vpChanged {
+		// Tables are fitted to the viewport width, so the per-turn colorized
+		// cache is only valid for the width it was built at.
+		m.turnColorCache = nil
+		m.turnRawCache = nil
+	}
 	txGrew := txLen - m.colorizeTransLen
 	if txGrew < 0 {
 		// The display shrank without an explicit invalidate (defensive — every
@@ -227,7 +233,7 @@ func (m *model) wrappedTranscript() string {
 			if i < len(m.turnColorCache) && i < len(m.turnRawCache) && m.turnRawCache[i] == seg {
 				colorized.WriteString(m.turnColorCache[i])
 			} else {
-				result := colorizeSingle(seg, m.colorizeMode)
+				result := colorizeSingleWidth(seg, m.colorizeMode, vw)
 				if i < len(m.turnColorCache) {
 					m.turnColorCache[i] = result
 					m.turnRawCache[i] = seg
@@ -239,7 +245,7 @@ func (m *model) wrappedTranscript() string {
 			}
 		} else {
 			// Last (incomplete) turn: always re-colorize.
-			colorized.WriteString(colorizeSingle(seg, m.colorizeMode))
+			colorized.WriteString(colorizeSingleWidth(seg, m.colorizeMode, vw))
 		}
 	}
 	// Trim completed turns from cache if transcript shrank (shouldn't happen

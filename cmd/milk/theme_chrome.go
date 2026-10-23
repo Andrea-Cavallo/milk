@@ -58,7 +58,10 @@ func (m model) handleThemeCmd(arg string) (tea.Model, tea.Cmd) {
 		m.notify("theme: "+th.name, "/theme")
 	}
 	m.syncLayout()
-	return m, tea.ClearScreen
+	// The skin paints the terminal background, so the detected light/dark
+	// follows the theme: ask again once the colors changed (switching back to
+	// "off" must not keep the cream skin's "light" verdict on a dark terminal).
+	return m, tea.Batch(tea.ClearScreen, tea.RequestBackgroundColor)
 }
 
 // toolRowRe matches a tool-activity row as the agents emit it: "⚙ name: summary"

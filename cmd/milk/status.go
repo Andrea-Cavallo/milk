@@ -80,6 +80,7 @@ func (m *model) headerBar() string {
 	gap := max(available-len(leftPlain)-len(rightPlain), 1)
 	bar := left + strings.Repeat(" ", gap) + rightPart + " "
 	if isTTY {
+		bar = tintChrome(bar, chromeHeaderFg.sgrFg(), chromeHeaderBg.sgrBg())
 		return styleHeaderBar.Width(m.width).Render(bar)
 	}
 	return bar
@@ -286,6 +287,7 @@ func (m *model) statusBar() string {
 		if m.pendingPerm != nil {
 			return styleStatusBarPerm.Width(m.width).MaxWidth(m.width).Render(bar)
 		}
+		bar = tintChrome(bar, chromeStatusBg.sgrBg())
 		return styleStatusBar.Width(m.width).MaxWidth(m.width).Render(bar)
 	}
 	return bar

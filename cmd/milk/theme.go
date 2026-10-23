@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/scoutme/milk/internal/sgr"
 )
 
 // Switchable TUI themes. "off" (the default) is the original look, byte for
@@ -137,6 +139,25 @@ func setTheme(name string) bool {
 	return true
 }
 
+// Chrome colors of the original look (theme "off"), light/dark by terminal
+// background. Styles and the per-row re-tint below read the same tokens.
+var (
+	chromeHeaderBg = themeColor{dark: "#0E0E1A", light: "#1E2A4A"}
+	chromeHeaderFg = themeColor{dark: "#AABBCC", light: "#D8E4F8"}
+	chromeStatusBg = themeColor{dark: "#2B2B2B", light: "#E5E5E5"}
+)
+
+// tintChrome keeps a chrome bar's own colors behind its styled spans. Spans
+// close themselves with a full reset, which would drop the bar back to the
+// terminal's colors midway (a navy bar on a dark terminal showing navy only at
+// its ends). The skin ("modern") paints its own ground, so it is left alone.
+func tintChrome(bar string, colors ...string) string {
+	if th.modern || !isTTY {
+		return bar
+	}
+	return sgr.WithBackground(bar, strings.Join(colors, ""))
+}
+
 // rebuildStyles reassigns the lipgloss styles owned by the chrome. For "off"
 // these are the original definitions.
 func rebuildStyles() {
@@ -145,13 +166,13 @@ func rebuildStyles() {
 		Background(adaptiveColor("#FFD700", "#B8860B"))
 	if !th.modern {
 		styleHeaderBar = lipgloss.NewStyle().
-			Background(adaptiveColor("#1E2A4A", "#0E0E1A")).
-			Foreground(adaptiveColor("#D8E4F8", "#AABBCC")).
+			Background(chromeHeaderBg.adaptive()).
+			Foreground(chromeHeaderFg.adaptive()).
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderBottom(true).
 			BorderForeground(adaptiveColor("#4466AA", "#334466"))
 		styleStatusBar = lipgloss.NewStyle().
-			Background(adaptiveColor("#E5E5E5", "#2B2B2B"))
+			Background(chromeStatusBg.adaptive())
 		styleBorder = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderTop(true).

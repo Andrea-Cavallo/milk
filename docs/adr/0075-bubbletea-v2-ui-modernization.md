@@ -34,3 +34,10 @@ Move to `charm.land/bubbletea/v2`, `charm.land/bubbles/v2` and `charm.land/lipgl
 - Lip Gloss v2 always emits full color; downsampling moved to the output writer. Tests that forced a color profile no longer need to.
 - `glamour` still depends on Lip Gloss v1 transitively; the two coexist.
 - Ctrl+Enter arrives as `ctrl+enter` on terminals with extended key protocols; the CSI sniffing stays as a safety net.
+
+## Follow-up: theme "off" header and tables
+
+- **Header and status bar kept their colors only at the ends.** Spans inside a bar close with a full reset, which dropped the bar to the terminal colors midway, so a navy bar showed navy only around the logo and in the trailing pad. `tintChrome` (`theme.go`) re-applies the bar's own foreground and background after every reset through `sgr.WithBackground`, as the panels already do. The skin ("modern") paints its own ground and is left alone.
+- **A skin switch left a wrong "light" verdict.** The detected background reflects what is painted, and the cream skin paints a light one. `/theme` now asks the terminal again (`tea.RequestBackgroundColor`) after changing the colors, so `/theme off` on a dark terminal goes back to the dark variants.
+- **Tables wider than the viewport broke through their pipes.** `renderTableBlock` takes the viewport width (threaded from `wrappedTranscript` through `colorizeSingleWidth`): it narrows the widest columns (minimum 6 cells) and wraps the cell text inside them, so each row stays aligned. Below that minimum the table keeps its natural width and the plain wrap applies. The per-turn colorize cache is dropped when the width changes.
+- **Models writing bad tables.** `escalation.TableGuidance` is injected in the local system prompt (standard and full tiers) and in the cached Claude-CLI prefix: at most 4 columns, short cells, one value per cell, header and separator rows, equal cell counts, escaped pipes, and a bullet list when it does not fit.
