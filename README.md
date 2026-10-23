@@ -30,11 +30,11 @@ Requires Go 1.21+. See [docs/start/getting-started.md](docs/start/getting-starte
 
 **Any backend, either role** — OpenAI-compatible servers, AWS Bedrock (native Converse), Claude Code CLI, aider, smolagents, or any Bearer-token HTTP provider can be primary or escalation. The only constraint milk asks you to honor: the escalation agent should be smarter (and usually pricier) than the primary.
 
-**Act** — built-in tools (bash, file I/O, grep/find, HTTP, session context, memory, tasks) with no extra configuration, plus MCP servers (stdio or HTTP, OAuth-aware) and agent-as-tool — expose any configured agent as a callable tool to any other.
+**Act** — built-in tools (bash, file I/O, grep/find, HTTP, session context, memory, tasks) with no extra configuration, plus MCP servers (stdio or HTTP, OAuth-aware) and agent-as-tool — expose any configured agent as a callable tool to any other. Multimodal input is the same shape on every surface: paste or attach an image (TUI clipboard, `@file`, ACP image blocks) and a `vision: true` agent sees it inline.
 
 **Orchestrate** — `spawn_background_agent` forks the calling agent for async research with its own tool loop; the native `/workflow` engine runs multi-agent pipelines (`dev`, `pair`, `swarm`, or your own YAML) with typed verdicts, checkpoint/resume, and a live-attach view for background jobs and workflow stages.
 
-**Remember & stay safe** — a Percept store with NREM consolidation survives across sessions; loop detection watches for repeating patterns and can auto-interrupt; persistent task tracking keeps goals in front of the agent.
+**Remember & stay safe** — a Percept store with NREM consolidation survives across sessions; loop detection watches for repeating patterns and can auto-interrupt; persistent task tracking keeps goals in front of the agent. Tool-permission asks can go sticky for a whole session — answer one prompt with `a`/`d` (TUI `Allow? [Y/n/a/d]`) or *Always allow* in an ACP client, and the rest of the run stops asking, visible in the status bar and `/permissions mode`.
 
 **Measure** — token usage by role (`/usage`), OpenTelemetry file exporters (`/metrics`, `/otel`), and `milk eval` — run the same scenarios against different agents and compare LLM-judged quality, tokens, cache efficiency, and latency side-by-side.
 
