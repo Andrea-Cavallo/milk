@@ -11,8 +11,8 @@ site_dir: site
 theme:
   name: material
   custom_dir: overrides
-  logo: images/milk-xs.png
-  favicon: images/milk-xxs.png
+  logo: assets/milk-xs.png
+  favicon: assets/milk-xxs.png
   font:
     text: Inter
     code: JetBrains Mono

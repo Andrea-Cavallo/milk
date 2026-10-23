@@ -21,6 +21,24 @@ warn()    { printf "${YELLOW}Warning:${NC} %s\n" "$1"; }
 error()   { printf "${RED}Error:${NC} %s\n" "$1" >&2; exit 1; }
 check_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# version_ge A B — true if dotted-numeric version A >= B (missing components = 0).
+# No version constant lives in this script: the required Go version always
+# comes from the checked-out go.mod (see check_go_version).
+version_ge() {
+    VG_A="$1"
+    VG_B="$2"
+    while [ -n "$VG_A" ] || [ -n "$VG_B" ]; do
+        VG_PA=${VG_A%%.*}
+        VG_PB=${VG_B%%.*}
+        if [ "$VG_A" = "$VG_PA" ]; then VG_A=""; else VG_A=${VG_A#*.}; fi
+        if [ "$VG_B" = "$VG_PB" ]; then VG_B=""; else VG_B=${VG_B#*.}; fi
+        : "${VG_PA:=0}" "${VG_PB:=0}"
+        if [ "$VG_PA" -gt "$VG_PB" ]; then return 0; fi
+        if [ "$VG_PA" -lt "$VG_PB" ]; then return 1; fi
+    done
+    return 0
+}
+
 detect_os() {
     case "$(uname -s)" in
         Linux*)  OS_TYPE="linux";;
@@ -43,12 +61,27 @@ check_go() {
     - Fedora: sudo dnf install golang"
     fi
     GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
-    GO_MAJOR=$(echo "$GO_VERSION" | cut -d. -f1)
-    GO_MINOR=$(echo "$GO_VERSION" | cut -d. -f2)
-    if [ "$GO_MAJOR" -lt 1 ] || { [ "$GO_MAJOR" -eq 1 ] && [ "$GO_MINOR" -lt 21 ]; }; then
-        error "Go 1.21 or higher is required (found $GO_VERSION). Please upgrade: https://go.dev/dl/"
-    fi
     success "Found Go $GO_VERSION"
+}
+
+# The required Go version is whatever the checked-out go.mod declares —
+# derived, never hardcoded, so the script can never contradict a release,
+# including old tags pinned via MILK_VERSION. Runs after clone_repository.
+check_go_version() {
+    GO_REQUIRED=$(awk '$1 == "go" { print $2; exit }' "$INSTALL_DIR/go.mod" 2>/dev/null || true)
+    if [ -z "$GO_REQUIRED" ]; then
+        warn "go.mod has no go directive — skipping the version pre-check (go build will enforce its own requirement)."
+        return 0
+    fi
+    # Friendly comparison only when both sides are plain dotted numbers;
+    # anything unusual (prereleases) is left to go build, which is authoritative.
+    case "$GO_VERSION:$GO_REQUIRED" in
+        *[!0-9.:]*) warn "cannot pre-compare Go versions (found $GO_VERSION, required $GO_REQUIRED) — go build will enforce its requirement."; return 0;;
+    esac
+    if ! version_ge "$GO_VERSION" "$GO_REQUIRED"; then
+        error "Go $GO_REQUIRED or higher is required (found $GO_VERSION). Please upgrade: https://go.dev/dl/"
+    fi
+    success "Go $GO_VERSION satisfies go.mod (requires $GO_REQUIRED)"
 }
 
 check_git() {
@@ -146,6 +179,7 @@ main() {
     check_git
     check_go
     clone_repository
+    check_go_version
     build_and_install
     print_success
 }
