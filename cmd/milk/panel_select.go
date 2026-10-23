@@ -208,10 +208,9 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev mouseEvent)
 }
 
 // handleMemoryPanelClick runs the memory panel's existing click-for-detail
-// behavior: a single click arms the line's ID, and a second click on the same
-// ID within 400ms prints the full percept/brick content to the transcript.
+// behavior: double-click expands or collapses the content in place.
 func (m *model) handleMemoryPanelClick(lineIdx int) {
-	ids := buildPanelLineIDs(m.mem, m.currentSessionBricks())
+	_, ids := memoryPanelRows(m.mem, memoryPanelInner, m.currentSessionBricks(), m.memoryExpanded)
 	if lineIdx < 0 || lineIdx >= len(ids) {
 		return
 	}
@@ -221,15 +220,11 @@ func (m *model) handleMemoryPanelClick(lineIdx int) {
 	}
 	now := time.Now()
 	if id == m.lastPanelClickID && now.Sub(m.lastPanelClickTime) <= 400*time.Millisecond {
-		bricks := m.currentSessionBricks()
-		var result string
-		if content := brickContent(id, bricks); content != "" {
-			result = milkTag() + " [" + id + "]\n" + content
+		if m.memoryExpanded == id {
+			m.memoryExpanded = ""
 		} else {
-			result = execMemoryShow("#"+id[:min(6, len(id))], m.st)
+			m.memoryExpanded = id
 		}
-		m.appendTranscript(result + "\n")
-		m.vp.GotoBottom()
 		m.lastPanelClickID = ""
 	} else {
 		m.lastPanelClickID = id

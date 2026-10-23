@@ -1708,8 +1708,8 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 	case "memory":
 		m.panelManualOverride[regionMemory] = true
 		m.panelMemory = !m.panelMemory
-		if !m.panelMemory {
-			m.resetManualOverrideIfFinalized(regionMemory)
+		if err := m.saveMemoryPreference(); err != nil {
+			m.appendTranscript(fmt.Sprintf("%s memory panel preference could not be saved: %v\n", milkTag(), err))
 		}
 		m.refreshPrompt()
 		m.syncLayout()

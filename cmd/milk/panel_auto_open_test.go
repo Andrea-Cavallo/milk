@@ -370,7 +370,7 @@ func TestWorkflowProgressMsg_RespectsManualClose(t *testing.T) {
 // panel while percepts exist sticks, and /forget deleting the last percept
 // empties the store — the memory panel's finalization event — resetting
 // the override for its next content.
-func TestForget_ResetsManualOverrideWhenMemoryEmptied(t *testing.T) {
+func TestForget_PreservesMemoryPreferenceWhenEmptied(t *testing.T) {
 	m := newTestModelForPanels(t)
 	store, err := memory.NewStoreParams(t.TempDir(), "sess", memory.Params{})
 	if err != nil {
@@ -403,8 +403,8 @@ func TestForget_ResetsManualOverrideWhenMemoryEmptied(t *testing.T) {
 	if len(m3.mem.List(memory.ListOpts{Scope: "session"})) != 0 {
 		t.Fatal("expected the percept to be deleted")
 	}
-	if m3.panelManualOverride[regionMemory] {
-		t.Error("expected the manual override to reset once the store is emptied")
+	if !m3.panelManualOverride[regionMemory] {
+		t.Error("emptying memory must preserve the user's panel preference")
 	}
 }
 

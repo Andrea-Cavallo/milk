@@ -20,7 +20,8 @@ import (
 func (m *model) sidePanelLines(region panelRegion) (lines []string, inner int) {
 	switch region {
 	case regionMemory:
-		return buildPanelLines(m.mem, memoryPanelInner, m.currentSessionBricks()), memoryPanelInner
+		lines, _ := memoryPanelRows(m.mem, memoryPanelInner, m.currentSessionBricks(), m.memoryExpanded)
+		return lines, memoryPanelInner
 	case regionTasks:
 		return buildTasksPanelLines(m.taskStore, tasksPanelInner), tasksPanelInner
 	case regionBackground:
@@ -213,6 +214,9 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 // (so the finalizing event itself never force-opens a user-closed panel),
 // then this reset — only future content re-opens it.
 func (m *model) resetManualOverrideIfFinalized(region panelRegion) {
+	if region == regionMemory {
+		return
+	}
 	if m.panelManualOverride[region] && m.panelContentFinalized(region) {
 		delete(m.panelManualOverride, region)
 	}

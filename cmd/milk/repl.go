@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -858,11 +859,13 @@ type model struct {
 	panelManualOverride map[panelRegion]bool
 
 	// memory panel
-	panelMemory        bool
-	panelOffset        int
-	mem                *memory.Store
-	lastPanelClickID   string
-	lastPanelClickTime time.Time
+	panelMemory          bool
+	memoryExpanded       string
+	memoryPreferencePath string
+	panelOffset          int
+	mem                  *memory.Store
+	lastPanelClickID     string
+	lastPanelClickTime   time.Time
 
 	// tasks panel
 	panelTasks  bool
@@ -4795,6 +4798,9 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	}
 
 	m := newModel(ctx, st, rtr, agents, mem)
+	if dir, err := config.Dir(); err == nil {
+		m.loadMemoryPreference(filepath.Join(dir, "memory-panel.state"))
+	}
 	m.taskStore = taskStore
 	m.hasInferenceAgent = cfg.HasInferenceAgent()
 	if startupWarning != "" {
