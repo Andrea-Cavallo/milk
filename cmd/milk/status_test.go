@@ -523,3 +523,68 @@ func TestCounterDelta(t *testing.T) {
 		t.Errorf("got %d, want 0", got)
 	}
 }
+
+// TestHeaderBar_ShowsVersion pins the display design: the running version is
+// part of the header's identity group on a wide terminal —
+// "github.com/scoutme/milk vX  sess:…  /help" (headerBar, status.go).
+func TestHeaderBar_ShowsVersion(t *testing.T) {
+	old := version
+	version = "v9.9.9-test"
+	t.Cleanup(func() { version = old })
+
+	sess := &session.Session{ID: "abcdef1234"}
+	m := &model{
+		width: 140,
+		st:    &interactiveState{sess: sess, cfg: config.Config{}},
+	}
+
+	bar := ansi.Strip(m.headerBar())
+	if want := "github.com/scoutme/milk v9.9.9-test"; !strings.Contains(bar, want) {
+		t.Errorf("want headerBar to contain %q, got %q", want, bar)
+	}
+	if !strings.Contains(bar, "  /help") {
+		t.Errorf("want the /help hint to stay in the header, got %q", bar)
+	}
+}
+
+// TestHeaderBar_VersionSurvivesNarrowWidth pins the degradation rule: on a
+// narrow terminal the right group drops the repo URL first, never the version —
+// a version only visible on wide terminals can't be quoted in bug reports.
+func TestHeaderBar_VersionSurvivesNarrowWidth(t *testing.T) {
+	old := version
+	version = "v9.9.9-test"
+	t.Cleanup(func() { version = old })
+
+	sess := &session.Session{ID: "abcdef1234"}
+	m := &model{
+		width: 70,
+		st:    &interactiveState{sess: sess, cfg: config.Config{}},
+	}
+
+	bar := ansi.Strip(m.headerBar())
+	if strings.Contains(bar, "github.com/scoutme/milk") {
+		t.Errorf("narrow header should drop the repo URL, got %q", bar)
+	}
+	if want := "v9.9.9-test"; !strings.Contains(bar, want) {
+		t.Errorf("narrow header must still show version %q, got %q", want, bar)
+	}
+}
+
+// TestHeaderBar_DevBuildVersionIsYellow verifies source builds without ldflags
+// version metadata ("dev") render highlighted as a warning instead of looking
+// like a release tag. Needs isTTY for colorize() to emit escapes.
+func TestHeaderBar_DevBuildVersionIsYellow(t *testing.T) {
+	oldTTY, oldVer := isTTY, version
+	isTTY, version = true, "dev"
+	t.Cleanup(func() { isTTY, version = oldTTY, oldVer })
+
+	sess := &session.Session{ID: "abcdef1234"}
+	m := &model{
+		width: 140,
+		st:    &interactiveState{sess: sess, cfg: config.Config{}},
+	}
+
+	if bar := m.headerBar(); !strings.Contains(bar, "\033[1;33mdev") {
+		t.Errorf("want the dev version wrapped in bold yellow, got %q", bar)
+	}
+}
