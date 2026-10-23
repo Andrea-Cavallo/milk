@@ -21,6 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/scoutme/milk/main/install.sh | sh
 
 Installs to `~/.local/bin/milk`, verifying the release checksum. Pin a version with `MILK_VERSION=v0.2.0`. On Windows, run this inside WSL2 (see [docs/guides/providers.md — Windows and WSL2](../guides/providers.md#windows-and-wsl2)).
 
+Stay current with `milk update check` / `milk update install` (TUI: `/update install`). On Windows the running `milk.exe` is renamed aside and the verified download takes its place — applied on your next restart of milk, staged and retried automatically if the rename is refused; see [docs/guides/operations.md — Self-update](../guides/operations.md#self-update).
+
 Or build from source (requires Go 1.21+):
 
 ```sh

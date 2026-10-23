@@ -15,7 +15,7 @@ whichever you need.
    attachments, and machine-readable output.
 4. [Operations](operations.md) — running milk in practice: memory and its
    panel, observability, loop detection, task tracking, config reload,
-   remote oversight (Telegram), graceful degradation.
+   self-update, remote oversight (Telegram), graceful degradation.
 
 New to milk? Start with [Getting started](../start/getting-started.md) before
 these. Looking for `milk eval`, ACP, or the full spec? Those are in
