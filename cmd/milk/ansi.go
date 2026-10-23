@@ -183,20 +183,11 @@ func stalenessLegend(inner int) string {
 	return out.String()
 }
 
-// logoMark is the diamond glyph used in the header.
-const logoMark = "◈"
-
-// headerLogo returns the styled logo string for the persistent header bar.
-// The ◈ mark pulses through the breathing gradient keyed to frame.
-// Use frame=8 (peak brightness) for a static appearance when idle.
-// Layout: pulsing ◈ · bold "milk" in bright gold
-func headerLogo(frame int) string {
+func headerLogo(_ int) string {
 	if !isTTY {
-		return logoMark + " milk"
+		return "milk"
 	}
-	mark := pulseColors[frame%len(pulseColors)] + logoMark + ansiReset
-	name := boldGold("milk")
-	return mark + " " + name
+	return boldGold("milk")
 }
 
 // Spinner prints an animated spinner on the current line until Stop is called.

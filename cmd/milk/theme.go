@@ -155,9 +155,9 @@ func setTheme(name string) bool {
 // Chrome colors of the original look (theme "off"), light/dark by terminal
 // background. Styles and the per-row re-tint below read the same tokens.
 var (
-	chromeHeaderBg = themeColor{dark: "#0E0E1A", light: "#1E2A4A"}
-	chromeHeaderFg = themeColor{dark: "#AABBCC", light: "#D8E4F8"}
-	chromeStatusBg = themeColor{dark: "#2B2B2B", light: "#E5E5E5"}
+	chromeHeaderBg = themeColor{dark: "#1b1b1f", light: "#e9e6df"}
+	chromeHeaderFg = themeColor{dark: "#b9b4a8", light: "#4a463e"}
+	chromeStatusBg = themeColor{dark: "#25252a", light: "#e5e3dd"}
 )
 
 // tintChrome keeps a chrome bar's own colors behind its styled spans. Spans
@@ -183,7 +183,7 @@ func rebuildStyles() {
 			Foreground(chromeHeaderFg.adaptive()).
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderBottom(true).
-			BorderForeground(adaptiveColor("#4466AA", "#334466"))
+			BorderForeground(adaptiveColor("#c4c0b6", "#3a3a41"))
 		styleStatusBar = lipgloss.NewStyle().
 			Background(chromeStatusBg.adaptive())
 		styleBorder = lipgloss.NewStyle().
@@ -296,13 +296,19 @@ func scrollThumbGlyph() string {
 	return colorize("┃", tkThumb.sgrFg())
 }
 
+// Muted tags for the original look's agent labels (no raw ANSI green/blue).
+var (
+	softSage  = themeColor{dark: "#a8b58f", light: "#5f6b3a"}
+	softSteel = themeColor{dark: "#93a9c7", light: "#3f5a80"}
+)
+
 // agentTag is the label before an agent's reply.
 func agentTag(name, role string) string {
 	if !th.modern {
 		if role == "escalation" {
-			return bold(blue(name+":")) + " "
+			return colorize(name+":", ansiBold+softSteel.sgrFg()) + " "
 		}
-		return bold(green(name+":")) + " "
+		return colorize(name+":", ansiBold+softSage.sgrFg()) + " "
 	}
 	return "\n" + colorize(strings.ToUpper(name), ansiBold+tkAccent.sgrFg()) + dim(" · "+strings.ToUpper(role)) + softRule() + "\n"
 }

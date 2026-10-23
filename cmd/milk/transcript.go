@@ -480,19 +480,22 @@ func writeSeedTurn(b *strings.Builder, st *interactiveState, t session.Turn) {
 		if text == "" {
 			return
 		}
-		b.WriteString(promptLabel(st) + colorizeTokens(text) + "\n")
+		b.WriteString(userEcho(promptLabel(st), colorizeTokens(text)))
 	case session.RoleAssistant:
 		if text == "" {
 			return
 		}
 		name := t.AgentName
-		paint := green
+		role := "primary"
 		if t.Agent == session.AgentEscalation {
-			paint = blue
+			role = "escalation"
 		}
 		if name == "" {
 			name = string(t.Agent)
 		}
-		b.WriteString(bold(paint(name+":")) + " " + text + "\n\n")
+		b.WriteString(agentTag(name, role) + text + "\n")
+		if !th.modern {
+			b.WriteByte('\n')
+		}
 	}
 }
