@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/sgr"
@@ -185,7 +185,6 @@ func (m *model) armToastTick() tea.Cmd {
 	gen := m.toastGen
 	return tea.Tick(delay, func(time.Time) tea.Msg { return toastTickMsg{gen: gen} })
 }
-
 
 // toastContent builds the styled time + message + slash-command hint for one
 // toast, truncating the free-form message so the whole thing fits within

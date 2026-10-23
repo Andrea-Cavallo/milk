@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/livebuf"

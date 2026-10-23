@@ -293,7 +293,6 @@ func (m *model) panelAltBackground(region panelRegion) bool {
 	return false
 }
 
-
 // panelOffsetPtr returns a pointer to the model's persisted scroll offset for
 // the given side-panel region, or nil for regionNone/an unknown region.
 // Returning a pointer (rather than a value + a separate setter) lets wheel

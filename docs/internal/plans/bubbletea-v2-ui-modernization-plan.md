@@ -48,7 +48,7 @@ Branch: `claude/bubbletea-ui-modernization-kyrnje`
 
 Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its own.
 
-1. **v2 core migration.** Switch imports to `charm.land/*/v2`. `View()` returns `tea.View`. `KeyMsg` to `KeyPressMsg`, `MouseMsg` split by action, `PasteMsg`. Move alt screen and mouse mode into the view. Update `go.mod`, keep tests green. Files: `repl.go`, `layout.go`, `attach.go`, `commands.go`, `workflow_cmd.go`, `bg_agent_wizard.go`, `direct_bash.go`, panels.
+1. **v2 core migration (done).** Switch imports to `charm.land/*/v2`. `View()` returns `tea.View`. `KeyMsg` to `KeyPressMsg`, `MouseMsg` split by action, `PasteMsg`. Move alt screen and mouse mode into the view. Update `go.mod`, keep tests green. Files: `repl.go`, `layout.go`, `attach.go`, `commands.go`, `workflow_cmd.go`, `bg_agent_wizard.go`, `direct_bash.go`, panels.
 2. **Theme.** `BackgroundColorMsg` plus `LightDark` tokens in `theme.go`. Remove the `HasDarkBackground()` calls.
 3. **Terminal integration.** Focus/blur gating of ticks, `SetClipboard`, `SetWindowTitle`.
 4. **Overlays.** Toasts and permission prompt on layers. Optional command palette behind a shortcut.
@@ -62,3 +62,8 @@ Each phase builds, passes `go vet`, `go test ./cmd/milk/...` and ships on its ow
 - ACP and CLI hosts are untouched: only `cmd/milk` TUI files change.
 - Update `CLAUDE.md` tech stack and ADRs where behavior changes (renderer, theme detection, toasts).
 - Manual check per phase on Windows Terminal (PowerShell), plus one Linux terminal.
+
+## Status
+
+- Phase 1 done: imports moved to `charm.land/*/v2`, `View()` returns `tea.View` with the alt screen declared, `KeyPressMsg` and `PasteMsg` handled, `mouse.go` adapts the v2 mouse messages, `AdaptiveColor` replaced by `adaptiveColor()`, textarea and viewport on the v2 API. `go vet` and `go test ./...` pass, and a pty smoke run starts, renders and answers keys.
+- Left on purpose for later phases: mouse modes are still written as raw escapes (`enableMouseTracking`), the terminal background is still queried once at startup (`hasDarkBackground`), `glamour` still pulls Lip Gloss v1 transitively.

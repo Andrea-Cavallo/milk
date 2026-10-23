@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
 	"github.com/aymanbagabas/go-osc52/v2"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/session"

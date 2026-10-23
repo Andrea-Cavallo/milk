@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"golang.org/x/term"
 )
 
 // Switchable TUI themes. "off" (the default) is the original look, byte for
@@ -23,12 +26,35 @@ type themeColor struct{ dark, light string }
 func fixed(hex string) themeColor { return themeColor{hex, hex} }
 
 // adaptive is the lipgloss colour for style-based rendering.
-func (c themeColor) adaptive() lipgloss.AdaptiveColor {
-	return lipgloss.AdaptiveColor{Light: c.light, Dark: c.dark}
+func (c themeColor) adaptive() color.Color {
+	return adaptiveColor(c.light, c.dark)
+}
+
+var (
+	darkBackgroundOnce sync.Once
+	darkBackground     bool
+)
+
+// hasDarkBackground reports whether the terminal background is dark. The
+// query runs once, before the program takes over the terminal, and only when
+// both ends are a terminal: a piped stdin (ACP, scripts) must never be read.
+func hasDarkBackground() bool {
+	darkBackgroundOnce.Do(func() {
+		darkBackground = true
+		if term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
+			darkBackground = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+		}
+	})
+	return darkBackground
+}
+
+// adaptiveColor picks the light or dark hex by the terminal background.
+func adaptiveColor(light, dark string) color.Color {
+	return lipgloss.LightDark(hasDarkBackground())(lipgloss.Color(light), lipgloss.Color(dark))
 }
 
 func (c themeColor) pick() string {
-	if lipgloss.HasDarkBackground() {
+	if hasDarkBackground() {
 		return c.dark
 	}
 	return c.light
@@ -113,22 +139,22 @@ func setTheme(name string) bool {
 func rebuildStyles() {
 	if !th.modern {
 		styleHeaderBar = lipgloss.NewStyle().
-			Background(lipgloss.AdaptiveColor{Light: "#1E2A4A", Dark: "#0E0E1A"}).
-			Foreground(lipgloss.AdaptiveColor{Light: "#D8E4F8", Dark: "#AABBCC"}).
+			Background(adaptiveColor("#1E2A4A", "#0E0E1A")).
+			Foreground(adaptiveColor("#D8E4F8", "#AABBCC")).
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderBottom(true).
-			BorderForeground(lipgloss.AdaptiveColor{Light: "#4466AA", Dark: "#334466"})
+			BorderForeground(adaptiveColor("#4466AA", "#334466"))
 		styleStatusBar = lipgloss.NewStyle().
-			Background(lipgloss.AdaptiveColor{Light: "#E5E5E5", Dark: "#2B2B2B"})
+			Background(adaptiveColor("#E5E5E5", "#2B2B2B"))
 		styleBorder = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderTop(true).
-			BorderForeground(lipgloss.AdaptiveColor{Light: "#AAA", Dark: "#555"})
+			BorderForeground(adaptiveColor("#AAA", "#555"))
 		stylePanelTitle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#555", Dark: "#888"}).
+			Foreground(adaptiveColor("#555", "#888")).
 			Bold(true)
 		stylePanelSection = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#777", Dark: "#666"})
+			Foreground(adaptiveColor("#777", "#666"))
 		return
 	}
 	styleHeaderBar = lipgloss.NewStyle().
@@ -196,7 +222,7 @@ func panelAltBackgroundCode() string {
 	if th.modern {
 		return tkRaised.sgrBg()
 	}
-	if lipgloss.HasDarkBackground() {
+	if hasDarkBackground() {
 		return "\033[48;2;24;24;28m"
 	}
 	return "\033[48;2;236;236;239m"
@@ -209,7 +235,7 @@ func toastBackgroundCode() string {
 	if th.modern {
 		return tkToast.sgrBg()
 	}
-	if lipgloss.HasDarkBackground() {
+	if hasDarkBackground() {
 		return "\033[48;2;26;38;58m" // #1A263A
 	}
 	return "\033[48;2;217;228;245m" // #D9E4F5

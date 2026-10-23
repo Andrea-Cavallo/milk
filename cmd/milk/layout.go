@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/creack/pty"
 )
 
@@ -27,7 +27,7 @@ const viewportRebuildThrottle = 33 * time.Millisecond
 // this, the user would see only the attach buffer and the status bar's
 // "[allow?]" hint, with no way to read what they're actually being asked.
 // Key routing already gives every pending-prompt handler priority over
-// handleAttachKey (see Update's tea.KeyMsg case); this keeps what's
+// handleAttachKey (see Update's tea.KeyPressMsg case); this keeps what's
 // *rendered* consistent with what keys actually do. m.attached itself is
 // left untouched — once the prompt resolves, the attach view reappears
 // exactly where it was, since nothing here ever calls detachAttach.
@@ -49,7 +49,7 @@ func (m *model) attachActive() bool {
 
 // hasPendingPrompt reports whether some pending prompt/wizard needs the
 // user's direct attention right now — the same set of fields Update's
-// tea.KeyMsg case checks, in the same "needs a real decision" spirit, kept
+// tea.KeyPressMsg case checks, in the same "needs a real decision" spirit, kept
 // as one place both key routing's implicit precedence (each check simply
 // sits before the attach check) and rendering (activeViewport) can agree
 // on what counts as "something more urgent than attach is going on."
@@ -212,12 +212,12 @@ func (m *model) syncLayout() {
 	vw := m.vpWidth()
 	vpH := m.viewportHeight()
 	atBottom := m.vp.AtBottom()
-	if m.vp.Width != vw {
-		m.vp.Width = vw
+	if m.vp.Width() != vw {
+		m.vp.SetWidth(vw)
 		m.colorizeForce = true // width changed — rewrap and re-colorize
 	}
-	if m.vp.Height != vpH {
-		m.vp.Height = vpH
+	if m.vp.Height() != vpH {
+		m.vp.SetHeight(vpH)
 	}
 	// The textarea is rendered as content inside the viewport (see
 	// setViewportContent), so it must wrap at the same width the viewport
@@ -299,7 +299,7 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	vw := m.vpWidth()
 	vpH := m.viewportHeight()
 	if !m.ready {
-		m.vp = viewport.New(vw, vpH)
+		m.vp = viewport.New(viewport.WithWidth(vw), viewport.WithHeight(vpH))
 		m.ready = true
 		for _, w := range m.startupWarnings {
 			m.appendTranscript(yellow("config warning: ") + w + "\n")
@@ -310,8 +310,8 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		m.vp.GotoBottom()
 	} else {
 		atBottom := m.vp.AtBottom()
-		m.vp.Width = vw
-		m.vp.Height = vpH
+		m.vp.SetWidth(vw)
+		m.vp.SetHeight(vpH)
 		m.refreshPrompt()
 		m.setViewportContent()
 		if atBottom {
@@ -360,7 +360,7 @@ func (m *model) renderSeparator(h int) string {
 
 	var thumbTop, thumbBot int
 	if scrollable {
-		thumbTop, thumbBot = scrollThumb(h, total, vp.YOffset)
+		thumbTop, thumbBot = scrollThumb(h, total, vp.YOffset())
 	}
 	for i := range h {
 		if scrollable && i >= thumbTop && i <= thumbBot {
@@ -372,7 +372,15 @@ func (m *model) renderSeparator(h int) string {
 	return strings.Join(rows, "\n")
 }
 
-func (m model) View() string {
+// View renders the screen. Terminal modes (alt screen) are declared here, not
+// requested with commands, so the renderer owns their lifecycle.
+func (m model) View() tea.View {
+	v := tea.NewView(m.viewString())
+	v.AltScreen = true
+	return v
+}
+
+func (m model) viewString() string {
 	if !m.ready {
 		return ""
 	}

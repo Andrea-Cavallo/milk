@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
@@ -705,7 +705,7 @@ func (m model) handleSetupCmd(arg string) (tea.Model, tea.Cmd) {
 }
 
 // handleTelegramSetupKey handles keypresses during the /setup telegram wizard.
-func (m model) handleTelegramSetupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleTelegramSetupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.pendingTelegramSetup = nil
@@ -969,7 +969,7 @@ func (m model) handleMCPCmd(arg string) (model, tea.Cmd) {
 
 // handlePathPasteKey handles keypresses while pendingPathPaste is set.
 // "y"/"Y"/Enter → attach the file; "n"/"N"/Esc/Ctrl+C → insert as plain text.
-func (m model) handlePathPasteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handlePathPasteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	path := m.pendingPathPaste
 	m.pendingPathPaste = ""
 
@@ -1542,7 +1542,7 @@ func forgetCandidateList(candidates []memory.Percept) string {
 }
 
 // handleForgetKey handles keypresses while a /forget confirmation is pending.
-func (m model) handleForgetKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleForgetKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.pendingForget = nil
@@ -1615,7 +1615,7 @@ func (m model) resolveForget(answer string) model {
 // handleSearchKey handles keypresses while ctrl+r search is active.
 // Printable chars extend the query; ctrl+r searches again (older);
 // backspace shrinks the query; enter/esc/ctrl+c accept and exit search.
-func (m model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+r":
 		m.searchForward = false

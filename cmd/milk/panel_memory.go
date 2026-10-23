@@ -5,7 +5,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	rw "github.com/mattn/go-runewidth"
 	"github.com/scoutme/milk/internal/memory"
 )
@@ -29,11 +29,11 @@ const recentThreshold = 60 * time.Second
 
 var (
 	stylePanelTitle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#555", Dark: "#888"}).
+			Foreground(adaptiveColor("#555", "#888")).
 			Bold(true)
 
 	stylePanelSection = lipgloss.NewStyle().
-				Foreground(lipgloss.AdaptiveColor{Light: "#777", Dark: "#666"})
+				Foreground(adaptiveColor("#777", "#666"))
 )
 
 // renderMemoryPanel returns a vertical panel string of exactly h lines and
