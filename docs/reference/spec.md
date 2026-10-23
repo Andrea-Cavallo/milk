@@ -171,7 +171,7 @@ and, for ACP integration specifically, [docs/reference/acp-integration.md](acp-i
 
 ### Interactive mode
 
-`milk` with no prompt argument starts a REPL built on charmbracelet/bubbletea. The input prompt uses `❯` as the prefix. The status bar reflects the current routing state and active agent.
+`milk` with no prompt argument starts a REPL built on charmbracelet/bubbletea. The input prompt uses `❯` as the prefix. The status bar reflects the current routing state and active agent. The header line shows the logo, the tagline, the **running version** (`github.com/scoutme/milk v0.7.2  sess:…  /help` — bold against the dim identity group, yellow `dev` for builds without version metadata), the session token/cache totals, and a `/help` hint; on narrow terminals the right group degrades to `v…  sess:…  /help`, keeping the version visible (the CLI equivalent is `milk --version`, ACP clients get it from `initialize`'s `implementation.version`).
 
 **Slash commands:** `/escalate`, `/primary`, `/sessions`, `/new`, `/clear`, `/resume`, `/drop`, `/paste`, `/skip-permissions`, `/agent`, `/colorize`, `/think`, `/need`, `/workflow`, `/config`, `/init`, `/open`, `/update`, `/restart`, `/interrupt`, `/notifications`, `/help`, `/exit` (`/list` is a deprecated hidden alias of `/sessions`, kept one release)
 

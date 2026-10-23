@@ -48,10 +48,19 @@ func (m *model) headerBar() string {
 		sessLabel += fmt.Sprintf(" cache:%d%%", hitPct)
 	}
 	const repoURL = "github.com/scoutme/milk"
-	rightFull := dim(repoURL + "  " + sessLabel + "  /help")
-	rightFulPlain := repoURL + "  " + sessLabel + "  /help"
-	rightShort := dim(sessLabel + "  /help")
-	rightShortPlain := sessLabel + "  /help"
+	// The running version rides the header's identity group: bold against
+	// the dim context so it reads at a glance, yellow for metadata-less
+	// source builds ("dev" is a warning, not a release). It survives the
+	// narrow-width degradation below — a version only visible on wide
+	// terminals is a version bug reports can't quote.
+	vStyled := bold(version)
+	if version == "dev" {
+		vStyled = boldYellow(version)
+	}
+	rightFull := dim(repoURL+" ") + vStyled + dim("  "+sessLabel+"  /help")
+	rightFulPlain := repoURL + " " + version + "  " + sessLabel + "  /help"
+	rightShort := vStyled + dim("  "+sessLabel+"  /help")
+	rightShortPlain := version + "  " + sessLabel + "  /help"
 
 	logoPlain := ansi.Strip(logo)
 	available := m.width - 2
