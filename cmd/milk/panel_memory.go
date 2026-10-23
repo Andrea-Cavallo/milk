@@ -27,13 +27,10 @@ type sessionBricks struct {
 
 const recentThreshold = 60 * time.Second
 
+// Panel title/section styles are filled by rebuildStyles (theme.go).
 var (
-	stylePanelTitle = lipgloss.NewStyle().
-			Foreground(adaptiveColor("#555", "#888")).
-			Bold(true)
-
-	stylePanelSection = lipgloss.NewStyle().
-				Foreground(adaptiveColor("#777", "#666"))
+	stylePanelTitle   lipgloss.Style
+	stylePanelSection lipgloss.Style
 )
 
 // renderMemoryPanel returns a vertical panel string of exactly h lines and

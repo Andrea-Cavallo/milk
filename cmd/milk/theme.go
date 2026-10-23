@@ -7,10 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 
 	"charm.land/lipgloss/v2"
-	"golang.org/x/term"
 )
 
 // Switchable TUI themes. "off" (the default) is the original look, byte for
@@ -30,23 +28,30 @@ func (c themeColor) adaptive() color.Color {
 	return adaptiveColor(c.light, c.dark)
 }
 
-var (
-	darkBackgroundOnce sync.Once
-	darkBackground     bool
-)
+// darkBackground tracks the terminal background. It defaults to dark and is
+// corrected when the terminal answers tea.RequestBackgroundColor.
+var darkBackground = true
 
-// hasDarkBackground reports whether the terminal background is dark. The
-// query runs once, before the program takes over the terminal, and only when
-// both ends are a terminal: a piped stdin (ACP, scripts) must never be read.
-func hasDarkBackground() bool {
-	darkBackgroundOnce.Do(func() {
-		darkBackground = true
-		if term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
-			darkBackground = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
-		}
-	})
-	return darkBackground
+func hasDarkBackground() bool { return darkBackground }
+
+// setDarkBackground records a detected background and reports whether it
+// changed, so callers rebuild the colors only when needed.
+func setDarkBackground(isDark bool) bool {
+	if darkBackground == isDark {
+		return false
+	}
+	darkBackground = isDark
+	return true
 }
+
+// refreshThemeColors re-resolves everything derived from the background.
+func refreshThemeColors() {
+	applyThinkSurface()
+	pulseColors = buildPulse()
+	rebuildStyles()
+}
+
+func init() { rebuildStyles() }
 
 // adaptiveColor picks the light or dark hex by the terminal background.
 func adaptiveColor(light, dark string) color.Color {
@@ -128,15 +133,16 @@ func setTheme(name string) bool {
 	th = t
 	tkBase, tkRaised, tkToast, tkHairline, tkThumb = t.base, t.raised, t.toast, t.hairline, t.thumb
 	tkText, tkMuted, tkAccent, tkAccentLo, tkThink = t.text, t.muted, t.accent, t.accentLo, t.think
-	applyThinkSurface()
-	pulseColors = buildPulse()
-	rebuildStyles()
+	refreshThemeColors()
 	return true
 }
 
 // rebuildStyles reassigns the lipgloss styles owned by the chrome. For "off"
 // these are the original definitions.
 func rebuildStyles() {
+	styleStatusBarPerm = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#1A1A00")).
+		Background(adaptiveColor("#FFD700", "#B8860B"))
 	if !th.modern {
 		styleHeaderBar = lipgloss.NewStyle().
 			Background(adaptiveColor("#1E2A4A", "#0E0E1A")).

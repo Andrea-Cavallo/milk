@@ -189,7 +189,7 @@ Default behavior: resume most recent session for cwd. `--new` creates a fresh se
 ## Tech stack
 
 - Go 1.26+ (per `go.mod`), Cobra CLI
-- Bubble Tea v2 (`charm.land/bubbletea/v2`), Bubbles v2 (`viewport`, `textarea`), Lip Gloss v2 (see `docs/internal/plans/bubbletea-v2-ui-modernization-plan.md`). Keys are `tea.KeyPressMsg`, pastes are `tea.PasteMsg`, `View()` returns `tea.View` (alt screen declared there); `mouse.go` flattens v2 mouse messages into one `mouseEvent`; terminal background comes from `hasDarkBackground()` in `theme.go`
+- Bubble Tea v2 (`charm.land/bubbletea/v2`), Bubbles v2 (`viewport`, `textarea`), Lip Gloss v2 (see `docs/internal/plans/bubbletea-v2-ui-modernization-plan.md`). Keys are `tea.KeyPressMsg`, pastes are `tea.PasteMsg`, `View()` returns `tea.View` (alt screen declared there); `mouse.go` flattens v2 mouse messages into one `mouseEvent`; terminal background arrives as `tea.BackgroundColorMsg` (requested in `Init`) and drives `hasDarkBackground()`/`refreshThemeColors()` in `theme.go`; chrome styles are only built by `rebuildStyles()`
 - Local agent: OpenAI-compatible inference API **or** AWS Bedrock Converse API (native, not OpenAI-compat)
 - `claude` CLI binary (Claude Code) — configured as `provider: "claude-cli"` in `agents`
 - OpenTelemetry Go SDK with custom file exporters

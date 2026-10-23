@@ -701,22 +701,13 @@ func permAskPrompt(tool, summary string) string {
 
 // --- Styles ---
 
+// Chrome styles depend on the terminal background; rebuildStyles (theme.go)
+// fills them at startup and again when the background is detected.
 var (
-	styleHeaderBar = lipgloss.NewStyle().
-			Background(adaptiveColor("#1E2A4A", "#0E0E1A")).
-			Foreground(adaptiveColor("#D8E4F8", "#AABBCC")).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderBottom(true).
-			BorderForeground(adaptiveColor("#4466AA", "#334466"))
-	styleStatusBar = lipgloss.NewStyle().
-			Background(adaptiveColor("#E5E5E5", "#2B2B2B"))
-	styleStatusBarPerm = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#1A1A00")).
-				Background(adaptiveColor("#FFD700", "#B8860B"))
-	styleBorder = lipgloss.NewStyle().
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderTop(true).
-			BorderForeground(adaptiveColor("#AAA", "#555"))
+	styleHeaderBar     lipgloss.Style
+	styleStatusBar     lipgloss.Style
+	styleStatusBarPerm lipgloss.Style
+	styleBorder        lipgloss.Style
 )
 
 // --- model ---
@@ -2126,6 +2117,7 @@ func (m *model) welcomeScreen() string {
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textarea.Blink,
+		tea.RequestBackgroundColor,
 	}
 	if m.panelMemory {
 		cmds = append(cmds, memoryPollTick())
@@ -3090,6 +3082,16 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.appendTranscript(fmt.Sprintf("%s error: %v\n", milkTag(), msg.err))
+		return m, nil
+
+	case tea.BackgroundColorMsg:
+		if setDarkBackground(msg.IsDark()) {
+			refreshThemeColors()
+			m.colorizeForce = true
+			m.turnColorCache = nil
+			m.turnRawCache = nil
+			m.viewportDirty = true
+		}
 		return m, nil
 
 	case tea.PasteMsg:
