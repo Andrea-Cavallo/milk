@@ -106,34 +106,45 @@ func TestPanelSlide_ClosingShiftsLeftPanelsWithAGlide(t *testing.T) {
 	}
 }
 
-// TestPanelSlide_PureOpenDoesNotGlideNeighbours pins the deliberate gate:
-// a plain open animates only the opening panel (neighbours shifting left keep
-// their instant reflow) — glides are a close-time behaviour.
-func TestPanelSlide_PureOpenDoesNotGlideNeighbours(t *testing.T) {
+// TestPanelSlide_OpenGlidesLeftNeighbours: the layout is right-anchored, so
+// opening a panel shifts every open panel left of it one column LEFT — those
+// must glide into position exactly like they do on close, not teleport.
+func TestPanelSlide_OpenGlidesLeftNeighbours(t *testing.T) {
 	withAnimations(t)
+	withTTY(t)
 	m := layoutTestModel(t, 140, 40)
 	m.panelMemory = true
 	m.syncLayout()
 
 	prev := m
-	m.panelTasks = true
+	m.panelTasks = true // renders right of memory → memory shifts one column left
 	m.syncLayout()
 	if cmd := m.trackAnimations(&prev); cmd == nil {
 		t.Fatal("opening a panel must start the slide")
 	}
-	for region := range m.anim.panels {
-		if region != regionTasks {
-			t.Errorf("pure open must only animate the opening panel, got an entry for %v", region)
-		}
+	opener, ok := m.anim.panels[regionTasks]
+	if !ok || opener.move || opener.ghost != nil {
+		t.Fatalf("the opening panel keeps its in-slot slide, got %+v", opener)
 	}
-	if _, ok := m.anim.panels[regionTasks]; !ok {
-		t.Fatal("opening panel entry missing")
+	mp, ok := m.anim.panels[regionMemory]
+	if !ok || !mp.move || mp.travel != -panelSlotWidth || mp.ghost == nil {
+		t.Fatalf("memory must glide one column left (travel=%d), got %+v", -panelSlotWidth, mp)
+	}
+	if mp.ghostX != prev.panelX(regionMemory) {
+		t.Errorf("glide starts from memory's old column %d, got %d", prev.panelX(regionMemory), mp.ghostX)
+	}
+	if !m.anim.isMoving(regionMemory) {
+		t.Error("memory's static slot must be blank while it glides")
+	}
+	m = runTicks(t, m)
+	if len(m.anim.panels) != 0 {
+		t.Error("both slides must settle")
 	}
 }
 
-// TestPanelSlide_ExitSettlesQuickly pins the retuned springs (14 Hz, looser
-// settle thresholds): the whole exit must be over in well under a second of
-// frames — the old 9 Hz spring with 0.01/0.01 snap thresholds crawled.
+// TestPanelSlide_ExitSettlesQuickly pins the retuned springs (frequency 24,
+// settle 0.04 / snap 0.12): the whole exit must be over in well under a
+// second of frames — the old 9 / 0.01 / 0.01 combination crawled.
 func TestPanelSlide_ExitSettlesQuickly(t *testing.T) {
 	withAnimations(t)
 	withTTY(t)

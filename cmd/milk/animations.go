@@ -21,9 +21,9 @@ import (
 //     path animate without touching their call sites. The layout changes at
 //     once; the panel's content slides within its slot (open), shrinks out as
 //     an overlay ghost over the freed columns (close — any panel, not just the
-//     right-most), and panels left of a closing one glide one column with a
-//     full-width ghost instead of teleporting, so no frame re-wraps the
-//     transcript.
+//     right-most), and the panels left of a toggled panel glide one column
+//     with a full-width ghost (right on close, left on open) instead of
+//     teleporting, so no frame re-wraps the transcript.
 //   - scroll: wheel ticks move a target, a critically damped spring glides
 //     the viewport offset to it.
 //
@@ -162,30 +162,20 @@ func (m *model) stepScroll(a *animState) {
 // trackAnimations starts a slide for every panel whose visibility or column
 // differs between the model before a message and after it:
 //
-//   - opening: content slides in inside the reserved slot (as before);
+//   - opening: content slides in inside the reserved slot;
 //   - closing: a ghost of the last frame shrinks out — wherever the panel is,
 //     not only the right-most one (its right edge never crosses the next
 //     panel's left edge, so neighbours are never overwritten);
-//   - moved: the layout is right-anchored, so closing a panel shifts every
-//     panel LEFT of it one column rightward. Those panels glide to their new
-//     column as full-width ghosts while their static slot renders blank —
-//     without this they teleport at t=0 and the close reads as a jump.
-//
-// Glides only follow a close: a plain open still animates just the opening
-// panel (existing behaviour), so left-shifting neighbours on open keep their
-// instant reflow.
+//   - column changed: the layout is right-anchored, so a toggle shifts every
+//     panel left of it by one column (right on close, left on open). Those
+//     panels glide to their new column as full-width ghosts while their
+//     static slot renders blank — without this they teleport at t=0 and the
+//     toggle reads as a jump.
 func (m *model) trackAnimations(prev *model) tea.Cmd {
 	if !animationsEnabled || m.height <= 0 {
 		return nil
 	}
 	a := m.animState()
-	hadClose := false
-	for _, region := range panelRenderOrder {
-		if prev.panelOpen(region) && !m.panelOpen(region) {
-			hadClose = true
-			break
-		}
-	}
 	changed := false
 	for _, region := range panelRenderOrder {
 		was, is := prev.panelOpen(region), m.panelOpen(region)
@@ -205,7 +195,7 @@ func (m *model) trackAnimations(prev *model) tea.Cmd {
 				ghostX: prev.panelX(region),
 			}
 			changed = true
-		case was && is && hadClose:
+		case was && is:
 			oldX, newX := prev.panelX(region), m.panelX(region)
 			if oldX != newX {
 				a.panels[region] = &panelAnim{
@@ -299,9 +289,10 @@ func slideRight(block string, shift int) string {
 
 // overlayPanelTransitions draws the ghosts of panels in flight: closers
 // shrinking out toward their right edge, and movers translating full-width
-// from their old column to the new one. Entries created on the same frame
-// share one spring, so touching edges round identically — the layers compose
-// without seams.
+// from their old column to the new one in either direction. Entries created
+// on the same frame share one spring; a leftward glide measures its offset
+// from the destination with the same rounding shape the opening slot's
+// slide-in uses, so the two layers always fall on the same seam column.
 func (m *model) overlayPanelTransitions(block string) string {
 	if m.anim == nil {
 		return block
@@ -314,7 +305,12 @@ func (m *model) overlayPanelTransitions(block string) string {
 		}
 		if pa.move {
 			pos := math.Min(math.Max(pa.pos, 0), 1)
-			x := pa.ghostX + int(math.Round(pos*float64(pa.travel)))
+			var x int
+			if pa.travel >= 0 {
+				x = pa.ghostX + int(math.Round(pos*float64(pa.travel)))
+			} else {
+				x = pa.ghostX + pa.travel + int(math.Round((1-pos)*float64(-pa.travel)))
+			}
 			layers = append(layers, overlayLayer{content: strings.Join(pa.ghost, "\n"), x: x})
 			continue
 		}
