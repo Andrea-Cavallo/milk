@@ -11,31 +11,30 @@ import (
 	"github.com/scoutme/milk/internal/sgr"
 )
 
+// cursorSave is an extracted textarea cursor cell: its position plus the
+// full escape text that will be re-injected after the input lines are
+// re-written from stripped text.
+type cursorSave struct {
+	lineIdx   int
+	visualCol int // 0-based visual column of the cursor character
+	escape    string
+}
+
 func (m *model) colorizeInput(view string) string {
 	if !isTTY {
 		return view
 	}
 
-	// The textarea cursor is rendered as \x1b[7m<char>\x1b[m (reverse-video).
-	// Extract it before colorizing so ANSI width math stays correct, then
-	// re-inject at the same visual column afterward.
-	type cursorSave struct {
-		lineIdx   int
-		visualCol int // 0-based visual column of the cursor character
-		escape    string
-	}
+	// The textarea cursor is one reverse-attributed cell: Bubble Tea v1
+	// rendered "\x1b[7m<char>\x1b[m"; v2 renders an SGR run whose attribute
+	// list contains the standalone reverse attribute 7 (e.g.
+	// "\x1b[7;37m<char>\x1b[m"). Locate the first such cell, remember its
+	// position and full escape text, then strip it so the ANSI width math
+	// below stays correct; it is re-injected after the line rewrites (which
+	// rebuild lines from stripped text and would otherwise flatten it).
 	var cursor *cursorSave
 
-	cursorRE := "\x1b[7m"
-	if idx := strings.Index(view, cursorRE); idx >= 0 {
-		// Find the full cursor sequence: \x1b[7m<char>\x1b[m
-		end := strings.Index(view[idx:], "\x1b[m")
-		var seq string
-		if end >= 0 {
-			seq = view[idx : idx+end+3] // include trailing \x1b[m
-		} else {
-			seq = view[idx:]
-		}
+	if idx, seq, ok := findReverseCell(view); ok {
 		// Determine which line and visual column the cursor sits on.
 		before := view[:idx]
 		lineIdx := strings.Count(before, "\n")
@@ -57,7 +56,10 @@ func (m *model) colorizeInput(view string) string {
 	line0Plain := ansi.Strip(lines[0])
 	promptEnd := strings.Index(line0Plain, "❯ ")
 	if promptEnd < 0 {
-		return view
+		// No input prompt on line 0 (an ask/permission row replaced it): the
+		// extracted cursor must not be lost on this path either.
+		injectReverseCell(lines, cursor)
+		return strings.Join(lines, "\n")
 	}
 	// indentVisual is the number of visible columns up to and including "❯ ".
 	indentVisual := promptEnd + 2
@@ -172,44 +174,109 @@ func (m *model) colorizeInput(view string) string {
 	}
 
 	// Re-inject the cursor escape at the saved visual column.
-	if cursor != nil && cursor.lineIdx < len(lines) {
-		line := lines[cursor.lineIdx]
-		targetCol := cursor.visualCol
-		byteOff := 0
-		vis := 0
-		for byteOff < len(line) {
-			if line[byteOff] == '\x1b' {
-				// skip ANSI escape sequence
-				j := byteOff + 1
-				for j < len(line) && line[j] != 'm' {
-					j++
-				}
-				if j < len(line) {
-					j++
-				}
-				byteOff = j
-				continue
-			}
-			if vis == targetCol {
-				break
-			}
-			// Advance by one full UTF-8 rune.
-			_, runeSize := utf8.DecodeRuneInString(line[byteOff:])
-			vis++
-			byteOff += runeSize
-		}
-		// Wrap the rune at byteOff with reverse-video on/off.
-		// Use \x1b[27m (reverse off) instead of \x1b[m (full reset) so active
-		// color codes (e.g. yellow on a slash command) remain in effect after
-		// the cursor character.
-		if byteOff < len(line) {
-			_, runeSize := utf8.DecodeRuneInString(line[byteOff:])
-			ch := line[byteOff : byteOff+runeSize]
-			lines[cursor.lineIdx] = line[:byteOff] + "\x1b[7m" + ch + "\x1b[27m" + line[byteOff+runeSize:]
-		}
-	}
+	injectReverseCell(lines, cursor)
 
 	return strings.Join(lines, "\n")
+}
+
+// injectReverseCell wraps the rune at the cursor's saved visual column with
+// reverse video; a no-op when there is no saved cursor (nothing was extracted)
+// or when the cursor's line is gone.
+func injectReverseCell(lines []string, cursor *cursorSave) {
+	if cursor == nil || cursor.lineIdx >= len(lines) {
+		return
+	}
+	line := lines[cursor.lineIdx]
+	targetCol := cursor.visualCol
+	byteOff := 0
+	vis := 0
+	for byteOff < len(line) {
+		if line[byteOff] == '\x1b' {
+			// skip ANSI escape sequence
+			j := byteOff + 1
+			for j < len(line) && line[j] != 'm' {
+				j++
+			}
+			if j < len(line) {
+				j++
+			}
+			byteOff = j
+			continue
+		}
+		if vis == targetCol {
+			break
+		}
+		// Advance by one full UTF-8 rune.
+		_, runeSize := utf8.DecodeRuneInString(line[byteOff:])
+		vis++
+		byteOff += runeSize
+	}
+	// Wrap the rune at byteOff with reverse-video on/off.
+	// Use \x1b[27m (reverse off) instead of \x1b[m (full reset) so active
+	// color codes (e.g. yellow on a slash command) remain in effect after
+	// the cursor character.
+	if byteOff < len(line) {
+		_, runeSize := utf8.DecodeRuneInString(line[byteOff:])
+		ch := line[byteOff : byteOff+runeSize]
+		lines[cursor.lineIdx] = line[:byteOff] + "\x1b[7m" + ch + "\x1b[27m" + line[byteOff+runeSize:]
+	}
+}
+
+// findReverseCell returns the offset and full escape text of the first
+// reverse-attributed cell in s: an SGR run containing the standalone
+// attribute 7, one character, and a closing SGR run — the exact shape both
+// Bubble Tea v1 ("\x1b[7m<char>\x1b[m") and v2 ("\x1b[7;37m<char>\x1b[m",
+// reverse plus a foreground colour) use for the virtual cursor.
+func findReverseCell(s string) (int, string, bool) {
+	// sgr parses an SGR escape starting at index from (s[from] == ESC).
+	sgr := func(from int) (attrs []string, end int, ok bool) {
+		if from+2 >= len(s) || s[from] != '\x1b' || s[from+1] != '[' {
+			return nil, 0, false
+		}
+		j := from + 2
+		for j < len(s) && (s[j] == ';' || (s[j] >= '0' && s[j] <= '9')) {
+			j++
+		}
+		if j >= len(s) || s[j] != 'm' {
+			return nil, 0, false
+		}
+		return strings.Split(s[from+2:j], ";"), j + 1, true
+	}
+	for i := 0; i+2 < len(s); i++ {
+		if s[i] != '\x1b' {
+			continue
+		}
+		attrs, seqEnd, ok := sgr(i)
+		if !ok {
+			continue
+		}
+		hasReverse := false
+		for _, a := range attrs {
+			if a == "7" {
+				hasReverse = true
+				break
+			}
+		}
+		if !hasReverse {
+			continue
+		}
+		// The cell is one character followed by a closing SGR run.
+		if seqEnd >= len(s) || s[seqEnd] == '\x1b' {
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[seqEnd:])
+		afterChar := seqEnd + size
+		if afterChar >= len(s) {
+			// Cell at the very end of the input with no closing run.
+			return i, s[i:afterChar], true
+		}
+		_, closeEnd, ok := sgr(afterChar)
+		if !ok {
+			continue
+		}
+		return i, s[i:closeEnd], true
+	}
+	return 0, "", false
 }
 
 // wrapLineIntoRows splits a logical line (as rune slice) into display rows of
