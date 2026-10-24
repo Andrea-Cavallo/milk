@@ -2029,7 +2029,7 @@ func (m *model) welcomeScreen() string {
 	escalationAvail := m.agents.escalationAvail
 
 	lines := []string{
-		pulseColors[8] + "◈" + ansiReset + " " + wordmark(),
+		wordmark(),
 		dim(taglineText()),
 		"",
 	}
