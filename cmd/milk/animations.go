@@ -16,11 +16,13 @@ import (
 // wheel scrolls with inertia. Both are pure view effects driven by one 60 fps
 // tick that runs only while something moves:
 //
-//   - panels: Update compares the open panels before and after every message
-//     (trackAnimations), so F-keys, /panel, auto-open and every other path
-//     animate without touching their call sites. The layout changes at once;
-//     the panel's content slides within its slot (open) or as an overlay
-//     ghost over the freed columns (close), so no frame re-wraps the
+//   - panels: Update compares open state and columns before and after every
+//     message (trackAnimations), so F-keys, /panel, auto-open and every other
+//     path animate without touching their call sites. The layout changes at
+//     once; the panel's content slides within its slot (open), shrinks out as
+//     an overlay ghost over the freed columns (close — any panel, not just the
+//     right-most), and panels left of a closing one glide one column with a
+//     full-width ghost instead of teleporting, so no frame re-wraps the
 //     transcript.
 //   - scroll: wheel ticks move a target, a critically damped spring glides
 //     the viewport offset to it.
@@ -28,17 +30,19 @@ import (
 // Off when stdout is not a TTY or config "animations" is false.
 
 const (
-	animFPS             = 60
-	panelSpringFreq     = 9.0
-	scrollSpringFreq    = 12.0
-	springDamping       = 1.0 // critically damped: glide, no overshoot past the content
-	springSettleDist    = 0.4
-	panelSettleDist     = 0.01
+	animFPS          = 60
+	panelSpringFreq  = 24.0 // frequency the springs treat as their rate: 24 lands an exit in ~250-300 ms, still critically damped
+	scrollSpringFreq = 12.0
+	springDamping    = 1.0 // critically damped: glide, no overshoot past the content
+	springSettleDist = 0.4
+	// Panel springs settle fast: keep the tail tiny so the last columns don't
+	// crawl (the old 0.01/0.01 thresholds made the exit read as sluggish).
+	panelSettleDist     = 0.04
 	scrollWheelLines    = 3
 	panelSlotWidth      = memoryPanelWidth // every side panel has the same slot width
 	animTickInterval    = time.Second / animFPS
 	scrollSnapVelocity  = 0.4
-	panelSnapVelocity   = 0.01
+	panelSnapVelocity   = 0.12 // ~3 columns/s of drift at the snap — invisible, and it ends the crawling tail
 	noScrollAnimOffsets = 0
 )
 
@@ -61,8 +65,10 @@ type scrollAnim struct {
 
 type panelAnim struct {
 	pos, vel, target float64
-	ghost            []string // closing panels: the last rendered rows, drawn over the freed columns
+	ghost            []string // closing: last frame over the freed columns; moving: frame at the old column
 	ghostX           int
+	move             bool // gliding to a new column (a panel closed elsewhere): full-width translate instead of a shrink-out
+	travel           int  // columns between the old and the new column
 }
 
 // animState is shared by value copies of the model (a pointer) and only
@@ -153,31 +159,64 @@ func (m *model) stepScroll(a *animState) {
 
 // --- panel slide ---
 
-// trackAnimations starts a slide for every panel whose visibility differs
-// between the model before a message and after it.
+// trackAnimations starts a slide for every panel whose visibility or column
+// differs between the model before a message and after it:
+//
+//   - opening: content slides in inside the reserved slot (as before);
+//   - closing: a ghost of the last frame shrinks out — wherever the panel is,
+//     not only the right-most one (its right edge never crosses the next
+//     panel's left edge, so neighbours are never overwritten);
+//   - moved: the layout is right-anchored, so closing a panel shifts every
+//     panel LEFT of it one column rightward. Those panels glide to their new
+//     column as full-width ghosts while their static slot renders blank —
+//     without this they teleport at t=0 and the close reads as a jump.
+//
+// Glides only follow a close: a plain open still animates just the opening
+// panel (existing behaviour), so left-shifting neighbours on open keep their
+// instant reflow.
 func (m *model) trackAnimations(prev *model) tea.Cmd {
 	if !animationsEnabled || m.height <= 0 {
 		return nil
 	}
 	a := m.animState()
+	hadClose := false
+	for _, region := range panelRenderOrder {
+		if prev.panelOpen(region) && !m.panelOpen(region) {
+			hadClose = true
+			break
+		}
+	}
 	changed := false
 	for _, region := range panelRenderOrder {
 		was, is := prev.panelOpen(region), m.panelOpen(region)
 		switch {
 		case !was && is:
 			if pa, ok := a.panels[region]; ok {
-				pa.target, pa.ghost = 1, nil // reopened while closing: reverse
+				pa.target, pa.ghost = 1, nil  // reopened while closing: reverse
+				pa.move, pa.travel = false, 0 // …and drop any stale glide
 			} else {
 				a.panels[region] = &panelAnim{target: 1}
 			}
 			changed = true
-		case was && !is && prev.isRightmostPanel(region):
+		case was && !is:
 			a.panels[region] = &panelAnim{
 				pos: 1, target: 0,
 				ghost:  strings.Split(prev.panelBlock(region, prev.viewportHeight()), "\n"),
 				ghostX: prev.panelX(region),
 			}
 			changed = true
+		case was && is && hadClose:
+			oldX, newX := prev.panelX(region), m.panelX(region)
+			if oldX != newX {
+				a.panels[region] = &panelAnim{
+					pos: 0, target: 1,
+					ghost:  strings.Split(prev.panelBlock(region, prev.viewportHeight()), "\n"),
+					ghostX: oldX,
+					move:   true,
+					travel: newX - oldX,
+				}
+				changed = true
+			}
 		}
 	}
 	if !changed {
@@ -198,21 +237,6 @@ func (m *model) panelX(region panelRegion) int {
 		}
 	}
 	return x
-}
-
-// isRightmostPanel reports whether no open panel sits right of region.
-func (m *model) isRightmostPanel(region panelRegion) bool {
-	seen := false
-	for _, r := range panelRenderOrder {
-		if r == region {
-			seen = true
-			continue
-		}
-		if seen && m.panelOpen(r) {
-			return false
-		}
-	}
-	return true
 }
 
 func (m *model) stepPanels(a *animState) {
@@ -250,6 +274,15 @@ func (a *animState) slideShift(region panelRegion) (int, bool) {
 	return shift, shift > 0
 }
 
+// isMoving reports whether a panel is mid-glide to its new column.
+func (a *animState) isMoving(region panelRegion) bool {
+	if a == nil {
+		return false
+	}
+	pa, ok := a.panels[region]
+	return ok && pa.move
+}
+
 // slideRight displaces a block shift columns to the right inside its own
 // width: blank columns on the left, the block's left part on the right.
 func slideRight(block string, shift int) string {
@@ -264,8 +297,12 @@ func slideRight(block string, shift int) string {
 	return strings.Join(lines, "\n")
 }
 
-// overlayClosingPanels draws the ghosts of panels sliding out to the right.
-func (m *model) overlayClosingPanels(block string) string {
+// overlayPanelTransitions draws the ghosts of panels in flight: closers
+// shrinking out toward their right edge, and movers translating full-width
+// from their old column to the new one. Entries created on the same frame
+// share one spring, so touching edges round identically — the layers compose
+// without seams.
+func (m *model) overlayPanelTransitions(block string) string {
 	if m.anim == nil {
 		return block
 	}
@@ -273,6 +310,12 @@ func (m *model) overlayClosingPanels(block string) string {
 	for _, region := range panelRenderOrder {
 		pa, ok := m.anim.panels[region]
 		if !ok || pa.ghost == nil {
+			continue
+		}
+		if pa.move {
+			pos := math.Min(math.Max(pa.pos, 0), 1)
+			x := pa.ghostX + int(math.Round(pos*float64(pa.travel)))
+			layers = append(layers, overlayLayer{content: strings.Join(pa.ghost, "\n"), x: x})
 			continue
 		}
 		shift := int(math.Round((1 - math.Min(math.Max(pa.pos, 0), 1)) * panelSlotWidth))
@@ -289,13 +332,30 @@ func (m *model) overlayClosingPanels(block string) string {
 }
 
 // joinPanel appends one side panel (body plus scrollbar) to the main area,
-// displaced while its slide-in runs.
+// displaced while its slide-in runs. A panel mid-glide renders its slot
+// blank: overlayPanelTransitions paints its ghost at the old column, and a
+// static copy alongside would show the panel twice.
 func (m *model) joinPanel(mainArea string, region panelRegion, h int) string {
-	block := m.panelBlock(region, h)
-	if shift, sliding := m.anim.slideShift(region); sliding {
-		block = slideRight(block, shift)
+	var block string
+	if m.anim.isMoving(region) {
+		block = blankPanelBlock(h)
+	} else {
+		block = m.panelBlock(region, h)
+		if shift, sliding := m.anim.slideShift(region); sliding {
+			block = slideRight(block, shift)
+		}
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, mainArea, block)
+}
+
+// blankPanelBlock is an empty panel-sized block (h rows of panelSlotWidth
+// spaces), so a gliding panel's slot keeps its width in the layout.
+func blankPanelBlock(h int) string {
+	rows := make([]string, h)
+	for i := range rows {
+		rows[i] = strings.Repeat(" ", panelSlotWidth)
+	}
+	return strings.Join(rows, "\n")
 }
 
 // panelBlock renders a region's body and scrollbar as one block.

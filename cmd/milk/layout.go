@@ -418,7 +418,7 @@ func (m model) viewBody() string {
 			mainArea = m.joinPanel(mainArea, region, vpH)
 		}
 	}
-	mainArea = m.overlayClosingPanels(mainArea)
+	mainArea = m.overlayPanelTransitions(mainArea)
 	// Notification toasts (issue #162) float over the top-right of the whole
 	// main area — pure render-time overlay, no layout rows consumed.
 	mainArea = m.overlayToasts(mainArea)
