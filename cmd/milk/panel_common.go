@@ -279,9 +279,12 @@ var panelRenderOrder = []panelRegion{regionMemory, regionTasks, regionBackground
 // panelAltBackground reports whether region should render with the subtle
 // alternating background tint (see withPanelBackground): true for every
 // other panel among those *currently open*, counted left-to-right in
-// panelRenderOrder — not a fixed per-region parity. Counting only open
-// panels means two panels that end up visually adjacent because something
-// between them is closed never land on the same background by coincidence.
+// panelRenderOrder — not a fixed per-region parity. The count starts with
+// the panel adjacent to the transcript, so the chat/panel boundary is
+// always a tint change (the first panel must differ from the chat).
+// Counting only open panels means two panels that end up visually adjacent
+// because something between them is closed never land on the same
+// background by coincidence.
 func (m *model) panelAltBackground(region panelRegion) bool {
 	idx := 0
 	for _, r := range panelRenderOrder {
@@ -289,7 +292,7 @@ func (m *model) panelAltBackground(region panelRegion) bool {
 			continue
 		}
 		if r == region {
-			return idx%2 == 1
+			return idx%2 == 0
 		}
 		idx++
 	}

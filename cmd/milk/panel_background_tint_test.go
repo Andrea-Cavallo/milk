@@ -16,11 +16,12 @@ import (
 // tint is assigned by left-to-right position among *currently open* panels,
 // not a fixed parity per region — so closing a panel in the middle of the
 // sequence doesn't leave two visually adjacent open panels sharing a
-// background.
+// background — and that the count starts tinted: the panel adjacent to the
+// chat must differ from the chat's plain background.
 func TestPanelAltBackground_AlternatesByVisibleOrder(t *testing.T) {
 	m := &model{st: &interactiveState{sess: &session.Session{}}}
 
-	// All four open: memory(0)=false, tasks(1)=true, background(2)=false, workflow(3)=true.
+	// All four open: memory(0)=true, tasks(1)=false, background(2)=true, workflow(3)=false.
 	m.panelMemory = true
 	m.panelTasks = true
 	m.panelBackground = true
@@ -32,10 +33,10 @@ func TestPanelAltBackground_AlternatesByVisibleOrder(t *testing.T) {
 		region panelRegion
 		want   bool
 	}{
-		{regionMemory, false},
-		{regionTasks, true},
-		{regionBackground, false},
-		{regionWorkflow, true},
+		{regionMemory, true},
+		{regionTasks, false},
+		{regionBackground, true},
+		{regionWorkflow, false},
 	}
 	for _, c := range cases {
 		if got := m.panelAltBackground(c.region); got != c.want {
@@ -48,11 +49,11 @@ func TestPanelAltBackground_AlternatesByVisibleOrder(t *testing.T) {
 	// parity from before.
 	m.panelMemory = false
 	m.panelBackground = false
-	if got := m.panelAltBackground(regionTasks); got != false {
-		t.Errorf("tasks: alt=%v, want false (now first open panel)", got)
+	if got := m.panelAltBackground(regionTasks); got != true {
+		t.Errorf("tasks: alt=%v, want true (now first open panel)", got)
 	}
-	if got := m.panelAltBackground(regionWorkflow); got != true {
-		t.Errorf("workflow: alt=%v, want true (now second open panel)", got)
+	if got := m.panelAltBackground(regionWorkflow); got != false {
+		t.Errorf("workflow: alt=%v, want false (now second open panel)", got)
 	}
 }
 
@@ -102,20 +103,20 @@ func TestRenderSidePanel_BackgroundTintPreservesWidth(t *testing.T) {
 
 	m := &model{st: &interactiveState{sess: &session.Session{}}}
 	m.panelMemory = true
-	m.panelTasks = true // odd position -> tinted
+	m.panelTasks = true // first open panel (adjacent to the chat) -> tinted, second -> plain
 
-	out := m.renderSidePanel(regionTasks, 5)
-	if !strings.Contains(out, "48;2;") {
-		t.Fatal("expected the tasks panel (second open panel) to carry a background tint")
+	memOut := m.renderSidePanel(regionMemory, 5)
+	if !strings.Contains(memOut, "48;2;") {
+		t.Fatal("expected the memory panel (first open panel, next to the chat) to carry a background tint")
 	}
-	for i, line := range strings.Split(out, "\n") {
-		if w := utf8.RuneCountInString(ansi.Strip(line)); w != tasksPanelInner {
-			t.Errorf("line %d: width %d, want %d", i, w, tasksPanelInner)
+	for i, line := range strings.Split(memOut, "\n") {
+		if w := utf8.RuneCountInString(ansi.Strip(line)); w != memoryPanelInner {
+			t.Errorf("line %d: width %d, want %d", i, w, memoryPanelInner)
 		}
 	}
 
-	memOut := m.renderSidePanel(regionMemory, 5)
-	if strings.Contains(memOut, "48;2;") {
-		t.Error("expected the memory panel (first open panel) to have no background tint")
+	out := m.renderSidePanel(regionTasks, 5)
+	if strings.Contains(out, "48;2;") {
+		t.Error("expected the tasks panel (second open panel) to have no background tint")
 	}
 }
