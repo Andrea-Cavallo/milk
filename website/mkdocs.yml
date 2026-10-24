@@ -35,12 +35,14 @@ theme:
     - navigation.tabs
     - navigation.top
     - navigation.indexes
+    - navigation.path
+    - navigation.footer
     - content.code.copy
     - search.suggest
 
 nav:
   - Home: index.md
-  - Documentation:
+  - Docs map:
       - start/index.md
       - Install & first run: start/getting-started.md
   - Guides:

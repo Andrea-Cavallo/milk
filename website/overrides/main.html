@@ -13,8 +13,80 @@
      which would otherwise open an equally-redundant off-canvas copy. */
   .md-sidebar--primary,
   label.md-header__button[for="__drawer"] {
+    /*display: none;*/
+  }
+
+  {% if page is defined and page.url == 'adr/' %}
+  /* Decisions page (adr/): exclude the sidebars there. The section has a
+     single nav page, so the primary column is a one-item duplicate of the
+     Decisions tab, and the page carries no headings, so the TOC column is
+     empty. The drawer toggle goes with the primary sidebar (same pairing
+     as the global rule above) so mobile can't open a hidden drawer — the
+     top tabs remain the navigation on that page. ADR detail pages keep
+     their sidebars. */
+  .md-sidebar--primary,
+  .md-sidebar--secondary,
+  label.md-header__button[for="__drawer"] {
     display: none;
   }
+  {% endif %}
+
+  /* Locked footer (navigation.footer): pin the strip to the viewport
+     bottom so Previous/Next stay visible at every scroll position. The
+     footer is a block element (full width by default); the inner .md-grid
+     keeps the centered 61rem layout inside the strip, so only the
+     background is edge-to-edge. Material's footer colors are opaque and
+     theme-aware (light/dark), so text can't bleed through while scrolling;
+     page content gets bottom clearance so the last lines never end up
+     hidden under the strip. Safe-area padding keeps the iOS home indicator
+     off the links. */
+  footer.md-footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* The meta row is vestigial here ("Made with Material for MkDocs" only —
+     no copyright, no repo links) — drop it instead of locking a second
+     line nobody reads. */
+  footer.md-footer .md-footer-meta {
+    display: none;
+  }
+  /* Row styling: keep the slim vertical profile (tight link margins, no
+     dead space under the title, compact chevrons — that part was fine).
+     The one real complaint was horizontal: at natural content width the two
+     links sat as thin crumbs at the edges of a full-width bar. flex-grow
+     makes each link claim its half of the strip — titles stay nowrap, so
+     links never shrink below their content. */
+  footer.md-footer .md-footer__link {
+    margin-top: 0.45rem;
+    margin-bottom: 0.35rem;
+    flex-grow: 1;
+  }
+  footer.md-footer .md-footer__title {
+    margin-bottom: 0;
+    padding: 0 0.6rem;
+  }
+  footer.md-footer .md-footer__button {
+    margin: 0.1rem;
+    padding: 0.2rem;
+  }
+  footer.md-footer .md-footer__button svg {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+  /* Clearance below the last line of content: slim strip height + margin.
+     Two-class selector so it outranks any same-specificity bundle rule. */
+  .md-main .md-content {
+    padding-bottom: 3.6rem;
+  }
+  /* Back-to-top: leave Material completely alone. Its .md-top chip is
+     position:fixed; top:3.2rem (centered under the header on scroll) — a
+     bottom/height added here combines with that top inset and stretches
+     the chip to full viewport height. It cannot collide with the locked
+     footer: it lives at the opposite screen edge. */
 
   /* Warm off-white background for all pages in light mode */
   [data-md-color-scheme="default"] {
