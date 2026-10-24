@@ -78,23 +78,29 @@ type initWizardState struct {
 	// AgentContextWindowTokens, not asked separately.
 	// agent-tools step
 	toolAgentNames []string // agent names the user wants to enable as tools
+	// tuning is the answer to the optional-tuning gate: false keeps the
+	// minimal config (primary + escalation only) and skips run_cmd, limits
+	// and agent-tools; true asks them.
+	tuning bool
+	// modelChoices are the model names the chosen server reported (local
+	// provider): the model question offers them as a numbered pick list.
+	modelChoices []string
 }
 
 type initWizardStep int
 
 const (
-	initStepName       initWizardStep = iota // ask agent name
-	initStepProvider                         // ask provider (menu 1–6)
+	initStepProvider   initWizardStep = iota // ask which AI answers prompts (menu 1–6)
 	initStepURL                              // ask URL (providers that need it)
-	initStepChatPath                         // ask chat_path (bearer only, skip if standard)
-	initStepRunCmd                           // ask run_cmd (local provider only, optional)
 	initStepModel                            // ask model
 	initStepAuth                             // ask api_key (blank → go to initStepTokenCmd)
 	initStepTokenCmd                         // ask token_cmd
 	initStepAWSRegion                        // ask aws_region (bedrock only)
-	initStepLimits                           // ask context_window_tokens (proposes a models.dev catalog match)
 	initStepEscalation                       // ask escalation agent choice
-	initStepAgentTools                       // ask which agents to enable as tools
+	initStepTuning                           // gate: fine-tune now? (no → defaults)
+	initStepRunCmd                           // tuning: run_cmd (local provider only)
+	initStepLimits                           // tuning: context_window_tokens (proposes a models.dev catalog match)
+	initStepAgentTools                       // tuning: which agents to enable as tools
 	initStepOpenConfig                       // ask whether to open config in editor
 	initStepDone
 )
@@ -300,6 +306,11 @@ func (st *interactiveState) escalationAgentName() string {
 // whether a command was found.
 func extractSlashCommand(input string) (cmd, rest string, found bool) {
 	words := strings.Fields(input)
+	// "/config-init" is the natural way to type the guided setup; without this
+	// it would fall through as plain text and reach a model.
+	if len(words) > 0 && words[0] == "/config-init" {
+		words = append([]string{cmdConfig, "init"}, words[1:]...)
+	}
 	if len(words) == 0 || !strings.HasPrefix(words[0], "/") || !slices.Contains(slashCommands, words[0]) {
 		return "", input, false
 	}

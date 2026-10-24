@@ -2414,6 +2414,10 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.commitTelegramSetup(msg.token, msg.chatID)
 		return m, nil
 
+	case initSmokeMsg:
+		m.appendTranscript(msg.text)
+		return m, nil
+
 	case permRequestMsg:
 		return m.handlePermRequest(msg)
 
