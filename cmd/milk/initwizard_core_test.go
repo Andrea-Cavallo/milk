@@ -23,9 +23,20 @@ func localWizardOpts(numAgents int) initWizardOpts {
 	return initWizardOpts{NumAgents: numAgents, OfferOpenEditor: false}
 }
 
+// stubWizardDiscovery fixes what the first-run scan finds and Claude Code's
+// login state, so wizard tests never read the developer's real environment.
+func stubWizardDiscovery(t *testing.T, found []initWizardFinding, claude claudeAuthState) {
+	t.Helper()
+	prevD, prevC := initWizardDiscoverFn, claudeAuthStatusFn
+	initWizardDiscoverFn = func() []initWizardFinding { return found }
+	claudeAuthStatusFn = func() claudeAuthState { return claude }
+	t.Cleanup(func() { initWizardDiscoverFn, claudeAuthStatusFn = prevD, prevC })
+}
+
 // stubWizardModels fixes what the wizard's local-server probe finds.
 func stubWizardModels(t *testing.T, models []string, err error) {
 	t.Helper()
+	stubWizardDiscovery(t, nil, claudeAuthState{})
 	prev := initWizardListModelsFn
 	initWizardListModelsFn = func(context.Context, string) ([]string, error) { return models, err }
 	t.Cleanup(func() { initWizardListModelsFn = prev })
@@ -49,7 +60,7 @@ func TestInitWizardApply_LocalProviderFlow(t *testing.T) {
 	pinClaudeOnPath(t, true)
 
 	st, banner := initWizardStart("")
-	if !strings.Contains(banner, "setup wizard") || !strings.Contains(banner, "primary") || !strings.Contains(banner, "no restart") {
+	if !strings.Contains(banner, "setup wizard") || !strings.Contains(banner, "primary") || !strings.Contains(banner, "applied at once") {
 		t.Fatalf("banner = %q, want the setup banner explaining primary/escalation and hot reload", banner)
 	}
 	if p := initWizardPrompt(st); !strings.Contains(p, "Which AI should answer") {

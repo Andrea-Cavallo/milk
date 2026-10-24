@@ -56,6 +56,10 @@ type initWizardResult struct {
 	// OpenEditor is set when the user answered "yes" to the TUI's final
 	// open-editor question; the caller runs /config open itself.
 	OpenEditor bool
+	// RunClaudeLogin asks the host to run Claude Code's browser login
+	// (`claude auth login`) now: the TUI hands it the terminal, ACP runs it
+	// headless. The wizard has already moved on to the next question.
+	RunClaudeLogin bool
 }
 
 // initWizardStart starts the wizard: fresh state plus the banner, ready for
@@ -66,10 +70,18 @@ type initWizardResult struct {
 // currently selected directory (activeConfigDir); "" = the process cwd.
 func initWizardStart(cwd string) (*initWizardState, string) {
 	st := &initWizardState{step: initStepProvider, escCLI: true, cwd: cwd}
+	st.found = initWizardDiscoverFn()
+	banner := ""
+	if len(st.found) > 0 {
+		st.step = initStepFound
+	} else {
+		banner = milkTag() + " " + yellow("nothing found on this machine yet") + "\n" +
+			dim("         no API keys ("+initWizardSearchedNames()+"), no local model server, no Claude Code.") + "\n" +
+			dim("         No problem — pick one below and I'll tell you where to get it.") + "\n"
+	}
 	return st, milkTag() + " setup wizard — a few questions and you're talking to an agent\n" +
-		dim("  • primary: the everyday AI (cheap, fast).  escalation: a stronger AI milk hands hard tasks to.\n"+
-			"  • Everything is saved to config.json ("+config.DirLabel()+") and applies immediately — no restart.\n"+
-			"  • Press Enter to accept the [default]; Esc (or 'cancel') aborts.\n") + "\n"
+		dim("  primary = your everyday AI (cheap, fast) · escalation = a stronger one for hard tasks\n"+
+			"  saved to "+config.DirLabel()+"/config.json and applied at once · Enter takes the default · Esc cancels\n") + banner
 }
 
 // initWizardCancelWord reports whether a plain answer aborts the wizard. The
@@ -88,6 +100,15 @@ func initWizardCancelWord(answer string) bool {
 // applies it (a rejected answer re-prompts the same step), advances the state
 // machine, and commits the config when the flow reaches the end.
 func initWizardApply(st *initWizardState, answer string, opts initWizardOpts) initWizardResult {
+	res := initWizardApplyStep(st, answer, opts)
+	if st.runLogin {
+		st.runLogin = false
+		res.RunClaudeLogin = true
+	}
+	return res
+}
+
+func initWizardApplyStep(st *initWizardState, answer string, opts initWizardOpts) initWizardResult {
 	answer = strings.TrimSpace(answer)
 	// 'default' (or '-', 'enter') stands in for the empty answer that means
 	// "the step's default": the TUI can send an empty line, but ACP chat
@@ -112,6 +133,28 @@ func initWizardApply(st *initWizardState, answer string, opts initWizardOpts) in
 	}
 
 	switch st.step {
+	case initStepFound:
+		if answer == "" {
+			answer = "1"
+		}
+		n, err := strconv.Atoi(answer)
+		if err != nil || n < 1 || n > len(st.found)+1 {
+			out.WriteString(fmt.Sprintf("%s invalid choice — enter 1–%d\n", milkTag(), len(st.found)+1))
+			return initWizardResult{Output: out.String(), Prompt: initWizardPrompt(st)}
+		}
+		if n <= len(st.found) {
+			out.WriteString(initWizardTake(st, st.found[n-1]))
+		}
+
+	case initStepClaudeLogin:
+		lower := strings.ToLower(answer)
+		st.loginDone = true
+		if lower == "" || lower == "y" || lower == "yes" {
+			st.runLogin = true
+		} else {
+			out.WriteString(dim("  skipped — run `claude auth login` (or just `claude`) before your first prompt\n"))
+		}
+
 	case initStepProvider:
 		if answer == "" {
 			answer = "1"
@@ -400,6 +443,16 @@ type initWizardField struct {
 // initWizardFieldFor describes the wizard's current step.
 func initWizardFieldFor(st *initWizardState, opts initWizardOpts) initWizardField {
 	switch st.step {
+	case initStepFound:
+		f := initWizardField{Name: "found", Label: "use something I found", Kind: "select", Default: "1"}
+		for i, fd := range st.found {
+			f.Options = append(f.Options, initWizardChoice{fmt.Sprint(i + 1), fd.Label + " — " + fd.Detail})
+		}
+		f.Options = append(f.Options, initWizardChoice{fmt.Sprint(len(st.found) + 1), "None of these — let me choose"})
+		return f
+	case initStepClaudeLogin:
+		return initWizardField{Name: "claude_login", Label: "sign in to Claude Code now (opens your browser)?",
+			Kind: "select", Default: "y", Options: []initWizardChoice{{"y", "yes — open the browser"}, {"n", "no — I'll do it later"}}}
 	case initStepProvider:
 		return initWizardField{Name: "provider", Label: "which AI answers your everyday prompts", Kind: "select",
 			Default: "local", Options: initWizardProviderChoices}
@@ -427,6 +480,10 @@ func initWizardFieldFor(st *initWizardState, opts initWizardOpts) initWizardFiel
 			f.Required = false
 			f.Examples = st.modelChoices[1:]
 			return f
+		}
+		if st.modelDefault != "" {
+			f.Default = st.modelDefault
+			f.Required = false
 		}
 		// One-click examples mirror the prompt's "e.g." hints (placeholders
 		// like "<deployment>" stay text-only).
