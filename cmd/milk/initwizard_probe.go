@@ -43,6 +43,9 @@ func initWizardPickURL(provider, answer string) string {
 // blank is the first model, a number picks that one, anything else is typed.
 func initWizardPickModel(st *initWizardState, answer string) string {
 	if len(st.modelChoices) == 0 {
+		if answer == "" {
+			return st.modelDefault
+		}
 		return answer
 	}
 	if answer == "" {

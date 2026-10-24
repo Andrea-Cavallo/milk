@@ -23,8 +23,16 @@ import (
 func initWizardNextStep(st *initWizardState) initWizardStep {
 	p := st.primary.Provider
 	switch st.step {
+	case initStepFound:
+		if !st.foundPicked {
+			return initStepProvider
+		}
+		fallthrough
 	case initStepProvider:
-		if initWizardNeedsURL(p) {
+		if p == "claude-cli" && initWizardNeedsLogin(st) {
+			return initStepClaudeLogin
+		}
+		if initWizardNeedsURL(p) && st.primary.URL == "" {
 			return initStepURL
 		}
 		if initWizardNeedsModel(p) {
@@ -34,7 +42,7 @@ func initWizardNextStep(st *initWizardState) initWizardStep {
 	case initStepURL:
 		return initStepModel
 	case initStepModel:
-		if initWizardNeedsAuth(p) {
+		if initWizardNeedsAuth(p) && st.primary.APIKeyEnv == "" {
 			return initStepAuth
 		}
 		if initWizardNeedsAWSRegion(p) {
@@ -57,7 +65,15 @@ func initWizardNextStep(st *initWizardState) initWizardStep {
 		return initStepEscalation
 	case initStepAWSRegion:
 		return initStepEscalation
+	case initStepClaudeLogin:
+		if p == "claude-cli" {
+			return initStepEscalation // skipped for a claude-cli primary → tuning
+		}
+		return initStepTuning
 	case initStepEscalation:
+		if st.escCLI && initWizardNeedsLogin(st) {
+			return initStepClaudeLogin
+		}
 		return initStepTuning
 	case initStepTuning:
 		if !st.tuning {
@@ -145,11 +161,22 @@ func initWizardProviderDefaultName(provider string) string {
 // Examples what it covers (drawn next to the title in another color).
 var initWizardProviderMenu = []struct{ Value, Title, Examples string }{
 	{"local", "A model on this computer", "Ollama · llama.cpp · LM Studio · vLLM"},
-	{"bearer", "A cloud API key", "OpenRouter · Groq · Together · GitHub Copilot · any OpenAI-compatible API"},
+	{"bearer", "A cloud API key", "OpenRouter · Groq · Together · Copilot · any OpenAI-compatible API"},
 	{"bedrock", "AWS Bedrock", ""},
 	{"claude-cli", "Claude Code", "uses the claude CLI you already have"},
 	{"aider-cli", "aider", "advanced"},
 	{"subprocess", "Custom subprocess", "advanced"},
+}
+
+// initWizardMainProviders is how many menu entries the typed prompt shows; the
+// rest (aider, a custom subprocess) are accepted by name or number but kept off
+// the screen so a first-timer sees four choices, not six.
+const initWizardMainProviders = 4
+
+// initWizardRule is the thin separator the TUI draws before each question, so
+// one question reads apart from the answer echo and the text above it.
+func initWizardRule() string {
+	return "\n" + dim(strings.Repeat("─", 56)) + "\n"
 }
 
 // initWizardProviderChoices is the same menu flattened for the ACP form flow.
@@ -169,22 +196,71 @@ var initWizardProviderChoices = func() []initWizardChoice {
 // so the decision (bold) and what it covers (cyan) read apart at a glance.
 func initWizardExample(s string) string { return colorize(s, ansiCyan) }
 
+// initWizardClaude is the Claude Code login state, read once per wizard run.
+func initWizardClaude(st *initWizardState) claudeAuthState {
+	if st.claude == nil {
+		s := claudeAuthStatusFn()
+		st.claude = &s
+	}
+	return *st.claude
+}
+
+// initWizardNeedsLogin reports whether Claude Code is installed but signed
+// out, and the login has not been offered yet.
+func initWizardNeedsLogin(st *initWizardState) bool {
+	c := initWizardClaude(st)
+	return c.Installed && !c.LoggedIn && !st.loginDone
+}
+
+// initWizardTake applies a discovered finding as the primary agent and
+// returns the confirmation line. A key is only ever referenced by its
+// variable name (api_key_env) — its value is never read into the config.
+func initWizardTake(st *initWizardState, f initWizardFinding) string {
+	st.foundPicked = true
+	st.primary.Provider = f.Provider
+	st.primary.Name = f.Name
+	st.primary.URL = f.URL
+	st.primary.APIKeyEnv = f.KeyEnv
+	st.modelDefault = f.Model
+	st.modelChoices = f.Models
+	if f.Claude != nil {
+		st.claude = f.Claude
+	}
+	switch {
+	case f.KeyEnv != "":
+		return green("  ✓ using "+f.Label) + dim(" — the key stays in $"+f.KeyEnv+"; nothing secret is copied into config.json") + "\n"
+	case f.Provider == "claude-cli":
+		return green("  ✓ using Claude Code") + "\n"
+	}
+	return green("  ✓ using "+f.Label+" at "+f.URL) + "\n"
+}
+
 // initWizardPath lists the questions a provider's first-run path asks, in
 // order — the denominator of the "step n/m" counter. Optional tuning questions
 // are not counted (they only appear on request).
-func initWizardPath(provider string) []initWizardStep {
-	path := []initWizardStep{initStepProvider}
-	if initWizardNeedsURL(provider) {
+func initWizardPath(st *initWizardState) []initWizardStep {
+	provider := st.primary.Provider
+	var path []initWizardStep
+	if len(st.found) > 0 {
+		path = append(path, initStepFound)
+	}
+	if !st.foundPicked {
+		path = append(path, initStepProvider)
+	}
+	if initWizardNeedsURL(provider) && !st.foundPicked {
 		path = append(path, initStepURL)
 	}
 	if initWizardNeedsModel(provider) {
 		path = append(path, initStepModel)
 	}
-	if initWizardNeedsAuth(provider) {
+	if initWizardNeedsAuth(provider) && st.primary.APIKeyEnv == "" {
 		path = append(path, initStepAuth)
 	}
 	if initWizardNeedsAWSRegion(provider) {
 		path = append(path, initStepAWSRegion)
+	}
+	if c := st.claude; c != nil && c.Installed && !c.LoggedIn && (!st.loginDone || st.step == initStepClaudeLogin) {
+		path = append(path, initStepClaudeLogin)
 	}
 	if provider != "claude-cli" {
 		path = append(path, initStepEscalation)
@@ -199,13 +275,13 @@ func initWizardStepLabel(st *initWizardState) string {
 	if step == initStepTokenCmd {
 		step = initStepAuth // the token command is the other half of the credential question
 	}
-	if step == initStepProvider {
-		return dim("step 1 · ")
-	}
-	path := initWizardPath(st.primary.Provider)
+	path := initWizardPath(st)
 	for i, s := range path {
 		if s == step {
-			return dim(fmt.Sprintf("step %d/%d · ", i+1, len(path)))
+			if st.primary.Provider == "" {
+				return boldGold(fmt.Sprintf("step %d", i+1)) + dim("  ·  ") // the path is not known until a provider is
+			}
+			return boldGold(fmt.Sprintf("step %d/%d", i+1, len(path))) + dim("  ·  ")
 		}
 	}
 	return ""
@@ -227,18 +303,33 @@ func initWizardProviderFromAnswer(answer string) string {
 func initWizardPrompt(st *initWizardState) string {
 	lbl := initWizardStepLabel(st)
 	switch st.step {
+	case initStepFound:
+		var b strings.Builder
+		b.WriteString(milkTag() + " " + lbl + bold("I looked around your computer and found these — use one?") + "\n")
+		for i, f := range st.found {
+			fmt.Fprintf(&b, "  %d) %s %s\n", i+1, bold(fmt.Sprintf("%-14s", f.Label)), initWizardExample(f.Detail))
+		}
+		fmt.Fprintf(&b, "  %d) %s\n", len(st.found)+1, bold("None of these")+dim(" — let me choose"))
+		b.WriteString(milkTag() + " choice " + dim("[1]") + ": ")
+		return b.String()
+	case initStepClaudeLogin:
+		return milkTag() + " " + lbl + bold("Claude Code isn't signed in yet. Open your browser to log in now?") + "\n" +
+			dim("         It uses your Claude account (subscription or Console) — no API key to find or copy.") + "\n" +
+			milkTag() + " log in now? " + dim("[Y/n]") + ": "
 	case initStepProvider:
 		var b strings.Builder
 		b.WriteString(milkTag() + " " + lbl + bold("Which AI should answer your everyday prompts?") + "\n")
 		b.WriteString(dim("         This is your \"primary\": the fast, cheap one that handles most prompts.") + "\n")
-		for i, m := range initWizardProviderMenu {
+		for i, m := range initWizardProviderMenu[:initWizardMainProviders] {
 			// Pad before styling: escape codes would break %-Ns alignment.
-			fmt.Fprintf(&b, "  %d) %s", i+1, bold(fmt.Sprintf("%-26s", m.Title)))
-			if m.Examples != "" {
-				b.WriteString(" " + initWizardExample(m.Examples))
+			if m.Examples == "" {
+				fmt.Fprintf(&b, "  %d) %s", i+1, bold(m.Title))
+			} else {
+				fmt.Fprintf(&b, "  %d) %s  %s", i+1, bold(fmt.Sprintf("%-26s", m.Title)), initWizardExample(m.Examples))
 			}
 			b.WriteString("\n")
 		}
+		b.WriteString(dim("  other: type aider or subprocess") + "\n")
 		b.WriteString(milkTag() + " choice " + dim("[1]") + ": ")
 		return b.String()
 	case initStepURL:
@@ -298,7 +389,11 @@ func initWizardPrompt(st *initWizardState) string {
 		if hint != "" {
 			out += "  " + initWizardExample(hint) + "\n"
 		}
-		return out + milkTag() + " model name: "
+		def := ""
+		if st.modelDefault != "" {
+			def = " " + dim("["+st.modelDefault+"]")
+		}
+		return out + milkTag() + " model name" + def + ": "
 	case initStepAuth:
 		hint := ""
 		if isAzureURL(st.primary.URL) {
@@ -309,6 +404,9 @@ func initWizardPrompt(st *initWizardState) string {
 			} else {
 				hint = "\n" + dim("  hint: leave blank and use token_cmd = 'gh auth token'")
 			}
+		}
+		if page := initWizardKeysPageFor(st.primary.URL); page != "" {
+			hint += "\n" + dim("  no key yet? create one at "+page)
 		}
 		return milkTag() + " " + lbl + bold("API key") + dim(" — saved only in your config.json, never sent to the model (leave blank or type 'default' to use a token command instead)") + hint + "\n" + milkTag() + " API key: "
 	case initStepTokenCmd:

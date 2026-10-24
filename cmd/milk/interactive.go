@@ -85,23 +85,38 @@ type initWizardState struct {
 	// modelChoices are the model names the chosen server reported (local
 	// provider): the model question offers them as a numbered pick list.
 	modelChoices []string
+	// modelDefault is the model a blank answer means (suggested by a
+	// discovered provider); "" = the model is asked without a default.
+	modelDefault string
+	// found are the credentials discovery offered as the first question;
+	// foundPicked says the user took one (provider/URL/key are then set).
+	found       []initWizardFinding
+	foundPicked bool
+	// claude caches the Claude Code login state for this run; loginDone stops
+	// the login question from being asked twice; runLogin hands the login to
+	// the host through initWizardResult.RunClaudeLogin.
+	claude    *claudeAuthState
+	loginDone bool
+	runLogin  bool
 }
 
 type initWizardStep int
 
 const (
-	initStepProvider   initWizardStep = iota // ask which AI answers prompts (menu 1–6)
-	initStepURL                              // ask URL (providers that need it)
-	initStepModel                            // ask model
-	initStepAuth                             // ask api_key (blank → go to initStepTokenCmd)
-	initStepTokenCmd                         // ask token_cmd
-	initStepAWSRegion                        // ask aws_region (bedrock only)
-	initStepEscalation                       // ask escalation agent choice
-	initStepTuning                           // gate: fine-tune now? (no → defaults)
-	initStepRunCmd                           // tuning: run_cmd (local provider only)
-	initStepLimits                           // tuning: context_window_tokens (proposes a models.dev catalog match)
-	initStepAgentTools                       // tuning: which agents to enable as tools
-	initStepOpenConfig                       // ask whether to open config in editor
+	initStepFound       initWizardStep = iota // offer what discovery found (keys, servers, Claude login)
+	initStepProvider                          // ask which AI answers prompts (menu 1–6)
+	initStepURL                               // ask URL (providers that need it)
+	initStepModel                             // ask model
+	initStepAuth                              // ask api_key (blank → go to initStepTokenCmd)
+	initStepTokenCmd                          // ask token_cmd
+	initStepAWSRegion                         // ask aws_region (bedrock only)
+	initStepClaudeLogin                       // offer the Claude Code browser login
+	initStepEscalation                        // ask escalation agent choice
+	initStepTuning                            // gate: fine-tune now? (no → defaults)
+	initStepRunCmd                            // tuning: run_cmd (local provider only)
+	initStepLimits                            // tuning: context_window_tokens (proposes a models.dev catalog match)
+	initStepAgentTools                        // tuning: which agents to enable as tools
+	initStepOpenConfig                        // ask whether to open config in editor
 	initStepDone
 )
 
