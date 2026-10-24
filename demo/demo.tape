@@ -1,9 +1,9 @@
 # milk demo — TUI walkthrough
 # Requires: vhs, milk binary, copilot-ghe and claude-cli configured in ~/.milk/config.json
 # Run from the milk repo root: vhs demo/demo.tape
-# Output: docs/images/milk-tui.gif
+# Output: docs/assets/milk-tui.gif
 
-Output docs/images/milk-tui.gif
+Output docs/assets/milk-tui.gif
 
 Set Shell "bash"
 Set FontSize 14

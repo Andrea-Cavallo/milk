@@ -6,7 +6,7 @@ The fastest path to a working milk setup — no specific backend required. milk 
 
 | Dependency | Required | Notes |
 |---|---|---|
-| Go 1.21+ | no | only if building from source |
+| Go 1.26.2+ | no | only if building from source |
 | An inference server or cloud API key | no | any backend from [docs/guides/providers.md](../guides/providers.md); milk degrades gracefully if the primary or escalation agent is absent — see [docs/guides/operations.md — Graceful degradation](../guides/operations.md#graceful-degradation) |
 | `claude` CLI | no | only if you want Claude Code as an agent; not required otherwise |
 | Git Bash or WSL2 (Windows only) | yes (Windows) | milk's primary agent uses `sh`, `find`, `grep` — `cmd.exe`/PowerShell are not supported. See [docs/guides/providers.md — Windows and WSL2](../guides/providers.md#windows-and-wsl2) |
@@ -23,7 +23,7 @@ Installs to `~/.local/bin/milk`, verifying the release checksum. Pin a version w
 
 Stay current with `milk update check` / `milk update install` (TUI: `/update install`). On Windows the running `milk.exe` is renamed aside and the verified download takes its place — applied on your next restart of milk, staged and retried automatically if the rename is refused; see [docs/guides/operations.md — Self-update](../guides/operations.md#self-update).
 
-Or build from source (requires Go 1.21+):
+Or build from source (requires Go 1.26.2+):
 
 ```sh
 task build:local   # builds ./milk in the current directory
