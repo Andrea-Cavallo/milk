@@ -32,7 +32,7 @@ func TestWrappedTranscript_StyledLineRowsAreSelfContained(t *testing.T) {
 	m := layoutTestModel(t, 40, 20)
 	m.colorizeMode = ColorizeFenced
 	m.appendTranscript("before\n")
-	m.appendTranscript(dim("⚙ bash: " + strings.Repeat("alpha beta gamma ", 8)))
+	m.appendTranscript(dim("» bash: " + strings.Repeat("alpha beta gamma ", 8)))
 	m.appendTranscript("\nafter\n")
 
 	var dimRows int

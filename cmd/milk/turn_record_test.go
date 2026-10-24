@@ -2,9 +2,9 @@ package main
 
 import (
 	"bytes"
+	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
-	tea "github.com/charmbracelet/bubbletea"
 	"io"
 	"strings"
 	"testing"
@@ -204,7 +204,7 @@ func TestWorkflowDisplaySend_RoutesAwayFromMainTranscript(t *testing.T) {
 	send := workflowDisplaySend(func(msg tea.Msg) { got = append(got, msg) })
 
 	send(thinkChunkMsg{text: "hmm"})
-	send(chunkMsg{text: "⚙ Bash"})
+	send(chunkMsg{text: "» Bash"})
 	send(retractMsg{from: "a", to: "b"})
 	send(reasoningPromotedMsg{})
 	send(toolUseMsg{name: "x"})
@@ -215,7 +215,7 @@ func TestWorkflowDisplaySend_RoutesAwayFromMainTranscript(t *testing.T) {
 	if v, ok := got[0].(workflowThinkChunkMsg); !ok || v.text != "hmm" {
 		t.Errorf("reasoning should become a workflow think chunk, got %+v", got[0])
 	}
-	if v, ok := got[1].(workflow.WorkflowChunkMsg); !ok || v.Text != "⚙ Bash" {
+	if v, ok := got[1].(workflow.WorkflowChunkMsg); !ok || v.Text != "» Bash" {
 		t.Errorf("tool hint should become a workflow chunk, got %+v", got[1])
 	}
 	if _, ok := got[2].(toolUseMsg); !ok {

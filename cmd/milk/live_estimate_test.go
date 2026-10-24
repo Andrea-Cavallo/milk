@@ -33,9 +33,9 @@ func TestLiveEstimate_PrefixIsNotModelOutput(t *testing.T) {
 func TestLiveEstimate_ANSIIsNotCounted(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.busy = true
-	next, _ := m.Update(chunkMsg{text: "\x1b[33m⚙ read_file\x1b[0m"})
+	next, _ := m.Update(chunkMsg{text: "\x1b[33m» read_file\x1b[0m"})
 	m = next.(model)
-	if want := int64(len("⚙ read_file")); m.currentTurnChars != want {
+	if want := int64(len("» read_file")); m.currentTurnChars != want {
 		t.Errorf("got %d chars, want %d (visible text only)", m.currentTurnChars, want)
 	}
 }

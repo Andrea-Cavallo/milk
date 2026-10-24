@@ -396,7 +396,7 @@ func TestStyleLine_HRule(t *testing.T) {
 func TestApplyInlineMarkdown_ToolHintNoBleed(t *testing.T) {
 	// A tool hint line ends with ansiReset; the following plain text line
 	// must not inherit any ANSI carry-over.
-	input := "\n\033[2m⚙ Bash: go test ./...\033[0m\nCommitted — `1908192`, done."
+	input := "\n\033[2m» Bash: go test ./...\033[0m\nCommitted — `1908192`, done."
 	got := applyInlineMarkdown(input)
 	lines := strings.Split(got, "\n")
 	// Last line must not start with a dim or other escape carried from the hint.
@@ -427,7 +427,7 @@ func TestIsTableRow(t *testing.T) {
 		"only one | pipe",
 		"",
 		// tool-hint lines with pipes inside grep patterns / shell commands
-		`⚙ Bash: grep -rn "obs\.|otel\.|RecordToken|LogPayload"`,
+		`» Bash: grep -rn "obs\.|otel\.|RecordToken|LogPayload"`,
 		`grep -rn "foo|bar" ./...`,
 		// two pipes but not space-padded and no leading/trailing pipe
 		`cmd1|cmd2|cmd3`,
@@ -442,7 +442,7 @@ func TestIsTableRow(t *testing.T) {
 func TestColorizeMarkdown_PipeInToolHintNotTable(t *testing.T) {
 	// A tool-hint line containing pipes inside a grep pattern must not be
 	// misidentified as a table row and mis-rendered.
-	input := "\033[2m⚙ Bash: grep -rn \"obs\\.|otel\\.|RecordToken|LogPayload\" ./...\033[0m"
+	input := "\033[2m» Bash: grep -rn \"obs\\.|otel\\.|RecordToken|LogPayload\" ./...\033[0m"
 	got := colorizeMarkdown(input)
 	// Content must be preserved verbatim — no table rendering applied.
 	if !strings.Contains(got, "grep") {
@@ -553,7 +553,7 @@ func TestRenderTableBlock_EqualWidths(t *testing.T) {
 		"| Table rendering | Two-pass renderer |",
 		"| Bug fix | 1-based index |",
 	}
-	rendered := renderTableBlock(rawLines)
+	rendered := renderTableBlock(rawLines, 0)
 	if len(rendered) != 4 {
 		t.Fatalf("expected 4 rendered lines, got %d", len(rendered))
 	}
@@ -584,7 +584,7 @@ func TestRenderTableBlock_EqualWidths(t *testing.T) {
 func TestApplyInlineMarkdown_MultipleHintsNoBleed(t *testing.T) {
 	// Multiple tool hints followed by plain text with inline code.
 	// None of the plain text lines should be dimmed.
-	input := "\n\033[2m⚙ Bash: go test\033[0m\n\n\033[2m⚙ Bash: git add\033[0m\n\n\033[2m⚙ Bash: git commit\033[0m\nCommitted — `1908192`, 10 files."
+	input := "\n\033[2m» Bash: go test\033[0m\n\n\033[2m» Bash: git add\033[0m\n\n\033[2m» Bash: git commit\033[0m\nCommitted — `1908192`, 10 files."
 	got := applyInlineMarkdown(input)
 	lines := strings.Split(got, "\n")
 	last := lines[len(lines)-1]
@@ -597,7 +597,7 @@ func TestApplyInlineMarkdown_MultipleHintsNoBleed(t *testing.T) {
 }
 
 func TestColorizeSingle_HintsNoBleedBalanced(t *testing.T) {
-	input := "\n\033[2m⚙ Bash: go test\033[0m\n\nCommitted — `1908192`, done."
+	input := "\n\033[2m» Bash: go test\033[0m\n\nCommitted — `1908192`, done."
 	got := colorizeSingle(input, ColorizeBalanced)
 	lines := strings.Split(got, "\n")
 	for i, l := range lines {
@@ -608,7 +608,7 @@ func TestColorizeSingle_HintsNoBleedBalanced(t *testing.T) {
 }
 
 func TestColorizeSingle_HintsNoBleedFenced(t *testing.T) {
-	input := "\n\033[2m⚙ Bash: go test\033[0m\n\nCommitted — `1908192`, done."
+	input := "\n\033[2m» Bash: go test\033[0m\n\nCommitted — `1908192`, done."
 	got := colorizeSingle(input, ColorizeFenced)
 	lines := strings.Split(got, "\n")
 	for i, l := range lines {
@@ -621,7 +621,7 @@ func TestColorizeSingle_HintsNoBleedFenced(t *testing.T) {
 func TestApplyInlineMarkdown_MultiLineHintNoBleed(t *testing.T) {
 	// dimWrap produces per-line \033[2m...\033[0m spans so each line is
 	// self-contained. The response text that follows must not be dim.
-	hint := dimWrap("⚙ bash: cd /tmp && python3 -c \"\nimport openpyxl\nwb = openpyxl.load_workbook('x.xlsx')\nfor shee…")
+	hint := dimWrap("» bash: cd /tmp && python3 -c \"\nimport openpyxl\nwb = openpyxl.load_workbook('x.xlsx')\nfor shee…")
 	input := "\n" + hint + "\nIl portale Storyteller è ancora irraggiungibile."
 	got := applyInlineMarkdown(input)
 	lines := strings.Split(got, "\n")

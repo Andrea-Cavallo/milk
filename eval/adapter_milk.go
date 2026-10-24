@@ -155,7 +155,7 @@ func parseMilkStream(r io.Reader) (*milkStreamRun, error) {
 			if msg == nil {
 				continue
 			}
-			// tool_use_result carries the TUI ⚙ summary (design §6.2); prefer
+			// tool_use_result carries the TUI » summary (design §6.2); prefer
 			// it over the raw tool_result payload as ToolCall.Result. It is
 			// free-form on the wire — shapes without a summary/path fall back
 			// to the tool_result content.

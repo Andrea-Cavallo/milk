@@ -641,13 +641,13 @@ func codeText(s string, cap int) string {
 	return trimPreview(s, cap, "…")
 }
 
-// toolUseMessage builds the quiet tool-use line: ⚙ _Bash_ · `summary`
-// (bare ⚙ _Bash_ with no summary — as before, but never bold).
+// toolUseMessage builds the quiet tool-use line: » _Bash_ · `summary`
+// (bare » _Bash_ with no summary — as before, but never bold).
 func toolUseMessage(toolName, summary string) string {
 	if summary == "" {
-		return "⚙ _" + escMD(toolName) + "_"
+		return "» _" + escMD(toolName) + "_"
 	}
-	return fmt.Sprintf("⚙ _%s_ · `%s`", escMD(toolName), escCode.Replace(codeText(summary, toolUseSummaryCap)))
+	return fmt.Sprintf("» _%s_ · `%s`", escMD(toolName), escCode.Replace(codeText(summary, toolUseSummaryCap)))
 }
 
 // toolResultMessage builds the tool-result line: 📤 _Bash_ · `summary`,

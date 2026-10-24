@@ -17,8 +17,8 @@ func TestToolMessages_QuietFormat(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"use with summary", toolUseMessage("Bash", "grep -rn foo"), "⚙ _Bash_ · `grep -rn foo`"},
-		{"use without summary", toolUseMessage("Read", ""), "⚙ _Read_"},
+		{"use with summary", toolUseMessage("Bash", "grep -rn foo"), "» _Bash_ · `grep -rn foo`"},
+		{"use without summary", toolUseMessage("Read", ""), "» _Read_"},
 		{"result ok", toolResultMessage("Read", "40 lines", false), "📤 _Read_ · `40 lines`"},
 		{"result ok without summary", toolResultMessage("Read", "", false), "📤 _Read_"},
 		{"result error stays bold", toolResultMessage("Bash", "exit 1: no such file", true),
@@ -36,7 +36,7 @@ func TestToolMessages_QuietFormat(t *testing.T) {
 // italic tool name too — the name must be escaped there as well).
 func TestToolMessages_EscapesMarkdown(t *testing.T) {
 	// The italic name runs through escMD ('_' is active outside code)…
-	if got, want := toolUseMessage("a_b", "x*y"), "⚙ _a\\_b_ · `x*y`"; got != want {
+	if got, want := toolUseMessage("a_b", "x*y"), "» _a\\_b_ · `x*y`"; got != want {
 		t.Errorf("escape name:\n got: %q\nwant: %q", got, want)
 	}
 	if got, want := toolResultMessage("a*b", "c_d", true), "❌ *a\\*b* error · `c_d`"; got != want {
@@ -45,7 +45,7 @@ func TestToolMessages_EscapesMarkdown(t *testing.T) {
 	// …while code content only escapes the two characters MarkdownV2
 	// treats as special inside code spans ('\\' and '`') — '-', '.' etc.
 	// stay as-is (escMD there would over-escape with no purpose).
-	if got, want := toolUseMessage("Bash", "a\\b`c"), "⚙ _Bash_ · `a\\\\b\\`c`"; got != want {
+	if got, want := toolUseMessage("Bash", "a\\b`c"), "» _Bash_ · `a\\\\b\\`c`"; got != want {
 		t.Errorf("escape code:\n got: %q\nwant: %q", got, want)
 	}
 }

@@ -1449,6 +1449,7 @@ const systemPromptShared = `Rules:
 3. Call get_session_context with agent: "escalation" to check whether the escalation agent made those changes.
 4. Only proceed with a commit if step 2 OR step 3 returned clear context that explains the changes and their purpose. Use that context to write an accurate commit message.
 5. If neither step 2 nor step 3 returns relevant context, STOP. Do not commit. Tell the user: "I found no session context explaining these changes — please tell me what they are for before I commit." Never invent a commit message for changes you cannot account for.
+- ` + escalation.TableGuidance + `
 - To manage milk's own configuration (agents, MCP servers, memory, routing, etc.), call milk_config_help(topic) for docs instead of guessing config.json's schema. To write changes use bash with "milk config mcp add|remove|assign|unassign ..." or "milk config agent add|remove ..." — ` + escalation.ConfigWriteWarning
 
 // systemPromptWorkflow is used for workflow step executors (designer, generator,
@@ -3372,7 +3373,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 			// if this guess is wrong too.
 			agentName = tc.Function.Name[len("agent_"):]
 		}
-		fmt.Fprintf(out, "\n%s\n", ansi.Dim(fmt.Sprintf("⚙ calling agent %s…", agentName)))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim(fmt.Sprintf("» calling agent %s…", agentName)))
 		result, err := a.toolAgentDispatcher(ctx, agentName, reqArgs.Request, pendingImages, out)
 		if err != nil {
 			obs.Inc(ctx, inferenceScope, "milk.tools.tool_agent_errors",
@@ -3691,7 +3692,7 @@ func (a *Agent) dispatchOneTool(ctx context.Context, tc toolCall, _ int, deniedR
 
 // printToolLine writes a one-line dim tool-usage hint to out before a tool is
 // dispatched, mirroring what Claude shows for permission requests.
-// Format:  ⚙ <name>: <short summary of key argument>
+// Format:  » <name>: <short summary of key argument>
 // termWidth is the current terminal width (0 = no truncation).
 func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 	var args map[string]any
@@ -3699,7 +3700,7 @@ func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 
 	summary := toolArgSummary(args)
 	if summary != "" {
-		prefix := "⚙ " + tc.Function.Name + ": "
+		prefix := "» " + tc.Function.Name + ": "
 		if termWidth > 0 {
 			maxSummary := termWidth - len(prefix) - 4 // 4 = margin
 			if maxSummary < 10 {
@@ -3710,9 +3711,9 @@ func printToolLine(out io.Writer, tc toolCall, termWidth int) {
 				summary = string(runes[:maxSummary-1]) + "…"
 			}
 		}
-		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name+": "+summary))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("» "+tc.Function.Name+": "+summary))
 	} else {
-		fmt.Fprintf(out, "\n%s\n", ansi.Dim("⚙ "+tc.Function.Name))
+		fmt.Fprintf(out, "\n%s\n", ansi.Dim("» "+tc.Function.Name))
 	}
 }
 
