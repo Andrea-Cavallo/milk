@@ -177,7 +177,7 @@ and, for ACP integration specifically, [docs/reference/acp-integration.md](acp-i
 
 **Memory commands:** `/learn <statement>`, `/memory [global|session|<pattern>]`, `/memory show <pattern or #id>`, `/forget <pattern or #id>`, `/export [--no-reasoning] [session <id|prefix>] [json|<path>]` — reasoning (`<reasoning>…</reasoning>` fences / JSON `thinking` fields) is included by default and stripped by the flag (deterministic either way — fold state never enters an export); see [docs/guides/operations.md — Memory](../guides/operations.md#memory).
 
-**Panel commands:** `/panel memory`, `/panel tasks`, `/panel background`, `/panel workflow`, `/panel project`, `/panel git` (also F1-F6) — see [docs/guides/operations.md — Keyboard shortcuts](../guides/operations.md#keyboard-shortcuts) and [docs/guides/workflows.md](../guides/workflows.md#the-native-workflow-engine).
+**Panel commands:** `/panel memory`, `/panel tasks`, `/panel background`, `/panel workflow`, `/panel project`, `/panel git` (also F1-F6) — see [docs/guides/operations.md — Keyboard shortcuts](../guides/operations.md#keyboard-shortcuts) and [docs/guides/workflows.md](../guides/workflows.md#the-native-workflow-engine). Panel open/closed choices are durable preferences by default (`remember_panel_state`, ADR-0078): saved to `~/.milk/panel-state.json` on every manual toggle, restored at startup, and never overturned by content-driven auto-open. The memory panel is closed by default and opens when the percept store has content.
 
 #### Tab completion and multi-value parameters
 
@@ -350,6 +350,10 @@ Unset (or `"folded"`) or `"expanded"` — the TUI's **starting** fold status for
 Default `false`. When `true`, releasing the mouse after a drag selection (transcript, side panels, or the live-attach view) copies the selected text to the clipboard immediately and shows the `copied N chars` status-bar feedback, instead of waiting for a right-click or Ctrl+C. The highlight is cleared after the copy, so a following right-click pastes. A plain click without a drag never copies. Hot-reloaded.
 
 Independently of `copy_on_select`, dragging a selection past the top or bottom of the transcript, a side panel or the live-attach view scrolls that view (about 20 lines/s while the pointer rests outside) and extends the selection with it. Releasing outside the view ends the drag.
+
+### `remember_panel_state` field
+
+Default `true`. When `true`, a manual side-panel toggle (`/panel <name>` or F1-F6) is a durable preference: the open/closed state of every panel is saved to `~/.milk/panel-state.json`, restored at startup (seeding the manual override, so auto-open never fights it), and never dropped by content finalization. Only manually toggled panels are saved — auto-opened state is transient. When `false`, panels are session-only with the ADR-0059 lifecycle: the override expires when the panel's content finalizes (task store drained, jobs finished, workflow done, percept store emptied), re-arming auto-open for the next content. See [ADR-0078](../adr/0078-persisted-panel-state.md).
 
 ### `config_editors` field
 

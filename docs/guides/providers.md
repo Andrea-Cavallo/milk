@@ -743,6 +743,7 @@ Common to all inference-server providers (everything except `claude-cli`):
 | `sticky_escalation` | bool | `true` | See [docs/guides/workflows.md — Sticky and auto-sticky escalation](workflows.md#sticky-and-auto-sticky-escalation) |
 | `copy_on_select` | bool | `false` | Copy a mouse selection to the clipboard on button release instead of requiring right-click / Ctrl+C |
 | `animations` | bool | `true` | Spring animations in the TUI: side panels slide in and out, the mouse wheel scrolls with inertia. `false` makes both instant |
+| `remember_panel_state` | bool | `true` | Durable side-panel preferences (ADR-0078): panel open/closed choices persist to `~/.milk/panel-state.json` and survive content finalization. `false` = session-only panels with ADR-0059's expiry |
 
 ---
 
