@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +45,10 @@ func rawPanelOpen(m *model, region panelRegion) bool {
 		return m.panelBackground
 	case regionWorkflow:
 		return m.workflowPanelOpen
+	case regionProject:
+		return m.panelProject
+	case regionGit:
+		return m.panelGit
 	}
 	return false
 }
@@ -145,10 +152,13 @@ func TestAutoOpenPanel_RespectsExplicitOpenToo(t *testing.T) {
 }
 
 // TestPanelClose_FinalizedContentDoesNotStick covers the ADR-0059 half of
-// the contract at close time: closing a panel whose content has *already*
-// settled (emptied/completed/done) must not lock it out of its next new
-// content — the override is dropped immediately, so the very next
-// auto-open trigger still opens the panel.
+// the contract at close time — the session-only semantics
+// ("remember_panel_state": false): closing a panel whose content has
+// *already* settled (emptied/completed/done) must not lock it out of its
+// next new content — the override is dropped immediately, so the very next
+// auto-open trigger still opens the panel. With the default durable panel
+// state (ADR-0078) a close is a remembered preference instead, generalized
+// to every panel — see TestPanelClose_RememberedPreferenceSticks.
 func TestPanelClose_FinalizedContentDoesNotStick(t *testing.T) {
 	// Fresh test models have finalized content in every region: nil mem,
 	// nil/empty task store, no running jobs, no workflow state.
@@ -161,20 +171,21 @@ func TestPanelClose_FinalizedContentDoesNotStick(t *testing.T) {
 		{"tasks", regionTasks, tea.KeyF2},
 		{"background", regionBackground, tea.KeyF3},
 		{"workflow", regionWorkflow, tea.KeyF4},
+		{"project", regionProject, tea.KeyF5},
+		{"git", regionGit, tea.KeyF6},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newTestModelForPanels(t)
-			// The memory panel starts open; open the others first so the
-			// second press is the closing toggle.
-			if tc.region != regionMemory {
-				updated, _ := m.Update(tea.KeyPressMsg{Code: tc.key})
-				m = updated.(model)
-				if !rawPanelOpen(&m, tc.region) {
-					t.Fatalf("expected first press to open the %s panel", tc.name)
-				}
-			}
+			m.rememberPanelState = false // ADR-0059 expiry semantics
+			// Every panel starts closed (ADR-0078 for memory); the first
+			// press opens, the second is the closing toggle.
 			updated, _ := m.Update(tea.KeyPressMsg{Code: tc.key})
+			m = updated.(model)
+			if !rawPanelOpen(&m, tc.region) {
+				t.Fatalf("expected first press to open the %s panel", tc.name)
+			}
+			updated, _ = m.Update(tea.KeyPressMsg{Code: tc.key})
 			m = updated.(model)
 			if rawPanelOpen(&m, tc.region) {
 				t.Fatalf("expected second press to close the %s panel", tc.name)
@@ -185,6 +196,49 @@ func TestPanelClose_FinalizedContentDoesNotStick(t *testing.T) {
 			m.autoOpenPanel(tc.region)
 			if !rawPanelOpen(&m, tc.region) {
 				t.Errorf("expected auto-open to still work for the %s panel after closing finalized content", tc.name)
+			}
+		})
+	}
+}
+
+// TestPanelClose_RememberedPreferenceSticks is the ADR-0078 default
+// contract ("remember_panel_state" on): a manual toggle is a durable
+// preference for *every* panel — memory included and not excepted. It
+// survives content finalization and beats content-driven auto-open; the
+// generalization of what the memory panel alone had when its state first
+// became persistent.
+func TestPanelClose_RememberedPreferenceSticks(t *testing.T) {
+	cases := []struct {
+		name   string
+		region panelRegion
+		key    rune
+	}{
+		{"memory", regionMemory, tea.KeyF1},
+		{"tasks", regionTasks, tea.KeyF2},
+		{"background", regionBackground, tea.KeyF3},
+		{"workflow", regionWorkflow, tea.KeyF4},
+		{"project", regionProject, tea.KeyF5},
+		{"git", regionGit, tea.KeyF6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModelForPanels(t) // rememberPanelState on (default)
+			updated, _ := m.Update(tea.KeyPressMsg{Code: tc.key})
+			m = updated.(model)
+			if !rawPanelOpen(&m, tc.region) {
+				t.Fatalf("expected first press to open the %s panel", tc.name)
+			}
+			updated, _ = m.Update(tea.KeyPressMsg{Code: tc.key})
+			m = updated.(model)
+			if rawPanelOpen(&m, tc.region) {
+				t.Fatalf("expected second press to close the %s panel", tc.name)
+			}
+			if !m.panelManualOverride[tc.region] {
+				t.Errorf("a remembered close must stay recorded for the %s panel", tc.name)
+			}
+			m.autoOpenPanel(tc.region)
+			if rawPanelOpen(&m, tc.region) {
+				t.Errorf("expected the remembered close to beat auto-open for the %s panel", tc.name)
 			}
 		})
 	}
@@ -202,12 +256,14 @@ func TestTaskStoreChangedMsg_OpensTasksPanel(t *testing.T) {
 }
 
 // TestTaskStoreChangedMsg_ManualCloseSticksUntilTasksFinalize walks the
-// full ADR-0059 cycle: a user close sticks while a task is still open,
-// completing the last task finalizes the content (resetting the override
-// without force-opening the panel), and the next created task auto-opens
-// the panel again.
+// full ADR-0059 cycle (the session-only semantics, "remember_panel_state":
+// false): a user close sticks while a task is still open, completing the
+// last task finalizes the content (resetting the override without
+// force-opening the panel), and the next created task auto-opens the panel
+// again.
 func TestTaskStoreChangedMsg_ManualCloseSticksUntilTasksFinalize(t *testing.T) {
 	m := newTestModelForPanels(t)
+	m.rememberPanelState = false // ADR-0059 expiry semantics
 	ts, err := tasks.New(t.TempDir(), "sess")
 	if err != nil {
 		t.Fatal(err)
@@ -274,12 +330,14 @@ func TestBackgroundJobStartedMsg_OpensBackgroundPanel(t *testing.T) {
 	}
 }
 
-// TestBackgroundJobDoneMsg_ResetsManualOverride: closing the background
-// panel while a job runs sticks, the job finishing finalizes the content
-// and re-arms auto-open (without force-opening), and the next spawned job
-// opens the panel again.
+// TestBackgroundJobDoneMsg_ResetsManualOverride (session-only semantics,
+// "remember_panel_state": false): closing the background panel while a job
+// runs sticks, the job finishing finalizes the content and re-arms
+// auto-open (without force-opening), and the next spawned job opens the
+// panel again.
 func TestBackgroundJobDoneMsg_ResetsManualOverride(t *testing.T) {
 	m := newTestModelForPanels(t)
+	m.rememberPanelState = false // ADR-0059 expiry semantics
 	cancel := spawnRunningBackgroundJob(t, &m)
 
 	// Open then close via F3 while the job is running.
@@ -320,12 +378,14 @@ func TestBackgroundJobDoneMsg_ResetsManualOverride(t *testing.T) {
 	}
 }
 
-// TestWorkflowProgressMsg_RespectsManualClose: closing the workflow panel
-// mid-run sticks over ongoing progress, WorkflowDoneMsg finalizes the
-// content (resetting the override without force-opening), and the next
-// auto-open trigger re-opens the panel.
+// TestWorkflowProgressMsg_RespectsManualClose (session-only semantics,
+// "remember_panel_state": false): closing the workflow panel mid-run
+// sticks over ongoing progress, WorkflowDoneMsg finalizes the content
+// (resetting the override without force-opening), and the next auto-open
+// trigger re-opens the panel.
 func TestWorkflowProgressMsg_RespectsManualClose(t *testing.T) {
 	m := newTestModelForPanels(t)
+	m.rememberPanelState = false // ADR-0059 expiry semantics
 	m.workflowRunning = true
 	m.workflowState = &workflow.State{WorkflowName: "test", Task: "t", Role: "worker"}
 
@@ -366,12 +426,16 @@ func TestWorkflowProgressMsg_RespectsManualClose(t *testing.T) {
 	}
 }
 
-// TestForget_ResetsManualOverrideWhenMemoryEmptied: closing the memory
-// panel while percepts exist sticks, and /forget deleting the last percept
-// empties the store — the memory panel's finalization event — resetting
-// the override for its next content.
+// TestForget_PreservesMemoryPreferenceWhenEmptied: with the durable panel
+// state (ADR-0078, the default) closing the memory panel while percepts
+// exist is a remembered preference — /forget deleting the last percept
+// (the store's finalization event) must not reset it, and the choice must
+// reach the state file for the next session. (The ADR-0059 expiry that
+// emptying used to trigger is the "remember_panel_state": false fallback,
+// pinned by TestPanelClose_FinalizedContentDoesNotStick.)
 func TestForget_PreservesMemoryPreferenceWhenEmptied(t *testing.T) {
 	m := newTestModelForPanels(t)
+	m.panelStatePath = filepath.Join(t.TempDir(), "panel-state.json")
 	store, err := memory.NewStoreParams(t.TempDir(), "sess", memory.Params{})
 	if err != nil {
 		t.Fatal(err)
@@ -381,11 +445,17 @@ func TestForget_PreservesMemoryPreferenceWhenEmptied(t *testing.T) {
 	}
 	m.mem = store
 
-	// Close via F1 while the store still has content → sticky.
+	// The panel starts closed (content-driven default); open, then close
+	// via F1 while the store still has content → remembered preference.
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
 	m2 := updated.(model)
+	if !m2.panelMemory {
+		t.Fatal("expected F1 to open the memory panel")
+	}
+	updated, _ = m2.Update(tea.KeyPressMsg{Code: tea.KeyF1})
+	m2 = updated.(model)
 	if m2.panelMemory {
-		t.Fatal("expected F1 to close the memory panel")
+		t.Fatal("expected the second F1 to close the memory panel")
 	}
 	if !m2.panelManualOverride[regionMemory] {
 		t.Fatal("closing while memory has content must record a manual override")
@@ -405,6 +475,13 @@ func TestForget_PreservesMemoryPreferenceWhenEmptied(t *testing.T) {
 	}
 	if !m3.panelManualOverride[regionMemory] {
 		t.Error("emptying memory must preserve the user's panel preference")
+	}
+	data, err := os.ReadFile(m.panelStatePath)
+	if err != nil {
+		t.Fatalf("the preference must reach the state file: %v", err)
+	}
+	if !strings.Contains(string(data), `"memory":false`) {
+		t.Errorf("expected the closed memory preference in the state file, got %s", data)
 	}
 }
 

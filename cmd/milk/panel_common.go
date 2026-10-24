@@ -89,10 +89,11 @@ func panelTitleLine(title string, region panelRegion, inner int) string {
 // active (a workflow started, a background job was spawned, a task was
 // saved, ...) — unless the user has explicitly shown or hidden that panel
 // via /panel or its F1-F6 shortcut this session (see panelManualOverride),
-// in which case their choice sticks and this is a no-op. A manual override
-// is not permanent: it is dropped again as soon as the panel's content
-// finalizes (see resetManualOverrideIfFinalized), so the *next* active
-// content auto-opens the panel once more.
+// in which case their choice sticks and this is a no-op. With
+// "remember_panel_state": false the override is not permanent: it is
+// dropped again as soon as the panel's content finalizes (see
+// resetManualOverrideIfFinalized), so the *next* active content auto-opens
+// the panel once more (ADR-0059).
 //
 // A silent auto-open is exactly the kind of surprise event that should
 // explain itself: when the panel *transitions* closed→open (issue #162 /
@@ -104,15 +105,8 @@ func (m *model) autoOpenPanel(region panelRegion) {
 		return
 	}
 	wasOpen := m.panelOpen(region)
-	switch region {
-	case regionMemory:
-		m.panelMemory = true
-	case regionTasks:
-		m.panelTasks = true
-	case regionBackground:
-		m.panelBackground = true
-	case regionWorkflow:
-		m.workflowPanelOpen = true
+	if ptr := m.panelOpenPtr(region); ptr != nil {
+		*ptr = true
 	}
 	if !wasOpen && m.panelOpen(region) {
 		m.notify(panelDisplayName(region)+" panel opened", "/panel "+panelSubName(region))
@@ -196,7 +190,12 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 // completed, or done (see panelContentFinalized). From that point on, the
 // *next* active content auto-opens the panel again: the user's close stays
 // respected for the live content it was dismissed over, but no longer
-// blocks genuinely new activity later in the session.
+// blocks genuinely new activity later in the session (ADR-0059).
+//
+// With the default "remember_panel_state" (ADR-0078) this is a no-op for
+// every region: a manual toggle is a durable preference — persisted and
+// restored across sessions — so content finalization never expires it.
+// The ADR-0059 expiry is the feature-off fallback (session-only panels).
 //
 // Called from two kinds of sites:
 //   - handlePanelCmd, when a toggle *closes* the panel — closing a panel
@@ -214,7 +213,7 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 // (so the finalizing event itself never force-opens a user-closed panel),
 // then this reset — only future content re-opens it.
 func (m *model) resetManualOverrideIfFinalized(region panelRegion) {
-	if region == regionMemory {
+	if m.rememberPanelState {
 		return
 	}
 	if m.panelManualOverride[region] && m.panelContentFinalized(region) {
@@ -295,6 +294,29 @@ func (m *model) panelAltBackground(region panelRegion) bool {
 		idx++
 	}
 	return false
+}
+
+// panelOpenPtr returns a pointer to the model's raw open flag for the given
+// side-panel region (no layout/width gating — panelOpen's visible() checks
+// are render-time only), or nil for regionNone/an unknown region. Toggling
+// (/panel, F1-F6), auto-open and panel-state persistence share it, so the
+// setters can never drift out of sync with the readers.
+func (m *model) panelOpenPtr(region panelRegion) *bool {
+	switch region {
+	case regionMemory:
+		return &m.panelMemory
+	case regionTasks:
+		return &m.panelTasks
+	case regionBackground:
+		return &m.panelBackground
+	case regionWorkflow:
+		return &m.workflowPanelOpen
+	case regionProject:
+		return &m.panelProject
+	case regionGit:
+		return &m.panelGit
+	}
+	return nil
 }
 
 // panelOffsetPtr returns a pointer to the model's persisted scroll offset for

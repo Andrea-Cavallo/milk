@@ -848,24 +848,32 @@ type model struct {
 	activeToolUse string
 
 	// panelManualOverride tracks which panels the user has explicitly
-	// shown/hidden (via /panel or its F1-F6 shortcut) this session. Once a
-	// region is in here, automatic "this panel's content just became
-	// active" opens (see autoOpenPanel) skip it — the user's own choice
-	// sticks over automatic management. The stickiness only lasts while
-	// the panel's content stays live: resetManualOverrideIfFinalized
-	// drops the entry again the moment the content finalizes (emptied,
-	// completed, or done — panelContentFinalized), re-arming auto-open
-	// for the next new content (ADR-0059).
+	// shown/hidden (via /panel or its F1-F6 shortcut). Once a region is in
+	// here, automatic "this panel's content just became active" opens (see
+	// autoOpenPanel) skip it — the user's own choice sticks over automatic
+	// management. With the default "remember_panel_state" (ADR-0078) the
+	// choice is a durable preference that never expires (and is restored
+	// from ~/.milk/panel-state.json at startup); with it off, stickiness
+	// only lasts while the panel's content stays live:
+	// resetManualOverrideIfFinalized drops the entry again the moment the
+	// content finalizes (emptied, completed, or done —
+	// panelContentFinalized), re-arming auto-open for the next new content
+	// (ADR-0059).
 	panelManualOverride map[panelRegion]bool
 
+	// panel state persistence (ADR-0078): where panel preferences live on
+	// disk (empty = persistence unavailable, e.g. in tests) and whether the
+	// "remember_panel_state" feature is on (default true).
+	panelStatePath     string
+	rememberPanelState bool
+
 	// memory panel
-	panelMemory          bool
-	memoryExpanded       string
-	memoryPreferencePath string
-	panelOffset          int
-	mem                  *memory.Store
-	lastPanelClickID     string
-	lastPanelClickTime   time.Time
+	panelMemory        bool
+	memoryExpanded     string
+	panelOffset        int
+	mem                *memory.Store
+	lastPanelClickID   string
+	lastPanelClickTime time.Time
 
 	// tasks panel
 	panelTasks  bool
@@ -1238,7 +1246,10 @@ func newModel(ctx context.Context, st *interactiveState, rtr *router.Router, age
 		showTips:            st.cfg.ShowTipsEnabled(),
 		thinkFoldOpen:       st.cfg.ThinkFoldExpanded(), // starting fold status (issue #278)
 		mem:                 mem,
-		panelMemory:         true,
+		// The memory panel is closed by default and opens only when the
+		// store has content (ADR-0078) — see applyMemoryContentDefault.
+		panelMemory:         false,
+		rememberPanelState:  st.cfg.RememberPanelStateEnabled(),
 		panelManualOverride: map[panelRegion]bool{},
 		selAnchorLine:       -1,
 		selEndLine:          -1,
@@ -2135,9 +2146,10 @@ func (m model) Init() tea.Cmd {
 		textarea.Blink,
 		tea.RequestBackgroundColor,
 	}
-	if m.panelMemory {
-		cmds = append(cmds, memoryPollTick())
-	}
+	// Memory panel redraw + content-driven auto-open (ADR-0078) — armed
+	// unconditionally (the panel starts closed and the tick is what notices
+	// content arriving); cheap next to the 80ms spinner.
+	cmds = append(cmds, memoryPollTick())
 	// Idle tip rotation (ADR-0061) — armed unconditionally, cheap at 20s.
 	cmds = append(cmds, tipsTick(m.tipsGen))
 	if m.credRefreshInit != nil {
@@ -2923,10 +2935,13 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case memoryRefreshMsg:
-		if m.panelMemory {
-			return m, memoryPollTick()
+		// Content presence is what opens the memory panel (ADR-0078): when
+		// the user hasn't managed it and the store gained content, open it
+		// like any other panel's content event.
+		if !m.panelMemory && !m.panelContentFinalized(regionMemory) {
+			m.autoOpenPanel(regionMemory)
 		}
-		return m, nil
+		return m, memoryPollTick()
 
 	case projectRefreshMsg:
 		if !m.panelProject {
@@ -4224,6 +4239,22 @@ func (m model) buildTUIAgents(send func(tea.Msg), ir0 *tuiInputReader) (dispatch
 // track with a bright ▌ thumb proportional to scroll position.
 // --- Memory panel poll ---
 
+// applyMemoryContentDefault seeds the memory panel's startup state from
+// content presence (ADR-0078): the panel is closed by default and opens
+// only when the percept store actually has content — any scope, session
+// or global. A remembered manual choice wins over this check (loading it
+// sets the panel's state and its manual override); quiet by design — at
+// startup the panel appearing is the screen itself, not a surprise event
+// needing a toast.
+func (m *model) applyMemoryContentDefault() {
+	if m.panelManualOverride[regionMemory] {
+		return
+	}
+	if !m.panelContentFinalized(regionMemory) {
+		m.panelMemory = true
+	}
+}
+
 func memoryPollTick() tea.Cmd {
 	return tea.Tick(memoryPollInterval, func(time.Time) tea.Msg {
 		return memoryRefreshMsg{}
@@ -4798,9 +4829,12 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	}
 
 	m := newModel(ctx, st, rtr, agents, mem)
-	if dir, err := config.Dir(); err == nil {
-		m.loadMemoryPreference(filepath.Join(dir, "memory-panel.state"))
+	if m.rememberPanelState {
+		if dir, err := config.Dir(); err == nil {
+			m.loadPanelState(filepath.Join(dir, "panel-state.json"))
+		}
 	}
+	m.applyMemoryContentDefault()
 	m.taskStore = taskStore
 	m.hasInferenceAgent = cfg.HasInferenceAgent()
 	if startupWarning != "" {

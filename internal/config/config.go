@@ -195,6 +195,9 @@ func DeepMerge(dst, src Config) Config {
 	if src.CopyOnSelect != nil {
 		dst.CopyOnSelect = src.CopyOnSelect
 	}
+	if src.RememberPanelState != nil {
+		dst.RememberPanelState = src.RememberPanelState
+	}
 	if src.StickyEscalation != nil {
 		dst.StickyEscalation = src.StickyEscalation
 	}
@@ -1102,6 +1105,14 @@ type Config struct {
 	// button is released, instead of waiting for a right-click or ctrl+c.
 	// false (default) = keep the selection until the user copies it.
 	CopyOnSelect *bool `json:"copy_on_select,omitempty"`
+
+	// RememberPanelState makes side-panel open/closed choices durable
+	// (ADR-0078). A manual toggle is then a preference: persisted to
+	// ~/.milk/panel-state.json, restored at startup, and never dropped by
+	// content finalization (ADR-0059's expiry is the feature-off fallback).
+	// Unset (default) = on; "remember_panel_state": false keeps panels
+	// session-only.
+	RememberPanelState *bool `json:"remember_panel_state,omitempty"`
 
 	// Animations turns the TUI's spring animations (side panels sliding in
 	// and out, wheel scrolling with inertia) on or off. Unset = on.
@@ -2261,6 +2272,15 @@ func intOr(v, def int) int {
 // "show_tips": false turns them off).
 func (c Config) ShowTipsEnabled() bool {
 	return c.ShowTips == nil || *c.ShowTips
+}
+
+// RememberPanelStateEnabled reports whether side-panel state management is
+// durable (ADR-0078): panel open/closed choices persist across sessions
+// and survive content finalization (true when unset —
+// "remember_panel_state": false opts out, restoring ADR-0059's
+// session-only expiry semantics).
+func (c Config) RememberPanelStateEnabled() bool {
+	return c.RememberPanelState == nil || *c.RememberPanelState
 }
 
 // ThinkFoldExpanded reports whether new thinking blocks in a session start

@@ -1708,25 +1708,25 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 	case "memory":
 		m.panelManualOverride[regionMemory] = true
 		m.panelMemory = !m.panelMemory
-		if err := m.saveMemoryPreference(); err != nil {
-			m.appendTranscript(fmt.Sprintf("%s memory panel preference could not be saved: %v\n", milkTag(), err))
+		if !m.panelMemory {
+			m.resetManualOverrideIfFinalized(regionMemory)
 		}
+		m.savePanelStateReport()
 		m.refreshPrompt()
 		m.syncLayout()
-		var tick tea.Cmd
 		if m.panelMemory {
 			m.notify("memory panel: on", "/panel memory")
-			tick = memoryPollTick()
 		} else {
 			m.notify("memory panel: off", "/panel memory")
 		}
-		return m, tick
+		return m, nil
 	case "tasks":
 		m.panelManualOverride[regionTasks] = true
 		m.panelTasks = !m.panelTasks
 		if !m.panelTasks {
 			m.resetManualOverrideIfFinalized(regionTasks)
 		}
+		m.savePanelStateReport()
 		m.refreshPrompt()
 		m.syncLayout()
 		if m.panelTasks {
@@ -1741,6 +1741,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.workflowPanelOpen {
 			m.resetManualOverrideIfFinalized(regionWorkflow)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.workflowPanelOpen {
 			m.notify("workflow panel: on", "/panel workflow")
@@ -1754,6 +1755,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.panelBackground {
 			m.resetManualOverrideIfFinalized(regionBackground)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.panelBackground {
 			m.notify("background panel: on", "/panel background")
@@ -1767,6 +1769,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.panelProject {
 			m.resetManualOverrideIfFinalized(regionProject)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.panelProject {
 			m.notify("project panel: on", "/panel project")
@@ -1781,6 +1784,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.panelGit {
 			m.resetManualOverrideIfFinalized(regionGit)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.panelGit {
 			m.notify("git panel: on", "/panel git")
