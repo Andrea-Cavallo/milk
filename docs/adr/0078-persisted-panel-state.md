@@ -32,8 +32,9 @@ open rule instead of special-casing it.
 A manual toggle (`/panel <name>` or F1-F6) is a **preference**, not just a
 session event:
 
-- persisted to `~/.milk/panel-state.json` (atomic temp+rename; `version`
-  plus a `panels` map of `panelSubName` → open state), saved on every
+- persisted to a **folder-bound** file — `~/.milk/panel-state/<name>-<hash>.json`,
+  one per project folder (atomic temp+rename; `version` plus a `panels` map
+  of `panelSubName` → open state), saved on every
   manual toggle;
 - restored at startup, seeding both the panel's open state *and* its
   `panelManualOverride` entry — so content-driven auto-open never fights
@@ -87,3 +88,34 @@ migration.
   closed.
 - `panelOpenPtr` is the single raw-state accessor shared by toggling,
   auto-open and persistence, so the six panel setters cannot drift.
+
+## Amendment (2026-10-25): folder-bound files
+
+The state file was one global `~/.milk/panel-state.json` shared by every
+project. The follow-up rule: *the panel state files should be folder-bound,
+or at least session-bound* — the same concern that previously surfaced as
+the background-job state file pointing at the startup session only (state
+files must be context-bound, never singletons). The file is now per folder:
+
+- **`~/.milk/panel-state/<name>-<hash>.json`** — `<name>` is the folder's
+  sanitized base name (human-findable), `<hash>` is `session.CWDHash` (12
+  hex chars of the folder's sha256, so same-named folders stay distinct);
+  the folder's full path is also stored inside the file (`folder` field,
+  `omitempty`). Resolution (`panelStatePathFor`) uses `activeConfigDir(st)` —
+  the session's folder, the same scoping rule config views already use —
+  **once at startup**: `/new`//`resume`//`clear` change the conversation,
+  not the folder the layout belongs to.
+- **One-time adoption.** The old global file is *moved* (never copied, never
+  discarded) to the first folder that loads after the upgrade
+  (`adoptLegacyPanelState`): existing preferences survive the migration
+  without re-appearing in every other folder. An existing folder file always
+  wins over a leftover legacy file, and a failed move falls back to reading
+  the legacy path rather than dropping state.
+- **Consequences.** Two folders can never clobber each other's state, and a
+  second folder starts from its own empty preferences instead of inheriting
+  whatever the first one saved. Concurrent sessions in the *same* folder
+  still share one file — panel layout is a preference, like the theme —
+  with session-level binding inside a folder left open if that ever bites.
+  Older milk binaries looking for `~/.milk/panel-state.json` simply start
+  fresh. Format: `version` unchanged (content shape identical); files
+  written without a bound folder keep the old byte shape.

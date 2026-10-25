@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -853,7 +852,7 @@ type model struct {
 	// autoOpenPanel) skip it — the user's own choice sticks over automatic
 	// management. With the default "remember_panel_state" (ADR-0078) the
 	// choice is a durable preference that never expires (and is restored
-	// from ~/.milk/panel-state.json at startup); with it off, stickiness
+	// from the folder's panel-state file at startup); with it off, stickiness
 	// only lasts while the panel's content stays live:
 	// resetManualOverrideIfFinalized drops the entry again the moment the
 	// content finalizes (emptied, completed, or done —
@@ -863,8 +862,11 @@ type model struct {
 
 	// panel state persistence (ADR-0078): where panel preferences live on
 	// disk (empty = persistence unavailable, e.g. in tests) and whether the
-	// "remember_panel_state" feature is on (default true).
+	// "remember_panel_state" feature is on (default true). panelStateFolder
+	// is the folder the state belongs to, stored inside the file for
+	// self-description (panelStateFile.Folder).
 	panelStatePath     string
+	panelStateFolder   string
 	rememberPanelState bool
 
 	// panelTabMRU is the tabbed-theme (ADR-0079) most-recently-viewed stack
@@ -4839,7 +4841,15 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	m := newModel(ctx, st, rtr, agents, mem)
 	if m.rememberPanelState {
 		if dir, err := config.Dir(); err == nil {
-			m.loadPanelState(filepath.Join(dir, "panel-state.json"))
+			// Panel state is folder-bound (ADR-0078 amendment): the
+			// session's folder — the same scoping rule config views use
+			// (activeConfigDir) — picks the file, so preferences follow the
+			// project and never leak between folders. Bound once at startup:
+			// /new //resume //clear change the conversation, not the folder
+			// the layout belongs to.
+			folder := activeConfigDir(st)
+			m.panelStateFolder = folder
+			m.loadPanelState(adoptLegacyPanelState(dir, panelStatePathFor(dir, folder)))
 		}
 	}
 	m.applyMemoryContentDefault()

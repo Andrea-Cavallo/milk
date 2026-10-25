@@ -47,7 +47,7 @@ side panels are **tabs of one shared slot**:
 - **No fallback on close.** With exclusivity, closing the front tab empties
   the slot — there is no sibling to hand it back to. `panelTabMRU` remains
   only to pick the front among whatever open panels a legacy multi-open
-  state hands the loader (`active` in `panel-state.json`).
+  state hands the loader (`active` in the folder's panel-state file).
 - **Auto-open takes a free slot only.** Content-driven auto-open (ADR-0044)
   fires while the shared slot is empty — "panel opened" must mean the user
   can see it — and never while another panel is shown: live content (every
@@ -57,7 +57,8 @@ side panels are **tabs of one shared slot**:
   content changes: a browser-like instant swap. The existing slide-in /
   shrink-out choreography (ADR-0076) still runs for what it was built for —
   the slot appearing (first panel) and disappearing (last panel).
-- **The front tab is a preference.** `panel-state.json` (ADR-0078) gained an
+- **The front tab is a preference.** The panel-state file (ADR-0078, now
+  folder-bound) gained an
   optional `active` key, written only for manually chosen panels (the same
   rule as the open flags: auto-opened state is not a preference) and restored
   at startup. A stale `active` naming a closed panel is harmless — the front

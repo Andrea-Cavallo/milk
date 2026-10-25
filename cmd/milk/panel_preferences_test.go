@@ -208,3 +208,126 @@ func TestMemoryRefreshMsg_OpensOnContentAndRearms(t *testing.T) {
 		t.Error("expected the poll to re-arm even while suppressed")
 	}
 }
+
+// TestPanelStatePath_BoundToFolder: panel state resolves to one file per
+// folder — different folders get different paths, the same folder always
+// the same path, the stem stays human-findable (sanitized basename plus
+// session.CWDHash), same-named folders in different parents stay distinct,
+// and no folder means no persistence at all.
+func TestPanelStatePath_BoundToFolder(t *testing.T) {
+	dir := t.TempDir()
+	a := panelStatePathFor(dir, "/home/u/repo-alpha")
+	b := panelStatePathFor(dir, "/home/u/repo-beta")
+	if a == b {
+		t.Fatalf("two folders must resolve to different files, both got %s", a)
+	}
+	if a != panelStatePathFor(dir, "/home/u/repo-alpha") {
+		t.Error("the same folder must always resolve to the same file")
+	}
+	if filepath.Base(filepath.Dir(a)) != "panel-state" {
+		t.Errorf("state files live under panel-state/, got %s", a)
+	}
+	key := strings.TrimSuffix(filepath.Base(a), ".json")
+	if !strings.HasPrefix(key, "repo-alpha-") {
+		t.Errorf("file stem should keep the folder's basename, got %s", key)
+	}
+	if hash := strings.TrimPrefix(key, "repo-alpha-"); len(hash) != 12 {
+		t.Errorf("hash suffix = %q, want 12 hex chars (session.CWDHash)", hash)
+	}
+	if x, y := panelStatePathFor(dir, "/a/build"), panelStatePathFor(dir, "/b/build"); x == y {
+		t.Error("same-named folders in different parents must not collide (hash disambiguates)")
+	}
+	if got := panelStatePathFor(dir, ""); got != "" {
+		t.Errorf("no folder must resolve to no persistence, got %q", got)
+	}
+	if got := panelStatePathFor("", "/x/y"); got != "" {
+		t.Errorf("no config dir must resolve to no persistence, got %q", got)
+	}
+}
+
+// TestPanelState_LegacyFileAdoptedOnce: the pre-folder-bound global file is
+// claimed (moved) by the first folder that loads — its preferences survive
+// the migration — and the next folder starts from its own empty state
+// instead of inheriting the same global file again. An existing folder file
+// always wins over a leftover legacy file.
+func TestPanelState_LegacyFileAdoptedOnce(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "panel-state.json")
+	if err := os.WriteFile(legacy, []byte(`{"version":1,"panels":{"memory":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Folder A claims the legacy file.
+	pathA := adoptLegacyPanelState(dir, panelStatePathFor(dir, "/projects/alpha"))
+	if pathA == legacy {
+		t.Fatal("expected the legacy file to be adopted by the first folder")
+	}
+	mA := newTestModelForPanels(t)
+	mA.loadPanelState(pathA)
+	if !mA.panelMemory {
+		t.Error("legacy preferences must survive into the adopting folder")
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Error("the legacy global file must be gone after adoption")
+	}
+
+	// A re-adopt attempt for folder A (its file exists) must not resurrect
+	// or touch anything: the folder file wins.
+	if err := os.WriteFile(legacy, []byte(`{"version":1,"panels":{"git":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := adoptLegacyPanelState(dir, pathA); got != pathA {
+		t.Errorf("existing folder file must win, got %q", got)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Error("leftover legacy file must be left alone when the folder has state")
+	}
+	if err := os.Remove(legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	// Folder B: no legacy left — it must not inherit folder A's state.
+	pathB := adoptLegacyPanelState(dir, panelStatePathFor(dir, "/projects/beta"))
+	mB := newTestModelForPanels(t)
+	mB.loadPanelState(pathB)
+	if mB.panelMemory || mB.panelGit {
+		t.Error("a second folder must not inherit another folder's (or the legacy global) state")
+	}
+}
+
+// TestPanelState_FolderTaggedInFile: the folder a state file belongs to is
+// stored inside it, so browsing ~/.milk/panel-state/ shows which project
+// each file is for; tests/ACP that set the path directly leave it empty.
+func TestPanelState_FolderTaggedInFile(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.panelStatePath = filepath.Join(t.TempDir(), "x.json")
+	m.panelStateFolder = "/projects/alpha"
+	m.panelManualOverride = map[panelRegion]bool{regionTasks: true}
+	m.panelTasks = true
+	if err := m.savePanelState(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	data, err := os.ReadFile(m.panelStatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"folder":"/projects/alpha"`) {
+		t.Errorf("state file must record its folder, got %s", data)
+	}
+
+	// A model without a bound folder writes no folder tag (omitempty keeps
+	// such files byte-compatible with the pre-folder format).
+	m2 := newTestModelForPanels(t)
+	m2.panelStatePath = filepath.Join(t.TempDir(), "y.json")
+	m2.panelManualOverride = map[panelRegion]bool{regionTasks: true}
+	if err := m2.savePanelState(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	data2, err := os.ReadFile(m2.panelStatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data2), `"folder"`) {
+		t.Errorf("no folder bound must mean no folder tag, got %s", data2)
+	}
+}

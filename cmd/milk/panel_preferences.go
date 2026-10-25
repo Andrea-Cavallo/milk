@@ -5,16 +5,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/scoutme/milk/internal/session"
 )
 
 // Side-panel state persistence (ADR-0078), generalized from the
 // memory-only preference this started as: every panel's open/closed choice
 // is a durable preference. On a manual toggle (/panel <name> or F1-F6) the
-// state is written to ~/.milk/panel-state.json and restored at startup;
-// the restored choice also seeds panelManualOverride, so content-driven
-// auto-open never fights what the user last chose. Auto-opened state is
-// deliberately *not* saved — only manually toggled panels have a
-// preference (panelManualOverride is exactly that set).
+// state is written to the folder-bound file resolved by panelStatePathFor
+// (~/.milk/panel-state/<name>-<hash>.json, one per project folder) and
+// restored at startup; the restored choice also seeds panelManualOverride,
+// so content-driven auto-open never fights what the user last chose.
+// Auto-opened state is deliberately *not* saved — only manually toggled
+// panels have a preference (panelManualOverride is exactly that set).
 //
 // The whole mechanism is feature-gated by the "remember_panel_state"
 // config key (default on). With it off nothing is read or written and
@@ -22,20 +26,97 @@ import (
 // Load is skipped at the call site; save is guarded here so no code path
 // can leak a write when the feature is off.
 
-// panelStateFile is the on-disk shape of ~/.milk/panel-state.json. Version
+// panelStateFile is the on-disk shape of a panel-state file. Version
 // guards future shape changes; Panels maps panelSubName → the panel's raw
-// open flag at the time of the last manual toggle, and Active names the tab
+// open flag at the time of the last manual toggle; Active names the tab
 // in front of the shared panel slot on tabbed themes (ADR-0079) — which of
 // the open panels the user last looked at. Active is empty in files written
 // before it, and harmless if the named panel is not open after restore
-// (panelActive falls back to the first open panel).
+// (panelActive falls back to the first open panel). Folder records the
+// absolute folder the file belongs to, so a listing of
+// ~/.milk/panel-state/ is self-describing; it is empty in files loaded by
+// an explicit path (tests, ACP).
 type panelStateFile struct {
 	Version int             `json:"version"`
 	Panels  map[string]bool `json:"panels"`
 	Active  string          `json:"active,omitempty"`
+	Folder  string          `json:"folder,omitempty"`
 }
 
 const panelStateFileVersion = 1
+
+// panelStatePathFor resolves the folder-bound panel-state file for folder
+// (ADR-0078 amendment): <configDir>/panel-state/<name>-<hash>.json — one
+// file per folder, so panel preferences follow the project the TUI was
+// launched in instead of leaking between projects, and two folders can
+// never clobber each other's state. <hash> is session.CWDHash(folder) (12
+// hex chars of the folder's sha256) so same-named folders stay distinct;
+// <name> is a sanitized copy of the folder's base name so the file stays
+// human-findable, and the full path is stored inside the file itself
+// (panelStateFile.Folder). Empty configDir or folder resolves to "" —
+// nothing to bind to: load then reads nothing and save is guarded on the
+// empty path, i.e. no persistence, same as the feature being off.
+func panelStatePathFor(configDir, folder string) string {
+	if configDir == "" || folder == "" {
+		return ""
+	}
+	return filepath.Join(configDir, "panel-state", panelStateFolderKey(folder)+".json")
+}
+
+// panelStateFolderKey builds the file stem for a folder: its sanitized,
+// capped base name plus session.CWDHash(folder), e.g.
+// "milk-3f9a1c2d4e5f". Non-ASCII and separator bytes collapse to '-', so
+// the result is safe on every filesystem milk runs on.
+func panelStateFolderKey(folder string) string {
+	base := filepath.Base(filepath.Clean(folder))
+	var b strings.Builder
+	for _, r := range base {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-.")
+	if len(name) > 32 {
+		name = name[:32]
+	}
+	if name == "" {
+		name = "folder"
+	}
+	return name + "-" + session.CWDHash(folder)
+}
+
+// adoptLegacyPanelState migrates the pre-folder-bound global
+// <configDir>/panel-state.json (one file for every project) to the current
+// folder's path: the first folder to load after the upgrade claims it via
+// rename — the user's existing preferences survive without re-appearing in
+// every other folder. When the folder's own file already exists it wins and
+// the legacy file is left for the next state-less folder to claim; if the
+// move itself cannot happen (path missing, permissions), the legacy path is
+// returned so this load reads it instead of losing the state — it is only
+// ever *moved*, never discarded.
+func adoptLegacyPanelState(configDir, target string) string {
+	if configDir == "" || target == "" {
+		return target
+	}
+	legacy := filepath.Join(configDir, "panel-state.json")
+	if _, err := os.Stat(target); err == nil {
+		return target // this folder already has its own state
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		return target
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return legacy
+	}
+	if err := os.Rename(legacy, target); err != nil {
+		return legacy
+	}
+	return target
+}
 
 // loadPanelState restores saved panel preferences from path. Entries
 // become both the panel's open state and a sticky manual override; panels
@@ -79,7 +160,7 @@ func (m *model) savePanelState() error {
 	if m.panelStatePath == "" || !m.rememberPanelState {
 		return nil
 	}
-	f := panelStateFile{Version: panelStateFileVersion, Panels: map[string]bool{}}
+	f := panelStateFile{Version: panelStateFileVersion, Panels: map[string]bool{}, Folder: m.panelStateFolder}
 	for _, region := range panelRenderOrder {
 		if !m.panelManualOverride[region] {
 			continue
