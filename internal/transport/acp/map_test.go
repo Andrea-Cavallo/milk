@@ -173,6 +173,7 @@ func TestToolKindFor(t *testing.T) {
 		"bash":                   ToolKindExecute,
 		"find_files":             ToolKindSearch,
 		"grep":                   ToolKindSearch,
+		"project_map":            ToolKindSearch,
 		"http_get":               ToolKindFetch,
 		"http_request":           ToolKindFetch,
 		"think_tool":             ToolKindThink,

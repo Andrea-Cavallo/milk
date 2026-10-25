@@ -395,6 +395,22 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 		{
 			"type": "function",
 			"function": map[string]any{
+				"name":        "project_map",
+				"description": "Token-cheap structural map of a codebase (or a subtree): a short framing header (project identity, docs and build/config landmarks) plus files grouped by directory with their symbols and signatures (Go: go/ast; JS/TS, Python, Java, Rust: heuristic scanners) — outlines, never bodies. Other files are listed by name. Use it to orient in an unfamiliar project instead of reading files just to learn what they define. Output degrades gracefully (signatures → names → reference-ranked names → file tree) to stay within max_chars; per-file results are cached in-process and on disk, re-parsed only on change.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path":      map[string]any{"type": "string", "description": "Subtree to map (default: current directory)"},
+						"max_files": map[string]any{"type": "integer", "description": "Max files to include (default 200)"},
+						"max_chars": map[string]any{"type": "integer", "description": "Output budget in characters (default 6000); the outline degrades to fit"},
+					},
+					"required": []string{},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
 				"name":        "web_fetch",
 				"description": "Fetch a web page or API response. HTML is converted to Markdown by default (format: auto|markdown|text|html|raw). Upgrades http:// to https:// for non-local hosts. For web *search*, use an MCP search server instead.",
 				"parameters": map[string]any{
@@ -809,6 +825,8 @@ func dispatchTool(ctx context.Context, name, argsJSON string, sess *session.Sess
 		return runKillBash(ctx, args)
 	case "find_files":
 		return runFindFiles(ctx, args, cwd)
+	case "project_map":
+		return runProjectMap(ctx, args, cwd)
 	case "grep":
 		return runGrep(ctx, args, cwd)
 	case "read_file":

@@ -1459,6 +1459,12 @@ const systemPromptWorkflow = `You are a coding and shell automation assistant.
 
 ` + systemPromptShared
 
+// projectMapGuidance is appended to the system prompt whenever the
+// project_map tool is registered (issue #324): the tool's whole point is
+// cheap orientation, so steer agents to it before they pay for read_file
+// exploration. Never mandate a tool the agent doesn't have (issue #172).
+const projectMapGuidance = `- To orient in an unfamiliar codebase, call project_map first: one cheap call returns the file tree with symbols and signatures (never bodies). Prefer it over reading files just to learn what they define; follow up with targeted read_file/grep on what matters.`
+
 // systemPromptSharedFull is additional verbose guidance appended when
 // system_prompt_tier is "full".
 const systemPromptSharedFull = `Additional guidance:
@@ -1861,6 +1867,9 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 	}
 	if hasToolNamed(tools, "board_claim") {
 		spb.guidance = append(spb.guidance, boardToolGuidance)
+	}
+	if hasToolNamed(tools, "project_map") {
+		spb.guidance = append(spb.guidance, projectMapGuidance)
 	}
 	systemPrompt := spb.render(contextreduce.LevelNone, a.reductionPolicy)
 	msgs := []Message{{Role: "system", Content: systemPrompt}}
@@ -2969,6 +2978,8 @@ func toolResultCutHint(tool string) string {
 		return "use read_file with offset/limit to read the omitted lines"
 	case "bash":
 		return "re-run with head/tail/grep/sed -n to see the omitted part"
+	case "project_map":
+		return "narrow with path= or raise max_chars/max_files to see the omitted part"
 	}
 	return ""
 }
@@ -3189,7 +3200,7 @@ Action streak detected: %s. You are stuck in a non-progressing loop. Stop and tr
 func isReadOnlyTool(name string) bool {
 	switch name {
 	case "read_file", "list_dir", "grep", "find_files", "bash_output",
-		"web_fetch", "open_file", "get_memory", "list_memory",
+		"project_map", "web_fetch", "open_file", "get_memory", "list_memory",
 		"get_session_context", "get_context_stats", "get_metrics",
 		"search_signals", "list_tasks", "status_background_agent",
 		"wait_background_agent", "milk_config_help", "current_need":
