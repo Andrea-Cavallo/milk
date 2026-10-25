@@ -38,7 +38,13 @@ func newAPIServer(replies ...string) *apiServer {
 		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
 			s.mu.Lock()
 			var result []map[string]any
-			if len(s.replies) > 0 {
+			// Serve a scripted reply only once the question has been sent:
+			// AskInput registers its reply channel *before* sending, so
+			// "question recorded" proves the waiter is registered — without
+			// this gate a reply served on the very first poll can beat the
+			// registration and be dispatched nowhere (CI flake: the ask
+			// then times out with answer="" ok=false).
+			if len(s.replies) > 0 && len(s.sent) > 0 {
 				result = append(result, map[string]any{
 					"update_id": 1,
 					"message": map[string]any{
