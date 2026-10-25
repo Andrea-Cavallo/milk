@@ -66,13 +66,27 @@ func (m *model) headerBar() string {
 	if version == "dev" {
 		vStyled = boldYellow(version)
 	}
-	rightFull := dim(repoURL+" ") + vStyled + dim("  "+sessLabel+"  /help")
-	rightFulPlain := repoURL + " " + version + "  " + sessLabel + "  /help"
-	rightShort := vStyled + dim("  "+sessLabel+"  /help")
-	rightShortPlain := version + "  " + sessLabel + "  /help"
+	// The command palette key rides beside /help in every variant: a
+	// shortcut nobody can discover is a shortcut that doesn't exist. It
+	// mirrors /help's styling per skin (dim in the classic skin, accent
+	// in supermilk) so the two hints read as one pair, and it survives
+	// the narrow-width degradation below with the version.
+	paletteHint := "ctrl+o palette"
+	rightFull := dim(repoURL+" ") + vStyled + dim("  "+sessLabel+"  "+paletteHint+"  /help")
+	rightFulPlain := repoURL + " " + version + "  " + sessLabel + "  " + paletteHint + "  /help"
+	rightShort := vStyled + dim("  "+sessLabel+"  "+paletteHint+"  /help")
+	rightShortPlain := version + "  " + sessLabel + "  " + paletteHint + "  /help"
 	if th.modern {
-		rightFull = vStyled + dim("  "+sessLabel+"  ") + colorize("/help", tkAccent.sgrFg())
-		rightFulPlain = version + "  " + sessLabel + "  /help"
+		// The supermilk skin paints its own right group — and it must
+		// cover the narrow variant too: the classic short fallback would
+		// otherwise silently dim the hints (pre-/help behavior) on any
+		// terminal too tight for the full variant. Modern's group never
+		// carried the repo URL, so both variants share one string.
+		modernRight := vStyled + dim("  "+sessLabel+"  ") + colorize(paletteHint, tkAccent.sgrFg()) + dim("  ") + colorize("/help", tkAccent.sgrFg())
+		rightFull = modernRight
+		rightShort = modernRight
+		rightFulPlain = version + "  " + sessLabel + "  " + paletteHint + "  /help"
+		rightShortPlain = rightFulPlain
 	}
 
 	logoPlain := ansi.Strip(logo)
