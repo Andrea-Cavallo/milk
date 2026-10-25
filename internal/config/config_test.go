@@ -1807,6 +1807,64 @@ func TestConfigPathLabel_FollowsStateRoot(t *testing.T) {
 	}
 }
 
+// TestDirLabel_HomeCompressedFollowsStateRoot pins the banner's dir label:
+// "~/.milk" byte-identical to the old hardcoded wording on the default root,
+// absolute for any root outside home, "~/"-compressed for a root under home,
+// and a bare fallback when nothing resolves — never a ~ claim for a
+// redirected root (the live-tested $MILK_CONFIG_ROOT nit).
+func TestDirLabel_HomeCompressedFollowsStateRoot(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory: %v", err)
+	}
+
+	prev := SetRoot("")
+	defer SetRoot(prev)
+	t.Setenv("MILK_CONFIG_ROOT", "")
+
+	if got, want := DirLabel(), "~/.milk"; got != want {
+		t.Errorf("default DirLabel() = %q, want %q", got, want)
+	}
+
+	// Root outside home (SetRoot / --config-root) → absolute, never "~/…".
+	flagRoot := t.TempDir()
+	SetRoot(flagRoot)
+	if got, want := DirLabel(), mustAbs(flagRoot); got != want {
+		t.Errorf("SetRoot DirLabel() = %q, want %q", got, want)
+	}
+	SetRoot("")
+
+	// Root under home → "~/"-compressed (statusCwd's pattern).
+	child := filepath.Join(home, "milk-label-test")
+	SetRoot(child)
+	if got, want := DirLabel(), "~/milk-label-test"; got != want {
+		t.Errorf("home-child DirLabel() = %q, want %q", got, want)
+	}
+	SetRoot("")
+
+	// $MILK_CONFIG_ROOT → absolute as well.
+	envRoot := t.TempDir()
+	t.Setenv("MILK_CONFIG_ROOT", envRoot)
+	if got, want := DirLabel(), mustAbs(envRoot); got != want {
+		t.Errorf("env-root DirLabel() = %q, want %q", got, want)
+	}
+	t.Setenv("MILK_CONFIG_ROOT", "")
+
+	// Unresolvable home with no override → bare fallback, not a guess.
+	t.Setenv("HOME", "")
+	if got, want := DirLabel(), ".milk"; got != want {
+		t.Errorf("no-home DirLabel() = %q, want %q", got, want)
+	}
+}
+
+// mustAbs mirrors Dir()'s filepath.Abs so tests compare the same normalization.
+func mustAbs(p string) string {
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
+}
+
 // TestLoadWithLocalIn_FollowsGivenDir pins the session-dir semantics of the
 // project-local overlay: it resolves against the *given* dir (the bound
 // session's cwd — the currently selected directory), not the process cwd.

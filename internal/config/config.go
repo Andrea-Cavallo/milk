@@ -2601,6 +2601,27 @@ func ConfigPathLabel() string {
 	return filepath.Join(d, "config.json")
 }
 
+// DirLabel returns Dir() for display with home compression: "~/.milk" by
+// default — byte-identical to the banner's long-standing wording — and an
+// absolute path for any root outside home (e.g. "$MILK_CONFIG_ROOT=/tmp/x").
+// Like ConfigPathLabel it honors SetRoot / --config-root, so a sandboxed
+// root is never mislabeled as ~/.milk; unlike it, the label is the directory,
+// which is what the setup banner prints. Falls back to a bare ".milk" when
+// the root cannot be resolved (the unresolvable-home case — the same
+// best-effort spirit as ConfigPathLabel's bare "config.json").
+func DirLabel() string {
+	d, err := Dir()
+	if err != nil {
+		return ".milk"
+	}
+	if home, herr := os.UserHomeDir(); herr == nil {
+		if rel, rerr := filepath.Rel(home, d); rerr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return "~/" + rel
+		}
+	}
+	return d
+}
+
 // MCPOAuthDir returns the directory for MCP OAuth token storage (~/.milk/mcp_oauth).
 func MCPOAuthDir() (string, error) {
 	d, err := Dir()
