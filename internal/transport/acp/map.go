@@ -202,7 +202,7 @@ func ToolKindFor(name string) ToolKind {
 		return ToolKindDelete
 	case "move_file":
 		return ToolKindMove
-	case "find_files", "grep":
+	case "find_files", "grep", "project_map":
 		return ToolKindSearch
 	case "bash":
 		return ToolKindExecute

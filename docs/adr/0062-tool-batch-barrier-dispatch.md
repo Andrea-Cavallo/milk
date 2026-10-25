@@ -17,7 +17,7 @@ Small models emit multi-call batches routinely (the stream detector explicitly s
 
 A batch is executed in **call order** as alternating *read runs* and *barriers*:
 
-- **Read run**: a maximal run of consecutive pure-read calls — `read_file`, `list_dir`, `grep`, `find_files`, `get_memory`, `list_memory`, `get_session_context`, `get_context_stats`, `get_metrics`, `search_signals`, `list_tasks`, `milk_config_help` — runs concurrently within the run (`isParallelSafeTool`).
+- **Read run**: a maximal run of consecutive pure-read calls — `read_file`, `list_dir`, `grep`, `find_files`, `project_map`, `get_memory`, `list_memory`, `get_session_context`, `get_context_stats`, `get_metrics`, `search_signals`, `list_tasks`, `milk_config_help` — runs concurrently within the run (`isParallelSafeTool`).
 - **Barrier**: everything else (writes, `bash`, `http_*`, memory writes, `current_need`, orchestration like `spawn_background_agent`/`start_workflow`, agent-as-tool, MCP tools) executes alone, in order.
 - **Cancel-on-failure for mutating barriers**: when `bash`, `write_file`, `edit_file`, `delete_file` or `move_file` fails (`isToolError`, or a non-zero exit code for bash — grep's exit 1 "no matches" is read-only and never cancels), the rest of the batch is **skipped** with `skipped: <tool> failed earlier in this batch, so this call was cancelled` results (`isCancellingTool`). A failed *read* cancels nothing.
 

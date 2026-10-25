@@ -1075,7 +1075,7 @@ func agentConfigForRole(cfg config.Config, role AgentRole) config.AgentConfig {
 
 // localBuiltinTools is a human-readable list of milk's built-in local-agent tools,
 // used to populate the {{milk:tools}} placeholder in custom prompts.
-const localBuiltinTools = "bash, bash_output, kill_bash, find_files, grep, read_file, write_file, edit_file, open_file, delete_file, move_file, web_fetch, http_request, list_dir, get_session_context, escalate, current_need, record_memory, get_memory, export_session"
+const localBuiltinTools = "bash, bash_output, kill_bash, find_files, grep, project_map, read_file, write_file, edit_file, open_file, delete_file, move_file, web_fetch, http_request, list_dir, get_session_context, escalate, current_need, record_memory, get_memory, export_session"
 
 // buildPromptVars assembles the PlaceholderVars for agentprompt.Render from the
 // current session state and percept list.
