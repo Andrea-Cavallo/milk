@@ -90,6 +90,17 @@ type Notifier struct {
 	outCh   chan outItem // outbound FIFO, drained by one worker goroutine
 	outOnce sync.Once
 
+	// sendMu serializes outbound sendMessage calls and guards the 429
+	// cooldown gate below. The queue's single worker already serializes
+	// FIFO sends; this lock additionally covers the queue-full overflow
+	// path and every sender waiting out a cooldown (issue #325).
+	sendMu sync.Mutex
+	// notBefore is the earliest time any sendMessage may hit the wire:
+	// set from the server's 429 retry_after. While it is in the future
+	// send() makes no API calls at all, so an active turn can no longer
+	// refresh a flood penalty with failed attempts.
+	notBefore time.Time
+
 	// Busy-status state (issue #286): a stack of active turns' status
 	// entries — top is the most recent — with one render loop for all of
 	// them. Both hosts (TUI runTurn, ACP dispatch) and the workflow runner
@@ -845,9 +856,50 @@ type outItem struct {
 	onID func(int64)
 }
 
+// Outbound-send 429 policy (issue #325): maxInlineSendWait bounds how long
+// send() will sleep inside the queue worker before giving up on a message —
+// Telegram's small penalties are a few seconds (wait + retry, deliver), while
+// flood penalties run to hours (drop, gate the wire). maxSendRetries caps
+// repeated short 429s on one message so a hostile server can't pin the queue.
+const (
+	maxInlineSendWait = 10 * time.Second
+	maxSendRetries    = 3
+)
+
 // send delivers one message synchronously and returns its message_id (0 on
-// failure).
+// failure). Every call passes the 429 cooldown gate first (issue #325):
+// short penalties are waited out and the send retried, long ones drop the
+// message without touching the wire — before this, a 429 silently dropped
+// the message and the next queued send fired immediately, escalating the
+// flood penalty for as long as a turn kept producing notifications.
 func (n *Notifier) send(text string) int64 {
+	n.sendMu.Lock()
+	defer n.sendMu.Unlock()
+
+	for attempt := 0; attempt <= maxSendRetries; attempt++ {
+		if wait := time.Until(n.notBefore); wait > 0 {
+			if wait > maxInlineSendWait {
+				// A multi-hour flood penalty: waiting would stall the whole
+				// outbound queue, but the gate keeps later sends off the wire
+				// until it expires (which is what stops the penalty renewing).
+				return 0
+			}
+			time.Sleep(wait)
+		}
+		id, retryAfter := n.sendOnce(text)
+		if retryAfter <= 0 {
+			return id
+		}
+		n.notBefore = time.Now().Add(retryAfter)
+	}
+	return 0
+}
+
+// sendOnce performs one sendMessage attempt. A 429 carrying retry_after
+// returns a non-zero cooldown instead of an id; the caller arms the gate
+// and retries (or drops, for penalties longer than maxInlineSendWait).
+// Non-429 failures keep the historical behavior: id 0, no retry.
+func (n *Notifier) sendOnce(text string) (id int64, retryAfter time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	payload := map[string]any{
@@ -860,12 +912,12 @@ func (n *Notifier) send(text string) int64 {
 		n.cfg.APIBase+"/bot"+n.cfg.Token+"/sendMessage",
 		bytes.NewReader(body))
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -873,11 +925,22 @@ func (n *Notifier) send(text string) int64 {
 		Result struct {
 			MessageID int64 `json:"message_id"`
 		} `json:"result"`
+		Parameters *struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || !out.OK {
-		return 0
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, 0
 	}
-	return out.Result.MessageID
+	if !out.OK {
+		if out.Parameters != nil && out.Parameters.RetryAfter > 0 {
+			// Same slack editRawResult applies: hit the wire marginally
+			// after the server's deadline, never before it.
+			return 0, time.Duration(out.Parameters.RetryAfter)*time.Second + 200*time.Millisecond
+		}
+		return 0, 0
+	}
+	return out.Result.MessageID, 0
 }
 
 // sendAsync enqueues text on the FIFO outbound queue, started lazily. A single
