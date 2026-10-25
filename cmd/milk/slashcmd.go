@@ -161,7 +161,7 @@ var commandRegistry = []cmdSpec{
   /export json           print session transcript as JSON
   /export <path>         write session transcript to file
   /export session <id>   export another session (id or unambiguous prefix)
-  /export --no-reasoning omit reasoning blocks (text fences / JSON thinking) — they are included by default`},
+  /export --no-reasoning  omit reasoning blocks (text fences / JSON thinking) — they are included by default`},
 	{name: cmdHistory, hosts: hostTUI, desc: "show or set the input history navigation mode", hint: "[global|session]", help: `  /history               show current history navigation mode
   /history global        navigate global input history
   /history session       navigate session input history (default)`},
@@ -221,10 +221,10 @@ var commandRegistry = []cmdSpec{
   /tips pick <n>         show tip number <n>
   /tips pick <text>      show the tip whose text matches <text>
   /tips search <query>   list the tips matching <query>`},
-	{name: cmdSetup, hosts: hostBoth, desc: "configure Telegram remote oversight (status, enable, disable, or the setup wizard)", hint: "telegram [on|off|status]", help: `  /setup telegram        configure Telegram remote oversight interactively
-  /setup telegram on     enable Telegram (credentials must already be configured)
-  /setup telegram off    disable Telegram (credentials are preserved)
-  /setup telegram status show current Telegram oversight status`},
+	{name: cmdSetup, hosts: hostBoth, desc: "configure Telegram remote oversight (status, enable, disable, or the setup wizard)", hint: "telegram [on|off|status]", help: `  /setup telegram         configure Telegram remote oversight interactively
+  /setup telegram on      enable Telegram (credentials must already be configured)
+  /setup telegram off     disable Telegram (credentials are preserved)
+  /setup telegram status  show current Telegram oversight status`},
 	{name: cmdConfig, hosts: hostBoth, desc: "print the config, run the setup wizard, or open the config file", hint: "[show|init|open]", help: `  /config                print the current config (merged global + local overrides)
   /config show           print the merged config tagged [global]/[local]/[default]
   /config init           run the setup wizard (configure primary + escalation agents)
