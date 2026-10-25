@@ -52,7 +52,7 @@ func TestMakeLocalPermAsk_RemoteAnswerWins(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			n := &fakeNotifier{permCh: make(chan oversight.PermDecision, 1)}
 			n.permCh <- tc.decision
-			host := &blockingHost{}
+			host := &blockingHost{calls: make(chan string, 1)}
 			ask := makeLocalPermAsk(host, nil, n, &interactiveState{})
 
 			done := make(chan bool, 1)
@@ -65,6 +65,22 @@ func TestMakeLocalPermAsk_RemoteAnswerWins(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("ask did not return — the remote answer must win the race")
 			}
+			// #323 quiescence wait: the detached direct goroutine reads the
+			// isTTY global while building its prompt (permAskPrompt is
+			// evaluated as RequestPermission's argument, i.e. strictly
+			// before the host call), and the remote answer can resolve the
+			// ask without that goroutine being joined. Receiving the host
+			// call therefore orders its isTTY read before this test
+			// returns, so every later isTTY write in the package happens
+			// after it instead of racing with it.
+			select {
+			case tool := <-host.calls:
+				if tool != "bash" {
+					t.Errorf("host call tool = %q, want bash", tool)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("direct prompt goroutine never reached the host — the #323 quiescence wait needs it")
+			}
 			if !hasCall(n.recorded(), "perm:bash") {
 				t.Errorf("remote notifier not asked; recorded: %v", n.recorded())
 			}
@@ -76,10 +92,11 @@ func TestMakeLocalPermAsk_RemoteAnswerWins(t *testing.T) {
 // just the TUI prompt (nil and Noop notifiers both degrade to client-only).
 func TestMakeLocalPermAsk_NoRemote_ClientOnly(t *testing.T) {
 	for _, n := range []oversight.Notifier{nil, oversight.Noop{}} {
-		oldTTY := isTTY
-		isTTY = false
-		t.Cleanup(func() { isTTY = oldTTY })
-
+		// Deliberately never touches the isTTY global (#323): under
+		// `go test` it is already false (the test binary's stdout is a
+		// pipe), the assertions below are styling-independent, and this
+		// write was the racing half of the reported data race against
+		// the previous test's detached prompt goroutine.
 		var gotPrompt, gotLabel string
 		ir := &tuiInputReader{send: fakeSyncSend(t, "y", &gotPrompt, &gotLabel)}
 		ask := makeLocalPermAsk(newTUIHost(ir), nil, n, &interactiveState{})
