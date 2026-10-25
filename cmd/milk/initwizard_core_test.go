@@ -288,26 +288,29 @@ func TestInitWizardSmokeCheck(t *testing.T) {
 }
 
 // TestInitWizardStart_BannerNamesConfigRoot pins the banner's config-location
-// bullet: "~/.milk" byte-identical to the long-standing wording on the
-// default root, and the *real* root (home-compressed by config.DirLabel)
-// whenever SetRoot/$MILK_CONFIG_ROOT redirects it — never a hardcoded ~
-// claim for a sandboxed root (live-tested nit on this branch).
+// line: "~/.milk/config.json" on the default root, and the *real* root
+// (home-compressed by config.DirLabel) whenever SetRoot/$MILK_CONFIG_ROOT
+// redirects it — never a hardcoded ~ claim for a sandboxed root (live-tested
+// nit; wording follows the condensed discovery-era banner from #322).
 func TestInitWizardStart_BannerNamesConfigRoot(t *testing.T) {
 	prev := config.SetRoot("")
 	defer config.SetRoot(prev)
+	prevDiscover := initWizardDiscoverFn
+	initWizardDiscoverFn = func() []initWizardFinding { return nil } // hermetic: no machine scan
+	defer func() { initWizardDiscoverFn = prevDiscover }()
 
 	_, banner := initWizardStart("")
-	if !strings.Contains(banner, "config.json (~/.milk)") {
+	if !strings.Contains(banner, "~/.milk/config.json") {
 		t.Errorf("default banner must name ~/.milk, got:\n%s", banner)
 	}
 
 	root := t.TempDir()
 	config.SetRoot(root)
 	_, banner = initWizardStart("")
-	if !strings.Contains(banner, "config.json ("+root+")") {
+	if !strings.Contains(banner, root+"/config.json") {
 		t.Errorf("sandboxed banner must name the real root %q, got:\n%s", root, banner)
 	}
-	if strings.Contains(banner, "(~/.milk)") {
+	if strings.Contains(banner, "~/.milk") {
 		t.Errorf("sandboxed banner must not claim ~/.milk, got:\n%s", banner)
 	}
 }
