@@ -172,6 +172,11 @@ func refreshProjectCmd(cwd string) tea.Cmd {
 				files = append(files, e.path)
 			}
 		}
+		if files == nil {
+			// Non-nil empty for a scanned-but-fileless folder: the builder's
+			// nil is the "loading" sentinel, an empty slice means "no files".
+			files = []string{}
+		}
 		return projectDataMsg{files: files, truncated: snap.truncated}
 	}
 }

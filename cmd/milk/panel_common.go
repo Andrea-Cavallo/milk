@@ -33,8 +33,22 @@ func (m *model) sidePanelLines(region panelRegion) (lines []string, inner int) {
 	case regionWorkflow:
 		return buildWorkflowPanelLines(m.workflowState, workflowPanelInner), workflowPanelInner
 	case regionProject:
+		if m.projectLines == nil {
+			// No data msg yet (restore-at-startup or the first frames after
+			// toggle-open): render the builder's loading row — title included —
+			// instead of an empty box. Empty panel space is unacceptable.
+			lines, _ := buildProjectTreeLines(nil, false, m.projectExpanded, projectPanelInner)
+			return lines, projectPanelInner
+		}
 		return m.projectLines, projectPanelInner
 	case regionGit:
+		if m.gitLines == nil {
+			// Same gap for git: population only rides the /panel toggle or a
+			// focus-cycle refresh (sidePanelLines has no cwd to fetch with),
+			// so pre-first-msg frames must show "(loading…)", not blank rows.
+			lines, _ := buildGitPanelLines(nil, "", 0, "", gitPanelInner)
+			return lines, gitPanelInner
+		}
 		return m.gitLines, gitPanelInner
 	}
 	return nil, 0

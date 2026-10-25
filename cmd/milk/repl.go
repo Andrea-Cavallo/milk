@@ -2163,6 +2163,19 @@ func (m model) Init() tea.Cmd {
 	// unconditionally (the panel starts closed and the tick is what notices
 	// content arriving); cheap next to the 80ms spinner.
 	cmds = append(cmds, memoryPollTick())
+	// Restored-open data panels (folder-bound state, ADR-0078) populate as
+	// if toggled: the /panel toggle is what normally fires the first refresh
+	// and arms the 3s poll (commands.go), and loadPanelState never goes
+	// through it — without this a restored git/project panel would show its
+	// loading row until a focus cycle refreshed it, with no poll behind it.
+	if m.st != nil {
+		if m.panelProject {
+			cmds = append(cmds, projectPollTick(), refreshProjectCmd(m.st.cwd))
+		}
+		if m.panelGit {
+			cmds = append(cmds, gitPollTick(), refreshGitCmd(m.st.cwd))
+		}
+	}
 	// Idle tip rotation (ADR-0061) — armed unconditionally, cheap at 20s.
 	cmds = append(cmds, tipsTick(m.tipsGen))
 	if m.credRefreshInit != nil {
