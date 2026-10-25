@@ -59,7 +59,7 @@ func TestInitWizardApply_LocalProviderFlow(t *testing.T) {
 	steps := []struct {
 		in, want string
 	}{
-		{"", "Where is it running"},                     // blank provider → 1 (local)
+		{"", "Where is it running"},            // blank provider → 1 (local)
 		{"", "model name"},                     // blank URL → the local default
 		{"qwen2.5-coder", "escalation agent?"}, // → escalation
 		{"", "tune now"},                       // blank → Claude on PATH → yes; → tuning gate
