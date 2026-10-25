@@ -50,13 +50,14 @@ func (m *model) liveDragOwner() dragOwner {
 }
 
 // dragEdgeDir returns -1 when screen row y is above the scrollable rows, +1
-// when below, 0 when inside.
+// when below, 0 when inside. The rows are the measured viewport band
+// (viewportRows) — the same ones click hit-testing uses.
 func (m *model) dragEdgeDir(y int) int {
-	const top = 2
+	top, bottom := m.viewportRows()
 	switch {
 	case y < top:
 		return -1
-	case y >= top+m.vp.Height():
+	case y >= bottom:
 		return 1
 	}
 	return 0

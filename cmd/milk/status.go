@@ -29,16 +29,22 @@ func (m *model) headerBar() string {
 	taglinePlain := taglineText()
 	tagline := dim(taglinePlain)
 
-	sessID := m.st.sess.ID
+	// A model can render before a session is bound (tests, early startup):
+	// the bars degrade to empty session info instead of crashing — the mouse
+	// hit-testing measures these rows, so they must be safe to call anytime.
+	sessID := ""
+	var totalPrompt, totalCompletion, totalCacheRead, totalCacheCreation int64
+	if m.st != nil && m.st.sess != nil {
+		sessID = m.st.sess.ID
+		for _, u := range m.st.sess.TokensSnapshot() {
+			totalPrompt += u.Prompt
+			totalCompletion += u.Completion
+			totalCacheRead += u.CacheRead
+			totalCacheCreation += u.CacheCreation
+		}
+	}
 	if len(sessID) > 8 {
 		sessID = sessID[:8]
-	}
-	var totalPrompt, totalCompletion, totalCacheRead, totalCacheCreation int64
-	for _, u := range m.st.sess.TokensSnapshot() {
-		totalPrompt += u.Prompt
-		totalCompletion += u.Completion
-		totalCacheRead += u.CacheRead
-		totalCacheCreation += u.CacheCreation
 	}
 	sessLabel := fmt.Sprintf("sess:%s (total:↑%s↓%s)", sessID, formatTokenCount(totalPrompt), formatTokenCount(totalCompletion))
 	if cacheActivity := totalCacheRead + totalCacheCreation; cacheActivity > 0 {
@@ -92,14 +98,18 @@ func (m *model) statusBar() string {
 	// When a permission prompt is active, avoid dim() — its ANSI reset (\033[0m)
 	// kills the yellow background that styleStatusBarPerm sets.
 	isPerm := m.pendingPerm != nil
-	rolePart := "role:" + sessionRole(m.st.sess.State)
+	sessRole := ""
+	if m.st != nil && m.st.sess != nil {
+		sessRole = sessionRole(m.st.sess.State)
+	}
+	rolePart := "role:" + sessRole
 	agentPart := "agent:" + m.statusAgent()
 	if !isPerm {
 		rolePart = dim(rolePart)
 		agentPart = dim("agent:") + m.statusAgent()
 	}
 	if th.modern {
-		roleName := strings.ToLower(sessionRole(m.st.sess.State))
+		roleName := strings.ToLower(sessRole)
 		rolePart = "● " + roleName
 		agentPart = "· " + m.statusAgent()
 		if !isPerm {
@@ -473,6 +483,9 @@ const (
 // they were meant to complement. Returns "" only when there's no usable
 // numerator yet.
 func (m *model) statusContextPressure(role string, promptTokens int64) string {
+	if m.st == nil {
+		return ""
+	}
 	var ac config.AgentConfig
 	if role == "escalation" {
 		ac = m.st.cfg.EscalationAgentConfig()
@@ -546,6 +559,9 @@ func contextMeter(pct int) string {
 // handle (or is handling) the current turn. Mirrors agentLabel priority order.
 func (m *model) activeTokenRole() string {
 	st := m.st
+	if st == nil {
+		return "primary"
+	}
 	if st.activeFallbackTarget == "escalation" {
 		return "escalation"
 	}
@@ -558,7 +574,7 @@ func (m *model) activeTokenRole() string {
 	if st.stickyPrimary || st.forcePrimary {
 		return "primary"
 	}
-	if st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting {
+	if st.sess != nil && (st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting) {
 		return "escalation"
 	}
 	return "primary"
@@ -591,6 +607,9 @@ func sessionRole(s session.State) string {
 }
 
 func agentLabel(st *interactiveState) string {
+	if st == nil {
+		return "local"
+	}
 	localName := st.cfg.ActiveAgent().Name
 	if localName == "" {
 		localName = "local"
@@ -614,7 +633,7 @@ func agentLabel(st *interactiveState) string {
 		return localName + " (pinned)"
 	case st.forcePrimary:
 		return localName + " (forced)"
-	case st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting:
+	case st.sess != nil && (st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting):
 		return escalationName
 	default:
 		return localName
@@ -622,6 +641,9 @@ func agentLabel(st *interactiveState) string {
 }
 
 func (m *model) statusCwd() string {
+	if m.st == nil {
+		return ""
+	}
 	cwd := m.st.cwd
 	if home, err := os.UserHomeDir(); err == nil {
 		if rel, err := filepath.Rel(home, cwd); err == nil && !strings.HasPrefix(rel, "..") {

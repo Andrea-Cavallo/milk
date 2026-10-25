@@ -61,11 +61,11 @@ Display rules (as amended by the 2026-10-19 Update below):
   A block the user never touched stays folded when it closes.
 - **Click a fold header** to expand/collapse that block (mouse release
   without drag, hit-tested against header lines in the selection coordinate
-  space) — the same arm/act rhythm as panel clicks; drag selection over
-  reasoning text is untouched. **Ctrl+T** toggles the most recent block (the
-  streaming one, if any) — the keyboard form of clicking its header. `/think
-  expand` / `/think collapse` pin all blocks; `userSet` pins survive later
-  auto-folds.
+  space — see ADR-0080 for the mapping invariants) — the same arm/act rhythm
+  as panel clicks; drag selection over reasoning text is untouched. **Ctrl+T**
+  toggles the most recent block (the streaming one, if any) — the keyboard
+  form of clicking its header. `/think expand` / `/think collapse` pin all
+  blocks; `userSet` pins survive later auto-folds.
 - `/think view` swaps the main area to a **thinking-only stream** (issue
   #208's "dedicated thinking view"): every block's header plus full body in
   order, over the static preview attach view (ADR-0047).

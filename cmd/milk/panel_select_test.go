@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/scoutme/milk/internal/session"
 	"github.com/scoutme/milk/internal/workflow"
 )
 
@@ -28,7 +29,7 @@ func dragTestModel() *model {
 		panelSelEndLine:     -1,
 		attachSelAnchorLine: -1,
 		attachSelEndLine:    -1,
-		st:                  &interactiveState{},
+		st:                  &interactiveState{sess: &session.Session{}},
 		transcript:          &strings.Builder{},
 	}
 }
@@ -323,10 +324,18 @@ func workflowSelModel() *model {
 	}
 }
 
+// panelRowScreen converts a content row of a panel to its screen row: the
+// panel rows start below the rendered chrome (viewportRows), never a
+// hardcoded header offset.
+func panelRowScreen(m *model, contentRow int) int {
+	top, _ := m.viewportRows()
+	return top + contentRow
+}
+
 func TestHandlePanelMouse_ClickWithoutDragLeavesNoSelection(t *testing.T) {
 	m := workflowSelModel()
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Action: mousePress})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Action: mouseRelease})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mouseRelease})
 	if m.panelSelRegion != regionNone || m.panelSelText != "" {
 		t.Errorf("a click (no drag) should leave no active selection, got region=%v text=%q", m.panelSelRegion, m.panelSelText)
 	}
@@ -334,9 +343,9 @@ func TestHandlePanelMouse_ClickWithoutDragLeavesNoSelection(t *testing.T) {
 
 func TestHandlePanelMouse_DragSelectsText(t *testing.T) {
 	m := workflowSelModel()
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Action: mousePress})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 6, Action: mouseMotion})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 6, Action: mouseRelease})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 4), Action: mouseMotion})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 4), Action: mouseRelease})
 	if m.panelSelRegion != regionWorkflow {
 		t.Errorf("expected panelSelRegion=regionWorkflow after drag, got %v", m.panelSelRegion)
 	}
@@ -349,7 +358,7 @@ func TestHandlePanelMouse_PressClearsTranscriptSelection(t *testing.T) {
 	m := workflowSelModel()
 	m.selAnchorLine = 0
 	m.selEndLine = 0
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mousePress})
 	if m.selAnchorLine >= 0 {
 		t.Error("starting a panel selection should clear any active transcript selection")
 	}
@@ -360,14 +369,14 @@ func TestHandlePanelMouse_PressClearsTranscriptSelection(t *testing.T) {
 func TestHandlePanelMouse_CtrlClickExtendsSelection(t *testing.T) {
 	m := workflowSelModel()
 	// Establish an initial selection via a normal drag.
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Action: mousePress})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 5, Action: mouseMotion})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 5, Action: mouseRelease})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 3), Action: mouseMotion})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 3), Action: mouseRelease})
 	firstEnd := m.panelSelEndLine
 	anchor := m.panelSelAnchorLine
 
 	// Ctrl+click further down should extend the selection, not restart it.
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 8, Ctrl: true, Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 6), Ctrl: true, Action: mousePress})
 
 	if m.panelSelAnchorLine != anchor {
 		t.Errorf("ctrl+click must not move the anchor: got %d, want %d", m.panelSelAnchorLine, anchor)
@@ -382,13 +391,12 @@ func TestHandlePanelMouse_CtrlClickExtendsSelection(t *testing.T) {
 
 func TestHandlePanelMouse_CtrlClickCanShrinkSelection(t *testing.T) {
 	m := workflowSelModel()
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Action: mousePress})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 8, Action: mouseMotion})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 8, Action: mouseRelease})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 6), Action: mouseMotion})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 6), Action: mouseRelease})
 
 	// Ctrl+click between anchor and the current end shrinks the selection.
-	// (handlePanelMouse maps screen row Y to content line Y-2; see panelRowStart.)
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 5, Ctrl: true, Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 3), Ctrl: true, Action: mousePress})
 
 	if m.panelSelAnchorLine != 2 {
 		t.Errorf("anchor must stay put: got %d, want 2", m.panelSelAnchorLine)
@@ -400,7 +408,7 @@ func TestHandlePanelMouse_CtrlClickCanShrinkSelection(t *testing.T) {
 
 func TestHandlePanelMouse_CtrlClickWithoutExistingSelectionActsAsNormalClick(t *testing.T) {
 	m := workflowSelModel()
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Ctrl: true, Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Ctrl: true, Action: mousePress})
 
 	if m.panelSelRegion != regionWorkflow || m.panelSelAnchorLine != 2 {
 		t.Errorf("ctrl+click with no prior selection should start a fresh anchor, got region=%v anchor=%d",
@@ -414,14 +422,14 @@ func TestHandlePanelMouse_CtrlClickWithoutExistingSelectionActsAsNormalClick(t *
 func TestHandlePanelMouse_SwitchingRegionClearsPriorSelection(t *testing.T) {
 	m := workflowSelModel()
 	// Start (and finish) a drag selection in the workflow panel.
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 4, Action: mousePress})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 6, Action: mouseMotion})
-	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: 6, Action: mouseRelease})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mousePress})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 4), Action: mouseMotion})
+	m.handlePanelMouse(regionWorkflow, 2, mouseEvent{Y: panelRowScreen(m, 4), Action: mouseRelease})
 	if m.panelSelText == "" {
 		t.Fatal("setup: expected a populated selection before switching regions")
 	}
 	// A fresh press in a different region must discard the stale selection.
-	m.handlePanelMouse(regionMemory, 0, mouseEvent{Y: 4, Action: mousePress})
+	m.handlePanelMouse(regionMemory, 0, mouseEvent{Y: panelRowScreen(m, 2), Action: mousePress})
 	if m.panelSelRegion != regionMemory {
 		t.Errorf("expected panelSelRegion=regionMemory, got %v", m.panelSelRegion)
 	}
@@ -436,9 +444,9 @@ func TestHandlePanelMouse_SwitchingRegionClearsPriorSelection(t *testing.T) {
 
 func TestHandlePanelMouse_DragSelectsText_Tasks(t *testing.T) {
 	m := &model{} // nil taskStore still yields a few placeholder content lines
-	m.handlePanelMouse(regionTasks, 2, mouseEvent{Y: 2, Action: mousePress})
-	m.handlePanelMouse(regionTasks, 2, mouseEvent{Y: 4, Action: mouseMotion})
-	m.handlePanelMouse(regionTasks, 2, mouseEvent{Y: 4, Action: mouseRelease})
+	m.handlePanelMouse(regionTasks, 2, mouseEvent{Y: panelRowScreen(m, 0), Action: mousePress})
+	m.handlePanelMouse(regionTasks, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mouseMotion})
+	m.handlePanelMouse(regionTasks, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mouseRelease})
 	if m.panelSelRegion != regionTasks {
 		t.Errorf("expected panelSelRegion=regionTasks after drag, got %v", m.panelSelRegion)
 	}
@@ -449,9 +457,9 @@ func TestHandlePanelMouse_DragSelectsText_Tasks(t *testing.T) {
 
 func TestHandlePanelMouse_DragSelectsText_Background(t *testing.T) {
 	m := &model{} // nil backgroundMgr still yields a few placeholder content lines
-	m.handlePanelMouse(regionBackground, 2, mouseEvent{Y: 2, Action: mousePress})
-	m.handlePanelMouse(regionBackground, 2, mouseEvent{Y: 4, Action: mouseMotion})
-	m.handlePanelMouse(regionBackground, 2, mouseEvent{Y: 4, Action: mouseRelease})
+	m.handlePanelMouse(regionBackground, 2, mouseEvent{Y: panelRowScreen(m, 0), Action: mousePress})
+	m.handlePanelMouse(regionBackground, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mouseMotion})
+	m.handlePanelMouse(regionBackground, 2, mouseEvent{Y: panelRowScreen(m, 2), Action: mouseRelease})
 	if m.panelSelRegion != regionBackground {
 		t.Errorf("expected panelSelRegion=regionBackground after drag, got %v", m.panelSelRegion)
 	}

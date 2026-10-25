@@ -254,7 +254,9 @@ func (m *model) handleAttachMouse(ev mouseEvent) (tea.Model, tea.Cmd) {
 	if m.attached == nil {
 		return m, nil
 	}
-	const vpRowStart = 2
+	// Same measured chrome as the transcript path: the attach viewport starts
+	// below the header bar's rendered rows (viewportRows), never a hardcoded 2.
+	vpRowStart, _ := m.viewportRows()
 	contentLine := m.attached.vp.YOffset() + (ev.Y - vpRowStart)
 	col := ev.X
 	if col < 0 {

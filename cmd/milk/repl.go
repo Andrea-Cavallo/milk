@@ -1856,13 +1856,16 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case mousePress:
 		m.dragSawOutside = false // a press starts a fresh interaction
 	case mouseMotion, mouseRelease:
+		// Chrome rows are measured, not assumed: "outside" means outside the
+		// rows the viewport actually occupies (see viewportRows).
+		vpTop, vpBottom := m.viewportRows()
 		switch {
 		case m.attachActive() && m.attachSelAnchorLine >= 0 && m.attachSelDragging:
 			// Same rule as the transcript: the attach view fills the main
 			// area, so "outside" means a panel column or the chrome rows.
-			m.dragSawOutside = region != regionNone || ev.Y < 2 || ev.Y >= m.height-2
+			m.dragSawOutside = region != regionNone || ev.Y < vpTop || ev.Y >= vpBottom
 		case m.selAnchorLine >= 0 && m.selDragging:
-			m.dragSawOutside = region != regionNone || ev.Y < 2 || ev.Y >= m.height-2
+			m.dragSawOutside = region != regionNone || ev.Y < vpTop || ev.Y >= vpBottom
 		case m.panelSelAnchorLine >= 0 && m.panelSelDragging:
 			// handlePanelMouse applies no row bounds check of its own — only
 			// region routing decides whether an event reaches it — so for a
@@ -1899,9 +1902,9 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if region != regionNone {
 			return m.handlePanelMouse(region, regionX, ev)
 		}
-		// Only handle events inside the viewport area (rows 2..height-2).
-		const vpRowStart = 2
-		vpRowEnd := m.height - 2
+		// Only handle events inside the viewport area — the rows between the
+		// measured chrome (header bar above, hints + status bar below).
+		vpRowStart, vpRowEnd := m.viewportRows()
 		if ev.Y < vpRowStart || ev.Y >= vpRowEnd || region != regionNone {
 			break
 		}

@@ -19,9 +19,13 @@ func stubClipboard(t *testing.T) *[]string {
 func selectTranscriptWithMouse(m *model) tea.Cmd {
 	m.appendTranscript("hello world\n")
 	m.setViewportContent()
-	m.handleMouse(mouseEvent{X: 0, Y: 2, Button: tea.MouseLeft, Action: mousePress}.msg())
-	m.handleMouse(mouseEvent{X: 5, Y: 2, Button: tea.MouseLeft, Action: mouseMotion}.msg())
-	_, cmd := m.handleMouse(mouseEvent{X: 5, Y: 2, Button: tea.MouseLeft, Action: mouseRelease}.msg())
+	// Screen row for transcript content row 0 — derived from the rendered
+	// chrome, never a hardcoded header offset.
+	top, _ := m.viewportRows()
+	y := top
+	m.handleMouse(mouseEvent{X: 0, Y: y, Button: tea.MouseLeft, Action: mousePress}.msg())
+	m.handleMouse(mouseEvent{X: 5, Y: y, Button: tea.MouseLeft, Action: mouseMotion}.msg())
+	_, cmd := m.handleMouse(mouseEvent{X: 5, Y: y, Button: tea.MouseLeft, Action: mouseRelease}.msg())
 	return cmd
 }
 
@@ -80,9 +84,9 @@ func TestCopyOnSelect_AttachRelease(t *testing.T) {
 	m := attachSelTestModel(t, "alpha beta\n")
 	m.st.cfg = config.Config{CopyOnSelect: &on}
 
-	attachClick(m, 0, 4)
-	attachDrag(m, 5, 4)
-	attachRelease(m, 5, 4)
+	attachClick(m, 0, 2)
+	attachDrag(m, 5, 2)
+	attachRelease(m, 5, 2)
 
 	if len(*copied) != 1 || (*copied)[0] != "alpha" {
 		t.Fatalf("expected clipboard [alpha], got %q", *copied)

@@ -32,25 +32,36 @@ func attachSelTestModel(t *testing.T, content string) *model {
 	return m
 }
 
-// attachClick sends a left-button press at the given screen row (content row 0
-// starts at vpRowStart = 2).
-func attachClick(m *model, x, y int) tea.Cmd {
+// attachClick sends a left-button press at the given content row of the view
+// on screen — the screen row is derived from the rendered chrome (viewportRows),
+// never a hardcoded header offset.
+func attachClick(m *model, x, contentRow int) tea.Cmd {
+	top, _ := m.viewportRows()
 	_, cmd := m.handleMouse(mouseEvent{
-		X: x, Y: y, Button: tea.MouseLeft, Action: mousePress,
+		X: x, Y: top + contentRow, Button: tea.MouseLeft, Action: mousePress,
 	}.msg())
 	return cmd
 }
 
-func attachDrag(m *model, x, y int) {
+func attachDrag(m *model, x, contentRow int) {
+	top, _ := m.viewportRows()
 	m.handleMouse(mouseEvent{
-		X: x, Y: y, Button: tea.MouseLeft, Action: mouseMotion,
+		X: x, Y: top + contentRow, Button: tea.MouseLeft, Action: mouseMotion,
 	}.msg())
 }
 
-func attachRelease(m *model, x, y int) {
+func attachRelease(m *model, x, contentRow int) {
+	top, _ := m.viewportRows()
 	m.handleMouse(mouseEvent{
-		X: x, Y: y, Button: tea.MouseLeft, Action: mouseRelease,
+		X: x, Y: top + contentRow, Button: tea.MouseLeft, Action: mouseRelease,
 	}.msg())
+}
+
+// attachRowScreen converts a content row to its screen row for direct
+// mouseEvent construction in tests.
+func attachRowScreen(m *model, contentRow int) int {
+	top, _ := m.viewportRows()
+	return top + contentRow
 }
 
 // TestAttachSelection_ExtractsAttachedTextNotTranscript is the core repro:
@@ -62,9 +73,9 @@ func TestAttachSelection_ExtractsAttachedTextNotTranscript(t *testing.T) {
 
 	// Line 0 is the header, line 1 blank, line 2 is the body's first line.
 	const bodyLine = 2
-	attachClick(m, 0, 2+bodyLine) // Y = vpRowStart(2) + content line
-	attachDrag(m, 8, 2+bodyLine)
-	attachRelease(m, 8, 2+bodyLine)
+	attachClick(m, 0, bodyLine)
+	attachDrag(m, 8, bodyLine)
+	attachRelease(m, 8, bodyLine)
 
 	if m.attachSelText != "SELECTME" {
 		t.Errorf("attachSelText = %q, want %q", m.attachSelText, "SELECTME")
@@ -86,9 +97,9 @@ func TestAttachSelection_TranscriptSelectionSurvivesAttachSelection(t *testing.T
 	m.selEndCol = 9
 	m.selText = "prior transcript text"
 
-	attachClick(m, 0, 4)
-	attachDrag(m, 6, 4)
-	attachRelease(m, 6, 4)
+	attachClick(m, 0, 2)
+	attachDrag(m, 6, 2)
+	attachRelease(m, 6, 2)
 
 	if m.selAnchorLine != 5 || m.selEndLine != 6 || m.selText != "prior transcript text" {
 		t.Errorf("transcript selection changed while attached: anchor=%d end=%d text=%q",
@@ -115,8 +126,8 @@ func TestAttachSelection_TranscriptSelectionSurvivesAttachSelection(t *testing.T
 // color; downsampling happens in the output writer, so nothing to force.)
 func TestAttachSelection_HighlightReachesAttachViewport(t *testing.T) {
 	m := attachSelTestModel(t, "highlight target text")
-	attachClick(m, 0, 4)
-	attachDrag(m, 8, 4)
+	attachClick(m, 0, 2)
+	attachDrag(m, 8, 2)
 
 	got := m.attached.vp.View()
 	if !strings.Contains(got, "\x1b[7m") {
@@ -142,15 +153,15 @@ func TestAttachSelection_RightClickCopiesAttachedText(t *testing.T) {
 	m.selEndCol = 4
 	m.selText = "stale transcript"
 
-	attachClick(m, 0, 4)
-	attachDrag(m, 6, 4)
-	attachRelease(m, 6, 4)
+	attachClick(m, 0, 2)
+	attachDrag(m, 6, 2)
+	attachRelease(m, 6, 2)
 	if m.attachSelText != "COPYME" {
 		t.Fatalf("attachSelText = %q, want COPYME", m.attachSelText)
 	}
 
 	m.handleMouse(mouseEvent{
-		X: 6, Y: 4, Button: tea.MouseRight, Action: mousePress,
+		X: 6, Y: attachRowScreen(m, 2), Button: tea.MouseRight, Action: mousePress,
 	}.msg())
 
 	if !strings.Contains(m.copyFeedback, "copied 6 chars") {
@@ -171,7 +182,7 @@ func TestAttachSelection_PendingPromptReturnsSelectionToTranscript(t *testing.T)
 	m := attachSelTestModel(t, "attached body")
 	m.pendingPerm = &permRequestMsg{label: "[allow?]", respCh: make(chan string, 1)}
 
-	attachClick(m, 0, 4) // same coordinates as an attach click would use
+	attachClick(m, 0, 2) // same content row an attach click would use
 
 	if m.selAnchorLine != 2 {
 		t.Errorf("transcript selAnchorLine = %d, want 2 (clicked row over the revealed transcript)", m.selAnchorLine)
@@ -191,8 +202,8 @@ func TestAttachSelection_StatusBarNamesTheAttachView(t *testing.T) {
 	m.selEndLine = 9
 	m.selDragging = true
 
-	attachClick(m, 0, 4)
-	attachDrag(m, 4, 4) // mid-drag: the status should report live coordinates
+	attachClick(m, 0, 2)
+	attachDrag(m, 4, 2) // mid-drag: the status should report live coordinates
 
 	bar := ansi.Strip(m.statusBar())
 	if !strings.Contains(bar, "selecting attached view") {
@@ -207,8 +218,8 @@ func TestAttachSelection_StatusBarNamesTheAttachView(t *testing.T) {
 // transcript convention — first press clears the selection, second detaches.
 func TestHandleAttachKey_EscClearsSelectionBeforeDetach(t *testing.T) {
 	m := attachSelTestModel(t, "body")
-	attachClick(m, 0, 4)
-	attachDrag(m, 6, 4) // left dragging: anchor set, end follows motion
+	attachClick(m, 0, 2)
+	attachDrag(m, 6, 2) // left dragging: anchor set, end follows motion
 
 	updated, _ := m.handleAttachKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	mm := updated.(model)
@@ -231,9 +242,9 @@ func TestHandleAttachKey_EscClearsSelectionBeforeDetach(t *testing.T) {
 // copy branch there.
 func TestHandleAttachKey_CtrlCCopiesSelection(t *testing.T) {
 	m := attachSelTestModel(t, "CTRLCOPY body text")
-	attachClick(m, 0, 4)
-	attachDrag(m, 8, 4)
-	attachRelease(m, 8, 4)
+	attachClick(m, 0, 2)
+	attachDrag(m, 8, 2)
+	attachRelease(m, 8, 2)
 	if m.attachSelText != "CTRLCOPY" {
 		t.Fatalf("attachSelText = %q, want CTRLCOPY", m.attachSelText)
 	}
@@ -259,7 +270,7 @@ func TestAttachSelection_PressClearsPanelSelection(t *testing.T) {
 	m.panelSelAnchorLine = 3
 	m.panelSelEndLine = 3
 
-	attachClick(m, 0, 4)
+	attachClick(m, 0, 2)
 
 	if m.panelSelRegion != regionNone || m.panelSelAnchorLine != -1 {
 		t.Errorf("panel selection must be cleared by an attach-view press, region=%d anchor=%d",

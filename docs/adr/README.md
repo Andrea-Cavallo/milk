@@ -78,3 +78,4 @@
 * [77. TUI skins: the neutral original look and the opt-in supermilk theme](0077-tui-skins.md)
 * [78. Persisted panel state: `remember_panel_state` and the content-driven memory panel](0078-persisted-panel-state.md)
 * [79. Tabbed panel docking: one shared slot when the theme draws tabs](0079-tabbed-panel-slot.md)
+* [80. Thinking-block click mapping: one measured layout, one deterministic render](0080-thinking-click-mapping.md)

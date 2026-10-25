@@ -96,7 +96,9 @@ func (m *model) panelSelLines() []string {
 // panel's own lines so the selection never crosses into the transcript or
 // another panel.
 func (m *model) handlePanelMouse(region panelRegion, regionX int, ev mouseEvent) (tea.Model, tea.Cmd) {
-	const panelRowStart = 2 // same header offset as the main viewport
+	// Same measured chrome as the main viewport (viewportRows): the panel
+	// column starts below the header bar's rendered rows, never a hardcoded 2.
+	panelRowStart, _ := m.viewportRows()
 	lineIdx := m.panelScrollOffset(region) + (ev.Y - panelRowStart)
 	col := panelContentCol(region, regionX)
 	var dragCmd tea.Cmd // set by press/motion; returned at the end

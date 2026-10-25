@@ -29,6 +29,18 @@ const (
 	ColorizeFull     ColorizeMode = "full"
 )
 
+// reflows reports whether the mode's colorization rewrites the row structure
+// of its input (glamour reflows paragraphs: indents, blank lines, its own
+// wrapping). A reflowing render cannot be extended incrementally — the cached
+// prefix plus a plain-wrapped raw suffix would have different rows than a full
+// rebuild of the same content — and rows that disagree between renders make
+// every screen-row→content-row mapping (click hit-testing, selection) point at
+// the wrong line. wrappedTranscript therefore never takes its fast
+// append-the-suffix path for such modes.
+func (m ColorizeMode) reflows() bool {
+	return m == ColorizeFull
+}
+
 // ParseColorizeMode maps a config string to a ColorizeMode, defaulting to fenced.
 func ParseColorizeMode(s string) ColorizeMode {
 	switch strings.ToLower(s) {
@@ -149,7 +161,9 @@ func colorizeSingleWidth(seg string, mode ColorizeMode, width int) string {
 // first full reset after it: exactly one rendered line's styling.
 func colorizeFull(seg string) string {
 	if !strings.Contains(seg, ansiDim) && !strings.Contains(seg, ansiThinkBg) {
-		return colorizeGlamour(ansi.Strip(seg))
+		// glamourChunk, not colorizeGlamour directly: the chunk's trailing
+		// line breaks must survive, or the next segment glues onto this one.
+		return glamourChunk(seg)
 	}
 	var sb strings.Builder
 	remaining := seg
@@ -178,12 +192,21 @@ func colorizeFull(seg string) string {
 // glamourChunk runs one unstyled chunk through glamour — except a chunk that
 // is whitespace only (typically the newline between two styled rows), which
 // is passed through verbatim: glamour collapses it to nothing and would glue
-// the rows together.
+// the rows together. The chunk's trailing line breaks are restored for the
+// same reason: glamour — and colorizeGlamour's trailing-newline trim — drops
+// them, and without the boundary the next preserved styled span glues onto the
+// chunk's last rendered line ("intro text▸ thinking · 2 lines"), mangling the
+// fold container and hiding its header from the click hit-test.
 func glamourChunk(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return s
 	}
-	return colorizeGlamour(ansi.Strip(s))
+	out := colorizeGlamour(ansi.Strip(s))
+	tail := len(s) - len(strings.TrimRight(s, "\n"))
+	if tail > 0 {
+		out += strings.Repeat("\n", tail)
+	}
+	return out
 }
 
 // styledSpanStart returns the byte index of the next preserved styled span in

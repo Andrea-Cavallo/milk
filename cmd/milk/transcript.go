@@ -181,9 +181,13 @@ func (m *model) wrappedTranscript() string {
 		m.colorizeSeenLen = txLen
 	}
 
-	if !m.colorizeForce && !vpChanged && m.colorizeCached != "" && m.colorizeLinesSeen < colorizeLineThresh {
+	if !m.colorizeForce && !vpChanged && m.colorizeCached != "" && m.colorizeLinesSeen < colorizeLineThresh && !m.colorizeMode.reflows() {
 		// Return cached result — append plain-wrapped new text as a fast suffix
 		// so the user sees new content immediately even without re-colorizing.
+		// Row-preserving modes only (see ColorizeMode.reflows): a reflowing
+		// render's cached prefix + raw suffix would have different rows than a
+		// full rebuild of the same content, and that drift lands in every
+		// screen-row→content-row mapping (clicks, selection).
 		if txGrew > 0 {
 			// The cache holds self-contained rows (wrapRows), so it never ends
 			// with a style open and the fresh suffix can simply follow it.

@@ -99,6 +99,24 @@ func (m *model) viewportHeight() int {
 	return max(h, 3)
 }
 
+// viewportRows returns the screen rows the main viewport occupies: top is the
+// first viewport row, bottom the first row below it. Every mouse row→content
+// line mapping derives from this one layout measurement — the same one
+// viewportHeight() and View() build the layout from — so a header bar that
+// wraps (narrow terminal, long session label) or a growing hint region can
+// never skew click hit-testing. It used to be hardcoded as "rows 2..height-2",
+// which silently mapped every click one row low per extra chrome row: a fold
+// header click landed on a later think block (or past the last one, a no-op).
+func (m *model) viewportRows() (top, bottom int) {
+	top = strings.Count(m.headerBar(), "\n") + 1
+	status := strings.Count(m.statusBar(), "\n") + 1
+	bottom = m.height - len(m.hintRegion()) - status
+	if bottom < top {
+		bottom = top
+	}
+	return top, bottom
+}
+
 // mainWidth returns the width available for the transcript+input area.
 // When side panels are in the layout it is reduced accordingly, but only when
 // the panel would actually be rendered (i.e. terminal is wide enough). On a

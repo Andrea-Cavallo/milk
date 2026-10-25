@@ -148,11 +148,12 @@ func TestTabbedTheme_TabBarClickSwitches(t *testing.T) {
 
 	clickTab := func(col int) {
 		t.Helper()
-		// The tab strip is the panel's first content row, on screen row
-		// panelRowStart (2) while the panel is scrolled to the top. A click
-		// is press+release on the same cell.
-		press := mouseEvent{X: mw + col, Y: 2, Button: tea.MouseLeft, Action: mousePress}
-		release := mouseEvent{X: mw + col, Y: 2, Button: tea.MouseLeft, Action: mouseRelease}
+		// The tab strip is the panel's first content row (content row 0),
+		// whose screen row comes from the rendered chrome (panelRowScreen).
+		// A click is press+release on the same cell.
+		y := panelRowScreen(&m, 0)
+		press := mouseEvent{X: mw + col, Y: y, Button: tea.MouseLeft, Action: mousePress}
+		release := mouseEvent{X: mw + col, Y: y, Button: tea.MouseLeft, Action: mouseRelease}
 		updated, _ := m.handleMouse(press.msg())
 		m = *updated.(*model)
 		updated, _ = m.handleMouse(release.msg())
