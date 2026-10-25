@@ -1,0 +1,102 @@
+---
+# PR / main test gate (issue #328). Keeps `main` honest without a maintainer
+# running the suite by hand: fmt, vet, tests and -race on Linux + macOS, a
+# Windows build/vet gate with advisory tests, and the docs site build.
+# release.yml (tag-triggered release builds) is separate and stays untouched.
+#
+# Every workflow must take its Go version from go.mod (`go-version-file`):
+# internal/docscheck's TestWorkflowsPinGoToGoMod fails the suite on any
+# literal Go version pin.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Pure gate: main has always been gofmt-clean. (gofmt only reads .go
+      # files, so the website's mkdocs build output needs no exclusion.)
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -w needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      # The job that would have caught #323 statistically; cmd/milk under
+      # -race is ~1 min, affordable on every push.
+      - name: go test -race
+        run: go test -race ./cmd/milk ./internal/...
+
+  windows:
+    name: windows (build + vet blocking, tests advisory)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      # Advisory for now: contributor test plans reference pre-existing
+      # Windows failures. Promote to blocking once burned down.
+      - name: go test (advisory)
+        continue-on-error: true
+        run: go test ./...
+
+  site:
+    name: site build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # go-task from the official module (Go proxy checksums), so the
+      # Taskfile's site:build stays the single source of truth for the
+      # mkdocs build (venv + website/requirements.txt). python3 is
+      # preinstalled on ubuntu runners.
+      - name: Install task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.54.0
+
+      - name: task site:build
+        run: task site:build
