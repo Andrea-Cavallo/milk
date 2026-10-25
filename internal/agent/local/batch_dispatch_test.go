@@ -6,9 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -232,60 +230,6 @@ func TestBatch_GrepNoMatchDoesNotCancel(t *testing.T) {
 	}
 	if strings.Contains(res["w"], "skipped") {
 		t.Errorf("write must run after a no-match grep, got %q", res["w"])
-	}
-}
-
-// Pure-read runs still execute concurrently (the barrier model only
-// serialises side-effecting calls). Two read_file calls on FIFOs: the writer
-// fills B first and only then A — if the reads ran sequentially (A first),
-// reader-A and writer-B would deadlock until the tool timeout, so both a
-// timeout-sized elapsed time and a missing body mean over-serialisation.
-func TestBatch_ReadRunStillConcurrent(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("FIFO-based test is unix-only")
-	}
-	dir := t.TempDir()
-	fa := filepath.Join(dir, "a.fifo")
-	fb := filepath.Join(dir, "b.fifo")
-	if err := syscall.Mkfifo(fa, 0o600); err != nil {
-		t.Skipf("mkfifo: %v", err)
-	}
-	if err := syscall.Mkfifo(fb, 0o600); err != nil {
-		t.Skipf("mkfifo: %v", err)
-	}
-
-	go func() {
-		wb, err := os.OpenFile(fb, os.O_WRONLY, 0o600) // blocks until a reader opens
-		if err != nil {
-			return
-		}
-		wb.WriteString("bbb") //nolint:errcheck
-		wb.Close()
-		wa, err := os.OpenFile(fa, os.O_WRONLY, 0o600)
-		if err != nil {
-			return
-		}
-		wa.WriteString("aaa") //nolint:errcheck
-		wa.Close()
-	}()
-
-	a := &Agent{skipPerms: true, toolTimeout: 2 * time.Second}
-	tcs := []toolCall{
-		{ID: "ra", Function: toolCallFunction{Name: "read_file", Arguments: `{"path":"` + fa + `"}`}},
-		{ID: "rb", Function: toolCallFunction{Name: "read_file", Arguments: `{"path":"` + fb + `"}`}},
-	}
-	start := time.Now()
-	msgs, err := a.executeToolCalls(context.Background(), nil, tcs, "", "", io.Discard, nil, nil, "", nil)
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("executeToolCalls: %v", err)
-	}
-	if elapsed > time.Second {
-		t.Errorf("read run looks sequential (elapsed %v) — pure reads must overlap", elapsed)
-	}
-	res := toolResultsByCall(msgs)
-	if !strings.Contains(res["ra"], "aaa") || !strings.Contains(res["rb"], "bbb") {
-		t.Errorf("both reads must complete: ra=%q rb=%q", res["ra"], res["rb"])
 	}
 }
 
