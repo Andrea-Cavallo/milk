@@ -1,8 +1,8 @@
 package main
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
