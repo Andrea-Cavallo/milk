@@ -95,8 +95,11 @@ func (m model) handleThemeCmd(arg string) (tea.Model, tea.Cmd) {
 // sessions written before ADR-0075.
 var toolRowRe = regexp.MustCompile(`^(?:\x1b\[[0-9;]*m)*[⚙»] ([^:\x1b]+?)(?:: (.*?))?(?:\x1b\[[0-9;]*m)*$`)
 
-// modernToolRows restyles tool-activity rows for a skin: the marker becomes a
-// small accent glyph, the tool name is bold muted ink, the summary muted.
+// modernToolRows restyles tool-activity rows for a skin: the marker stays
+// the shared tool glyph » (ADR-0075 — the font-safe double closing brackets
+// the default theme shows in the transcript) and only takes the accent, the
+// tool name is bold muted ink, the summary muted. One marker across skins,
+// so a transcript reads the same whichever skin paints it.
 // Render-only; the transcript buffer is untouched.
 func modernToolRows(content string) string {
 	if !strings.Contains(content, "⚙ ") && !strings.Contains(content, "» ") {
@@ -108,7 +111,7 @@ func modernToolRows(content string) string {
 		if m == nil {
 			continue
 		}
-		out := colorize("▸", tkAccent.sgrFg()) + " " + colorize(m[1], ansiBold+tkMuted.sgrFg())
+		out := colorize("»", tkAccent.sgrFg()) + " " + colorize(m[1], ansiBold+tkMuted.sgrFg())
 		if m[2] != "" {
 			out += "  " + colorize(m[2], tkMuted.sgrFg())
 		}

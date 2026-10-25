@@ -35,7 +35,10 @@ Two named skins, selected with `/theme` and persisted as `theme` in
   the one that produced it.
 - **`supermilk` (opt-in)** — a semi-skimmed milk skin: fixed milk-white ground
   (`#f8f5ee`), warm ink text, hairline separators, one muted olive accent, a
-  slim scrollbar and quiet tool rows. It carries its own tagline
+  slim scrollbar and quiet tool rows. The tool-row restyle is colour-only: it
+  keeps the shared `»` tool marker (ADR-0075 — the font-safe double closing
+  brackets), accent-tinted, so the glyph is the same in every skin and a
+  transcript never reads differently per skin. It carries its own tagline
   (`Got models? Got milk.`). While active it also sets the terminal's default
   background/foreground/cursor and the 16-colour ANSI ramp via OSC, so
   everything milk does not paint itself (edge columns, scrollbar gutter,

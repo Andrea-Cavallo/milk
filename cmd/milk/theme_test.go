@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestThemeOffKeepsOriginalLook(t *testing.T) {
@@ -42,5 +44,32 @@ func TestThemeSwitchAndReject(t *testing.T) {
 	}
 	if setTheme("OFF"); th.modern {
 		t.Error("theme names are case-insensitive; OFF should switch back")
+	}
+}
+
+// TestModernToolRows_UsesTheSharedToolMarker pins the tool-row marker across
+// skins: the supermilk skin restyles tool rows (accent marker, bold-muted
+// name, muted summary) but must keep the default theme's shared tool glyph —
+// » (ADR-0075, the font-safe double closing brackets), accent-tinted — so a
+// transcript reads the same whichever skin paints it. Rows seeded from
+// pre-ADR-0075 sessions (⚙) land on the same marker.
+func TestModernToolRows_UsesTheSharedToolMarker(t *testing.T) {
+	// The accent assertion needs real SGR bytes (colorize no-ops off a TTY).
+	oldTTY, oldName := isTTY, th.name
+	isTTY = true
+	setTheme("supermilk")
+	t.Cleanup(func() {
+		isTTY = oldTTY
+		setTheme(oldName)
+	})
+
+	for _, in := range []string{"» Bash: go test ./...", "⚙ Bash: go test ./..."} {
+		raw := modernToolRows(in)
+		if !strings.HasPrefix(raw, colorize("»", tkAccent.sgrFg())+" ") {
+			t.Errorf("modernToolRows(%q) = %q, want the shared » marker in the accent", in, raw)
+		}
+		if out := ansi.Strip(raw); strings.Contains(out, "▸") || strings.Contains(out, "⚙") {
+			t.Errorf("modernToolRows(%q) = %q, must not introduce another marker", in, out)
+		}
 	}
 }
