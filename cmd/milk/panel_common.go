@@ -4,7 +4,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/agent/local"
@@ -21,7 +20,8 @@ import (
 func (m *model) sidePanelLines(region panelRegion) (lines []string, inner int) {
 	switch region {
 	case regionMemory:
-		return buildPanelLines(m.mem, memoryPanelInner, m.currentSessionBricks()), memoryPanelInner
+		lines, _ := memoryPanelRows(m.mem, memoryPanelInner, m.currentSessionBricks(), m.memoryExpanded)
+		return lines, memoryPanelInner
 	case regionTasks:
 		return buildTasksPanelLines(m.taskStore, tasksPanelInner), tasksPanelInner
 	case regionBackground:
@@ -33,8 +33,22 @@ func (m *model) sidePanelLines(region panelRegion) (lines []string, inner int) {
 	case regionWorkflow:
 		return buildWorkflowPanelLines(m.workflowState, workflowPanelInner), workflowPanelInner
 	case regionProject:
+		if m.projectLines == nil {
+			// No data msg yet (restore-at-startup or the first frames after
+			// toggle-open): render the builder's loading row — title included —
+			// instead of an empty box. Empty panel space is unacceptable.
+			lines, _ := buildProjectTreeLines(nil, false, m.projectExpanded, projectPanelInner)
+			return lines, projectPanelInner
+		}
 		return m.projectLines, projectPanelInner
 	case regionGit:
+		if m.gitLines == nil {
+			// Same gap for git: population only rides the /panel toggle or a
+			// focus-cycle refresh (sidePanelLines has no cwd to fetch with),
+			// so pre-first-msg frames must show "(loading…)", not blank rows.
+			lines, _ := buildGitPanelLines(nil, "", 0, "", gitPanelInner)
+			return lines, gitPanelInner
+		}
 		return m.gitLines, gitPanelInner
 	}
 	return nil, 0
@@ -68,6 +82,9 @@ func panelShortcut(region panelRegion) string {
 // /panel or memorizing it. Title is truncated, not the hint, if both
 // together would overflow inner.
 func panelTitleLine(title string, region panelRegion, inner int) string {
+	if th.modern {
+		return panelTabStrip(region, inner)
+	}
 	hint := panelShortcut(region)
 	if hint == "" {
 		return stylePanelTitle.Render(truncate(title, inner))
@@ -86,32 +103,42 @@ func panelTitleLine(title string, region panelRegion, inner int) string {
 // active (a workflow started, a background job was spawned, a task was
 // saved, ...) — unless the user has explicitly shown or hidden that panel
 // via /panel or its F1-F6 shortcut this session (see panelManualOverride),
-// in which case their choice sticks and this is a no-op. A manual override
-// is not permanent: it is dropped again as soon as the panel's content
-// finalizes (see resetManualOverrideIfFinalized), so the *next* active
-// content auto-opens the panel once more.
+// in which case their choice sticks and this is a no-op. With
+// "remember_panel_state": false the override is not permanent: it is
+// dropped again as soon as the panel's content finalizes (see
+// resetManualOverrideIfFinalized), so the *next* active content auto-opens
+// the panel once more (ADR-0059).
 //
 // A silent auto-open is exactly the kind of surprise event that should
 // explain itself: when the panel *transitions* closed→open (issue #162 /
 // ADR-0044's panel state changes), post a notification toast with the
 // command that closes it again. Repeated calls while already open — e.g.
 // every workflow chunk — stay silent.
+//
+// On a tabbed theme (ADR-0079) content never moves the user: an auto-open
+// only fires while the shared slot is free (see the gate below), so live
+// content can never yank the view off the panel the user is looking at.
 func (m *model) autoOpenPanel(region panelRegion) {
 	if m.panelManualOverride[region] {
 		return
 	}
 	wasOpen := m.panelOpen(region)
-	switch region {
-	case regionMemory:
-		m.panelMemory = true
-	case regionTasks:
-		m.panelTasks = true
-	case regionBackground:
-		m.panelBackground = true
-	case regionWorkflow:
-		m.workflowPanelOpen = true
+	// Tabbed themes (ADR-0079): while another panel occupies the shared
+	// slot, content for a closed panel stays a notification instead of
+	// switching the user's tab — auto-open takes a free slot or none.
+	if panelTabsActive() && !wasOpen && m.anyPanelVisible() {
+		return
+	}
+	if ptr := m.panelOpenPtr(region); ptr != nil {
+		*ptr = true
 	}
 	if !wasOpen && m.panelOpen(region) {
+		// Tabbed themes (ADR-0079): the panel that just opened takes the
+		// shared slot (the gate above means the slot was free) — once.
+		// Later content for the same already-open panel (every workflow
+		// chunk, every task update) never yanks the tab back from wherever
+		// the user has moved on to.
+		m.activatePanelTab(region)
 		m.notify(panelDisplayName(region)+" panel opened", "/panel "+panelSubName(region))
 	}
 }
@@ -193,7 +220,12 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 // completed, or done (see panelContentFinalized). From that point on, the
 // *next* active content auto-opens the panel again: the user's close stays
 // respected for the live content it was dismissed over, but no longer
-// blocks genuinely new activity later in the session.
+// blocks genuinely new activity later in the session (ADR-0059).
+//
+// With the default "remember_panel_state" (ADR-0078) this is a no-op for
+// every region: a manual toggle is a durable preference — persisted and
+// restored across sessions — so content finalization never expires it.
+// The ADR-0059 expiry is the feature-off fallback (session-only panels).
 //
 // Called from two kinds of sites:
 //   - handlePanelCmd, when a toggle *closes* the panel — closing a panel
@@ -211,6 +243,9 @@ func (m *model) panelContentFinalized(region panelRegion) bool {
 // (so the finalizing event itself never force-opens a user-closed panel),
 // then this reset — only future content re-opens it.
 func (m *model) resetManualOverrideIfFinalized(region panelRegion) {
+	if m.rememberPanelState {
+		return
+	}
 	if m.panelManualOverride[region] && m.panelContentFinalized(region) {
 		delete(m.panelManualOverride, region)
 	}
@@ -273,37 +308,49 @@ var panelRenderOrder = []panelRegion{regionMemory, regionTasks, regionBackground
 
 // panelAltBackground reports whether region should render with the subtle
 // alternating background tint (see withPanelBackground): true for every
-// other panel among those *currently open*, counted left-to-right in
-// panelRenderOrder — not a fixed per-region parity. Counting only open
-// panels means two panels that end up visually adjacent because something
-// between them is closed never land on the same background by coincidence.
+// other panel among those *currently in the layout*, counted left-to-right in
+// panelRenderOrder — not a fixed per-region parity. The count starts with
+// the panel adjacent to the transcript, so the chat/panel boundary is
+// always a tint change (the first panel must differ from the chat).
+// Counting only visible panels means two panels that end up visually adjacent
+// because something between them is closed never land on the same
+// background by coincidence — and on a tabbed theme (ADR-0079) the one panel
+// in the shared slot is always the first, so it always differs from the chat.
 func (m *model) panelAltBackground(region panelRegion) bool {
 	idx := 0
 	for _, r := range panelRenderOrder {
-		if !m.panelOpen(r) {
+		if !m.panelVisible(r) {
 			continue
 		}
 		if r == region {
-			return idx%2 == 1
+			return idx%2 == 0
 		}
 		idx++
 	}
 	return false
 }
 
-// panelAltBackgroundCode returns the raw SGR "set background" escape for the
-// alternating panel tint, or "" when not a TTY. Deliberately a small, fixed
-// step off pure black/white rather than derived from the terminal's actual
-// background (which lipgloss/termenv can't read back) — HasDarkBackground
-// only tells us which direction to step.
-func panelAltBackgroundCode() string {
-	if !isTTY {
-		return ""
+// panelOpenPtr returns a pointer to the model's raw open flag for the given
+// side-panel region (no layout/width gating — panelOpen's visible() checks
+// are render-time only), or nil for regionNone/an unknown region. Toggling
+// (/panel, F1-F6), auto-open and panel-state persistence share it, so the
+// setters can never drift out of sync with the readers.
+func (m *model) panelOpenPtr(region panelRegion) *bool {
+	switch region {
+	case regionMemory:
+		return &m.panelMemory
+	case regionTasks:
+		return &m.panelTasks
+	case regionBackground:
+		return &m.panelBackground
+	case regionWorkflow:
+		return &m.workflowPanelOpen
+	case regionProject:
+		return &m.panelProject
+	case regionGit:
+		return &m.panelGit
 	}
-	if lipgloss.HasDarkBackground() {
-		return "\033[48;2;24;24;28m"
-	}
-	return "\033[48;2;236;236;239m"
+	return nil
 }
 
 // panelOffsetPtr returns a pointer to the model's persisted scroll offset for
@@ -402,9 +449,9 @@ func (m *model) renderSidePanelScrollbar(region panelRegion, h int) string {
 	thumbTop, thumbBot := scrollThumb(h, total, *m.panelOffsetPtr(region))
 	for i := range h {
 		if i >= thumbTop && i <= thumbBot {
-			rows = append(rows, sgr.WithBackground(dim("▌"), bg))
+			rows = append(rows, sgr.WithBackground(scrollThumbGlyph(), bg))
 		} else {
-			rows = append(rows, sgr.WithBackground(dim("│"), bg))
+			rows = append(rows, sgr.WithBackground(scrollTrackGlyph(), bg))
 		}
 	}
 	return strings.Join(rows, "\n")

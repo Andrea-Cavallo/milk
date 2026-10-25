@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/scoutme/milk/internal/agent/local"
 	"github.com/scoutme/milk/internal/config"
@@ -83,8 +83,15 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 	if cmd == cmdInterrupt {
 		return m.handleInterruptCmd()
 	}
+	if cmd == cmdTheme {
+		return m.handleThemeCmd(strings.TrimSpace(rest))
+	}
 	if cmd == cmdTips {
 		return m.handleTipsCmd(strings.TrimSpace(rest))
+	}
+	if cmd == cmdKeys {
+		m.appendTranscript("\n" + renderKeysHelp(m.vpWidth()) + "\n")
+		return m, nil
 	}
 	if cmd == cmdNotifications {
 		return m.handleNotificationsCmd(strings.TrimSpace(rest)), nil
@@ -702,7 +709,7 @@ func (m model) handleSetupCmd(arg string) (tea.Model, tea.Cmd) {
 }
 
 // handleTelegramSetupKey handles keypresses during the /setup telegram wizard.
-func (m model) handleTelegramSetupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleTelegramSetupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.pendingTelegramSetup = nil
@@ -966,7 +973,7 @@ func (m model) handleMCPCmd(arg string) (model, tea.Cmd) {
 
 // handlePathPasteKey handles keypresses while pendingPathPaste is set.
 // "y"/"Y"/Enter → attach the file; "n"/"N"/Esc/Ctrl+C → insert as plain text.
-func (m model) handlePathPasteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handlePathPasteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	path := m.pendingPathPaste
 	m.pendingPathPaste = ""
 
@@ -1539,7 +1546,7 @@ func forgetCandidateList(candidates []memory.Percept) string {
 }
 
 // handleForgetKey handles keypresses while a /forget confirmation is pending.
-func (m model) handleForgetKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleForgetKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.pendingForget = nil
@@ -1612,7 +1619,7 @@ func (m model) resolveForget(answer string) model {
 // handleSearchKey handles keypresses while ctrl+r search is active.
 // Printable chars extend the query; ctrl+r searches again (older);
 // backspace shrinks the query; enter/esc/ctrl+c accept and exit search.
-func (m model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+r":
 		m.searchForward = false
@@ -1688,7 +1695,36 @@ func (m model) handleHistoryCmd(sub string) model {
 	return m
 }
 
+// handlePanelCmd runs /panel <name> and the F1-F6 shortcut. On a tabbed
+// theme (ADR-0079) the six panels are tabs of one shared slot and tabs are
+// exclusive: moving to a panel CLOSES the one you moved away from, so at
+// most one panel is ever open. The one state the invariant does not cover
+// itself is multi-open residue (flags set outside the activation paths,
+// e.g. sibling-session state restored before the theme was known): a press
+// on an open-but-not-front panel brings it to the front and closes the rest
+// — it must not close the panel the user is pointing at, and it must not
+// leave invisible siblings behind. On the front panel the toggle still
+// closes it (the slot empties — nothing waits behind), and on a closed one
+// it opens it after the others are out of the way.
 func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
+	region := panelRegionForSubName(sub)
+	if panelTabsActive() && region != regionNone {
+		if m.panelRawOpen(region) && region != m.panelActive() {
+			m.activatePanelTab(region)
+			m.closeAllButPanelTabs(region)
+			m.savePanelStateReport()
+			m.syncLayout()
+			return m, nil
+		}
+		m.activatePanelTab(region)
+		m.closeAllButPanelTabs(region)
+	}
+	return m.handlePanelCmdToggle(sub)
+}
+
+// handlePanelCmdToggle is the plain show/hide toggle behind /panel <name>
+// and F1-F6 (the tab-aware entry point is handlePanelCmd).
+func (m model) handlePanelCmdToggle(sub string) (tea.Model, tea.Cmd) {
 	if m.panelManualOverride == nil {
 		m.panelManualOverride = map[panelRegion]bool{}
 	}
@@ -1704,22 +1740,22 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.panelMemory {
 			m.resetManualOverrideIfFinalized(regionMemory)
 		}
+		m.savePanelStateReport()
 		m.refreshPrompt()
 		m.syncLayout()
-		var tick tea.Cmd
 		if m.panelMemory {
 			m.notify("memory panel: on", "/panel memory")
-			tick = memoryPollTick()
 		} else {
 			m.notify("memory panel: off", "/panel memory")
 		}
-		return m, tick
+		return m, nil
 	case "tasks":
 		m.panelManualOverride[regionTasks] = true
 		m.panelTasks = !m.panelTasks
 		if !m.panelTasks {
 			m.resetManualOverrideIfFinalized(regionTasks)
 		}
+		m.savePanelStateReport()
 		m.refreshPrompt()
 		m.syncLayout()
 		if m.panelTasks {
@@ -1734,6 +1770,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.workflowPanelOpen {
 			m.resetManualOverrideIfFinalized(regionWorkflow)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.workflowPanelOpen {
 			m.notify("workflow panel: on", "/panel workflow")
@@ -1747,6 +1784,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.panelBackground {
 			m.resetManualOverrideIfFinalized(regionBackground)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.panelBackground {
 			m.notify("background panel: on", "/panel background")
@@ -1760,6 +1798,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.panelProject {
 			m.resetManualOverrideIfFinalized(regionProject)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.panelProject {
 			m.notify("project panel: on", "/panel project")
@@ -1774,6 +1813,7 @@ func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 		if !m.panelGit {
 			m.resetManualOverrideIfFinalized(regionGit)
 		}
+		m.savePanelStateReport()
 		m.syncLayout()
 		if m.panelGit {
 			m.notify("git panel: on", "/panel git")

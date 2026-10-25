@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/progress"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	rw "github.com/mattn/go-runewidth"
 
@@ -23,19 +26,25 @@ func (m *model) headerBar() string {
 		frame = m.spinnerFrame
 	}
 	logo := headerLogo(frame)
-	tagline := dim("switch models, not context.")
-	taglinePlain := "switch models, not context."
+	taglinePlain := taglineText()
+	tagline := dim(taglinePlain)
 
-	sessID := m.st.sess.ID
+	// A model can render before a session is bound (tests, early startup):
+	// the bars degrade to empty session info instead of crashing — the mouse
+	// hit-testing measures these rows, so they must be safe to call anytime.
+	sessID := ""
+	var totalPrompt, totalCompletion, totalCacheRead, totalCacheCreation int64
+	if m.st != nil && m.st.sess != nil {
+		sessID = m.st.sess.ID
+		for _, u := range m.st.sess.TokensSnapshot() {
+			totalPrompt += u.Prompt
+			totalCompletion += u.Completion
+			totalCacheRead += u.CacheRead
+			totalCacheCreation += u.CacheCreation
+		}
+	}
 	if len(sessID) > 8 {
 		sessID = sessID[:8]
-	}
-	var totalPrompt, totalCompletion, totalCacheRead, totalCacheCreation int64
-	for _, u := range m.st.sess.TokensSnapshot() {
-		totalPrompt += u.Prompt
-		totalCompletion += u.Completion
-		totalCacheRead += u.CacheRead
-		totalCacheCreation += u.CacheCreation
 	}
 	sessLabel := fmt.Sprintf("sess:%s (total:↑%s↓%s)", sessID, formatTokenCount(totalPrompt), formatTokenCount(totalCompletion))
 	if cacheActivity := totalCacheRead + totalCacheCreation; cacheActivity > 0 {
@@ -57,10 +66,28 @@ func (m *model) headerBar() string {
 	if version == "dev" {
 		vStyled = boldYellow(version)
 	}
-	rightFull := dim(repoURL+" ") + vStyled + dim("  "+sessLabel+"  /help")
-	rightFulPlain := repoURL + " " + version + "  " + sessLabel + "  /help"
-	rightShort := vStyled + dim("  "+sessLabel+"  /help")
-	rightShortPlain := version + "  " + sessLabel + "  /help"
+	// The command palette key rides beside /help in every variant: a
+	// shortcut nobody can discover is a shortcut that doesn't exist. It
+	// mirrors /help's styling per skin (dim in the classic skin, accent
+	// in supermilk) so the two hints read as one pair, and it survives
+	// the narrow-width degradation below with the version.
+	paletteHint := "ctrl+o palette"
+	rightFull := dim(repoURL+" ") + vStyled + dim("  "+sessLabel+"  "+paletteHint+"  /help")
+	rightFulPlain := repoURL + " " + version + "  " + sessLabel + "  " + paletteHint + "  /help"
+	rightShort := vStyled + dim("  "+sessLabel+"  "+paletteHint+"  /help")
+	rightShortPlain := version + "  " + sessLabel + "  " + paletteHint + "  /help"
+	if th.modern {
+		// The supermilk skin paints its own right group — and it must
+		// cover the narrow variant too: the classic short fallback would
+		// otherwise silently dim the hints (pre-/help behavior) on any
+		// terminal too tight for the full variant. Modern's group never
+		// carried the repo URL, so both variants share one string.
+		modernRight := vStyled + dim("  "+sessLabel+"  ") + colorize(paletteHint, tkAccent.sgrFg()) + dim("  ") + colorize("/help", tkAccent.sgrFg())
+		rightFull = modernRight
+		rightShort = modernRight
+		rightFulPlain = version + "  " + sessLabel + "  " + paletteHint + "  /help"
+		rightShortPlain = rightFulPlain
+	}
 
 	logoPlain := ansi.Strip(logo)
 	available := m.width - 2
@@ -73,6 +100,7 @@ func (m *model) headerBar() string {
 	gap := max(available-len(leftPlain)-len(rightPlain), 1)
 	bar := left + strings.Repeat(" ", gap) + rightPart + " "
 	if isTTY {
+		bar = tintChrome(bar, chromeHeaderFg.sgrFg(), chromeHeaderBg.sgrBg())
 		return styleHeaderBar.Width(m.width).Render(bar)
 	}
 	return bar
@@ -84,11 +112,24 @@ func (m *model) statusBar() string {
 	// When a permission prompt is active, avoid dim() — its ANSI reset (\033[0m)
 	// kills the yellow background that styleStatusBarPerm sets.
 	isPerm := m.pendingPerm != nil
-	rolePart := "role:" + sessionRole(m.st.sess.State)
+	sessRole := ""
+	if m.st != nil && m.st.sess != nil {
+		sessRole = sessionRole(m.st.sess.State)
+	}
+	rolePart := "role:" + sessRole
 	agentPart := "agent:" + m.statusAgent()
 	if !isPerm {
 		rolePart = dim(rolePart)
 		agentPart = dim("agent:") + m.statusAgent()
+	}
+	if th.modern {
+		roleName := strings.ToLower(sessRole)
+		rolePart = "● " + roleName
+		agentPart = "· " + m.statusAgent()
+		if !isPerm {
+			rolePart = colorize("●", tkAccent.sgrFg()) + dim(" "+roleName)
+			agentPart = dim("· ") + m.statusAgent()
+		}
 	}
 	left := fmt.Sprintf(" %s  %s%s", rolePart, agentPart, tokenStr)
 	right := ""
@@ -104,6 +145,9 @@ func (m *model) statusBar() string {
 	if isPerm {
 		right += m.statusCwd() + " "
 	} else {
+		if th.modern && m.width >= 110 {
+			right += dim("Alt+↑/↓ history  ·  Ctrl+C exit  ·  ")
+		}
 		right += dim(m.statusCwd() + " ")
 	}
 	if m.credRefreshing {
@@ -267,6 +311,7 @@ func (m *model) statusBar() string {
 		if m.pendingPerm != nil {
 			return styleStatusBarPerm.Width(m.width).MaxWidth(m.width).Render(bar)
 		}
+		bar = tintChrome(bar, chromeStatusBg.sgrBg())
 		return styleStatusBar.Width(m.width).MaxWidth(m.width).Render(bar)
 	}
 	return bar
@@ -452,6 +497,9 @@ const (
 // they were meant to complement. Returns "" only when there's no usable
 // numerator yet.
 func (m *model) statusContextPressure(role string, promptTokens int64) string {
+	if m.st == nil {
+		return ""
+	}
 	var ac config.AgentConfig
 	if role == "escalation" {
 		ac = m.st.cfg.EscalationAgentConfig()
@@ -478,18 +526,56 @@ func (m *model) statusContextPressure(role string, promptTokens int64) string {
 	label := fmt.Sprintf("ctx:%s/%s", formatTokenCount(numerator), formatTokenCount(int64(window)))
 	switch {
 	case pct >= contextPressureCriticalPct:
-		return red(label)
+		label = red(label)
 	case pct >= contextPressureHighPct:
-		return yellow(label)
+		label = yellow(label)
 	default:
-		return dim(label)
+		label = dim(label)
 	}
+	// The meter is a glance aid; the numbers stay the source of truth, so it
+	// only shows when the bar is wide enough not to crowd them out.
+	if m.width >= contextMeterMinWidth {
+		return contextMeter(pct) + " " + label
+	}
+	return label
+}
+
+// contextMeterMinWidth is the terminal width from which the ctx fragment
+// gets a fill meter in front of its numbers.
+const contextMeterMinWidth = 130
+
+const contextMeterCells = 8
+
+// contextMeterBar is the shared meter: fill color follows the same
+// thresholds as the ctx label (dim, yellow at 75%, red at 90%).
+var contextMeterBar = progress.New(
+	progress.WithWidth(contextMeterCells),
+	progress.WithoutPercentage(),
+	progress.WithFillCharacters('▰', '▱'),
+	progress.WithColorFunc(func(total, _ float64) color.Color {
+		switch {
+		case total*100 >= contextPressureCriticalPct:
+			return lipgloss.Color("1")
+		case total*100 >= contextPressureHighPct:
+			return lipgloss.Color("3")
+		default:
+			return lipgloss.Color("8")
+		}
+	}),
+)
+
+// contextMeter renders pct (clamped to 0-100) as a short fill meter.
+func contextMeter(pct int) string {
+	return contextMeterBar.ViewAs(float64(min(max(pct, 0), 100)) / 100)
 }
 
 // activeTokenRole returns "escalation" or "primary" reflecting which agent will
 // handle (or is handling) the current turn. Mirrors agentLabel priority order.
 func (m *model) activeTokenRole() string {
 	st := m.st
+	if st == nil {
+		return "primary"
+	}
 	if st.activeFallbackTarget == "escalation" {
 		return "escalation"
 	}
@@ -502,7 +588,7 @@ func (m *model) activeTokenRole() string {
 	if st.stickyPrimary || st.forcePrimary {
 		return "primary"
 	}
-	if st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting {
+	if st.sess != nil && (st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting) {
 		return "escalation"
 	}
 	return "primary"
@@ -535,6 +621,9 @@ func sessionRole(s session.State) string {
 }
 
 func agentLabel(st *interactiveState) string {
+	if st == nil {
+		return "local"
+	}
 	localName := st.cfg.ActiveAgent().Name
 	if localName == "" {
 		localName = "local"
@@ -558,7 +647,7 @@ func agentLabel(st *interactiveState) string {
 		return localName + " (pinned)"
 	case st.forcePrimary:
 		return localName + " (forced)"
-	case st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting:
+	case st.sess != nil && (st.sess.State == session.StateEscalation || st.sess.State == session.StateEscalationWaiting):
 		return escalationName
 	default:
 		return localName
@@ -566,6 +655,9 @@ func agentLabel(st *interactiveState) string {
 }
 
 func (m *model) statusCwd() string {
+	if m.st == nil {
+		return ""
+	}
 	cwd := m.st.cwd
 	if home, err := os.UserHomeDir(); err == nil {
 		if rel, err := filepath.Rel(home, cwd); err == nil && !strings.HasPrefix(rel, "..") {

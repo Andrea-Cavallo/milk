@@ -95,3 +95,16 @@ it was suppressing rather than by the session.
   agent's tool loop with no host event), so its reset — wired at `/forget`
   and at close time — is bookkeeping today. If a memory auto-open trigger
   is ever added, the finalization half is already in place.
+
+## Amendment (2026-10-24): the expiry is the feature-off fallback
+
+[ADR-0078](0078-persisted-panel-state.md) made panel state a durable
+preference behind `remember_panel_state` (default on). With it on, a manual
+toggle survives content finalization for **every** panel — this ADR's
+expiry no longer runs. With `"remember_panel_state": false` the semantics
+above stand exactly as written, and their tests
+(`TestPanelClose_FinalizedContentDoesNotStick` and the
+`…Finalize`/`…ResetsManualOverride` cases, all run with the feature off)
+pin them. The "known gap" is also closed: the memory panel now auto-opens
+on content presence (its 5s poll detects percept arrival), and the memory
+panel's closed-by-default, content-driven open is part of ADR-0078.

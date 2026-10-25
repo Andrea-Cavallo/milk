@@ -161,7 +161,7 @@ var commandRegistry = []cmdSpec{
   /export json           print session transcript as JSON
   /export <path>         write session transcript to file
   /export session <id>   export another session (id or unambiguous prefix)
-  /export --no-reasoning omit reasoning blocks (text fences / JSON thinking) — they are included by default`},
+  /export --no-reasoning  omit reasoning blocks (text fences / JSON thinking) — they are included by default`},
 	{name: cmdHistory, hosts: hostTUI, desc: "show or set the input history navigation mode", hint: "[global|session]", help: `  /history               show current history navigation mode
   /history global        navigate global input history
   /history session       navigate session input history (default)`},
@@ -173,7 +173,11 @@ var commandRegistry = []cmdSpec{
                          click a dir to expand/collapse, a file to preview it,
                          double-click a file to insert an @-mention
   /panel git             toggle the git graph panel (right side) — also F6
-                         click a commit to preview its summary and diff`},
+                         click a commit to preview its summary and diff
+                         on a tabbed theme (/theme supermilk) the six panels are
+                         tabs of one shared slot: on a hidden tab this switches
+                         to it instead of closing, and clicking a tab label
+                         does the same as its F-key`},
 	{name: cmdForget, hosts: hostTUI, desc: "delete a percept (asks for confirmation)", hint: "<pat|#id>", help: `  /forget <pat|#id>      delete a percept (asks for confirmation)`},
 	{name: cmdSkipPerms, hosts: hostBoth, desc: "approve every tool call without asking, or go back to asking", hint: "[on|off]", help: `  /skip-permissions      show current skip-permissions state
   /skip-permissions on   all agents auto-approve tool uses (no prompts)
@@ -194,6 +198,9 @@ var commandRegistry = []cmdSpec{
   /agent tool disable <tool> [for <agent>|global]  disable a tool-agent entry
   /agent tool add <tool> description=<desc> [for <agent>|global]  add a new tool-agent entry
   /agent tool remove <tool> [for <agent>|global]  remove a tool-agent entry`},
+	{name: cmdTheme, hosts: hostTUI, desc: "switch the TUI skin (off = original look)", hint: "[off|supermilk]", help: `  /theme                 show the active theme
+  /theme off             original look (default)
+  /theme supermilk       milk-white skin, soft ink, hairlines`},
 	{name: cmdColorize, hosts: hostTUI, desc: "show or set the markdown colorization mode", hint: "[off|fenced|balanced|full]", help: `  /colorize              show current colorization mode
   /colorize off          no colorization
   /colorize fenced       highlight fenced code blocks only
@@ -214,10 +221,10 @@ var commandRegistry = []cmdSpec{
   /tips pick <n>         show tip number <n>
   /tips pick <text>      show the tip whose text matches <text>
   /tips search <query>   list the tips matching <query>`},
-	{name: cmdSetup, hosts: hostBoth, desc: "configure Telegram remote oversight (status, enable, disable, or the setup wizard)", hint: "telegram [on|off|status]", help: `  /setup telegram        configure Telegram remote oversight interactively
-  /setup telegram on     enable Telegram (credentials must already be configured)
-  /setup telegram off    disable Telegram (credentials are preserved)
-  /setup telegram status show current Telegram oversight status`},
+	{name: cmdSetup, hosts: hostBoth, desc: "configure Telegram remote oversight (status, enable, disable, or the setup wizard)", hint: "telegram [on|off|status]", help: `  /setup telegram         configure Telegram remote oversight interactively
+  /setup telegram on      enable Telegram (credentials must already be configured)
+  /setup telegram off     disable Telegram (credentials are preserved)
+  /setup telegram status  show current Telegram oversight status`},
 	{name: cmdConfig, hosts: hostBoth, desc: "print the config, run the setup wizard, or open the config file", hint: "[show|init|open]", help: `  /config                print the current config (merged global + local overrides)
   /config show           print the merged config tagged [global]/[local]/[default]
   /config init           run the setup wizard (configure primary + escalation agents)
@@ -273,6 +280,7 @@ var commandRegistry = []cmdSpec{
   /bg show <id>          print one job's full result
   /bg start <task>       spawn a background agent to research <task>
   /bg stop <id>          terminate a running background agent`},
+	{name: cmdKeys, hosts: hostTUI, desc: "list the keyboard shortcuts", help: `  /keys                        list the keyboard shortcuts (panels, navigation, input)`},
 	{name: cmdNotifications, hosts: hostTUI, desc: "show or clear the notification history", hint: "[list [<count>]|clear]", help: `  /notifications               show last 20 notifications (timestamps + hints)
   /notifications list          show the full notification history, unfiltered
   /notifications list <count>  show the last <count> notifications
@@ -334,7 +342,7 @@ var helpBlocks = []helpBlock{
 	{header: "── Permissions ──────────────────────────────────────────────────────────", names: []string{cmdPermissions}},
 	{header: "── Memory ───────────────────────────────────────────────────────────────", names: []string{cmdLearn, cmdMemory, cmdForget, cmdPanel, cmdTasks, cmdTask}},
 	{header: "── Background agents ───────────────────────────────────────────────────", names: []string{cmdBg}},
-	{header: "── Display ──────────────────────────────────────────────────────────────", names: []string{cmdColorize, cmdThink, cmdTips, cmdHistory, cmdNotifications}},
+	{header: "── Display ──────────────────────────────────────────────────────────────", names: []string{cmdColorize, cmdTheme, cmdThink, cmdTips, cmdHistory, cmdNotifications, cmdKeys}},
 	{header: "── Observability ────────────────────────────────────────────────────────", names: []string{cmdUsage, cmdMetrics, cmdOtel}},
 	{header: "── MCP Servers ───────────────────────────────────────────────────────────", names: []string{cmdMCP}},
 	{header: "── Workflow ───────────────────────────────────────────────────────────────", names: []string{cmdWorkflow}},

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/creack/pty"
 )
 
@@ -27,7 +27,7 @@ const viewportRebuildThrottle = 33 * time.Millisecond
 // this, the user would see only the attach buffer and the status bar's
 // "[allow?]" hint, with no way to read what they're actually being asked.
 // Key routing already gives every pending-prompt handler priority over
-// handleAttachKey (see Update's tea.KeyMsg case); this keeps what's
+// handleAttachKey (see Update's tea.KeyPressMsg case); this keeps what's
 // *rendered* consistent with what keys actually do. m.attached itself is
 // left untouched — once the prompt resolves, the attach view reappears
 // exactly where it was, since nothing here ever calls detachAttach.
@@ -49,7 +49,7 @@ func (m *model) attachActive() bool {
 
 // hasPendingPrompt reports whether some pending prompt/wizard needs the
 // user's direct attention right now — the same set of fields Update's
-// tea.KeyMsg case checks, in the same "needs a real decision" spirit, kept
+// tea.KeyPressMsg case checks, in the same "needs a real decision" spirit, kept
 // as one place both key routing's implicit precedence (each check simply
 // sits before the attach check) and rendering (activeViewport) can agree
 // on what counts as "something more urgent than attach is going on."
@@ -99,28 +99,35 @@ func (m *model) viewportHeight() int {
 	return max(h, 3)
 }
 
+// viewportRows returns the screen rows the main viewport occupies: top is the
+// first viewport row, bottom the first row below it. Every mouse row→content
+// line mapping derives from this one layout measurement — the same one
+// viewportHeight() and View() build the layout from — so a header bar that
+// wraps (narrow terminal, long session label) or a growing hint region can
+// never skew click hit-testing. It used to be hardcoded as "rows 2..height-2",
+// which silently mapped every click one row low per extra chrome row: a fold
+// header click landed on a later think block (or past the last one, a no-op).
+func (m *model) viewportRows() (top, bottom int) {
+	top = strings.Count(m.headerBar(), "\n") + 1
+	status := strings.Count(m.statusBar(), "\n") + 1
+	bottom = m.height - len(m.hintRegion()) - status
+	if bottom < top {
+		bottom = top
+	}
+	return top, bottom
+}
+
 // mainWidth returns the width available for the transcript+input area.
-// When the memory, tasks, and/or workflow panels are open it is reduced accordingly,
-// but only when the panel would actually be rendered (i.e. terminal is wide enough).
+// When side panels are in the layout it is reduced accordingly, but only when
+// the panel would actually be rendered (i.e. terminal is wide enough). On a
+// tabbed theme (ADR-0079) at most one panel — the front tab — is in the
+// layout, so the shared slot costs one panel width however many are open.
 func (m *model) mainWidth() int {
 	w := m.width
-	if m.panelMemory {
-		w -= memoryPanelWidth
-	}
-	if m.panelTasks {
-		w -= tasksPanelWidth
-	}
-	if m.panelBackground {
-		w -= backgroundPanelWidth
-	}
-	if m.workflowPanelVisible() {
-		w -= workflowPanelWidth
-	}
-	if m.projectPanelVisible() {
-		w -= projectPanelWidth
-	}
-	if m.gitPanelVisible() {
-		w -= gitPanelWidth
+	for _, r := range panelRenderOrder {
+		if m.panelVisible(r) {
+			w -= panelWidth(r)
+		}
 	}
 	if w < 20 {
 		w = 20
@@ -128,30 +135,18 @@ func (m *model) mainWidth() int {
 	return w
 }
 
-// sidePanelsWidthExcept sums the widths of the side panels currently marked
-// open, excluding exclude — raw open flags, never the width-guarded
-// visibility helpers (those call this, so consulting them here would recurse).
-// Used by the project/git visibility guards so a panel is only rendered when a
+// sidePanelsWidthExcept sums the widths of the side panels sharing the
+// layout, excluding exclude — raw open flags with the tabbed front-tab
+// filter (panelInLayout), never the width-guarded visibility helpers (those
+// call this, so consulting them here would recurse). Used by the
+// project/git/workflow visibility guards so a panel is only rendered when a
 // usable main area (40 cols) remains.
 func (m *model) sidePanelsWidthExcept(exclude panelRegion) int {
 	w := 0
-	if m.panelMemory && exclude != regionMemory {
-		w += memoryPanelWidth
-	}
-	if m.panelTasks && exclude != regionTasks {
-		w += tasksPanelWidth
-	}
-	if m.panelBackground && exclude != regionBackground {
-		w += backgroundPanelWidth
-	}
-	if m.workflowPanelOpen && exclude != regionWorkflow {
-		w += workflowPanelWidth
-	}
-	if m.panelProject && exclude != regionProject {
-		w += projectPanelWidth
-	}
-	if m.panelGit && exclude != regionGit {
-		w += gitPanelWidth
+	for _, r := range panelRenderOrder {
+		if r != exclude && m.panelInLayout(r) {
+			w += panelWidth(r)
+		}
 	}
 	return w
 }
@@ -182,13 +177,13 @@ func (m *model) workflowPanelVisible() bool {
 		return false
 	}
 	memW := 0
-	if m.panelMemory {
+	if m.panelInLayout(regionMemory) {
 		memW = memoryPanelWidth
 	}
-	if m.panelTasks {
+	if m.panelInLayout(regionTasks) {
 		memW += tasksPanelWidth
 	}
-	if m.panelBackground {
+	if m.panelInLayout(regionBackground) {
 		memW += backgroundPanelWidth
 	}
 	return m.width >= memW+workflowPanelWidth+40
@@ -212,12 +207,12 @@ func (m *model) syncLayout() {
 	vw := m.vpWidth()
 	vpH := m.viewportHeight()
 	atBottom := m.vp.AtBottom()
-	if m.vp.Width != vw {
-		m.vp.Width = vw
+	if m.vp.Width() != vw {
+		m.vp.SetWidth(vw)
 		m.colorizeForce = true // width changed — rewrap and re-colorize
 	}
-	if m.vp.Height != vpH {
-		m.vp.Height = vpH
+	if m.vp.Height() != vpH {
+		m.vp.SetHeight(vpH)
 	}
 	// The textarea is rendered as content inside the viewport (see
 	// setViewportContent), so it must wrap at the same width the viewport
@@ -299,7 +294,7 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	vw := m.vpWidth()
 	vpH := m.viewportHeight()
 	if !m.ready {
-		m.vp = viewport.New(vw, vpH)
+		m.vp = viewport.New(viewport.WithWidth(vw), viewport.WithHeight(vpH))
 		m.ready = true
 		for _, w := range m.startupWarnings {
 			m.appendTranscript(yellow("config warning: ") + w + "\n")
@@ -310,8 +305,8 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		m.vp.GotoBottom()
 	} else {
 		atBottom := m.vp.AtBottom()
-		m.vp.Width = vw
-		m.vp.Height = vpH
+		m.vp.SetWidth(vw)
+		m.vp.SetHeight(vpH)
 		m.refreshPrompt()
 		m.setViewportContent()
 		if atBottom {
@@ -360,22 +355,41 @@ func (m *model) renderSeparator(h int) string {
 
 	var thumbTop, thumbBot int
 	if scrollable {
-		thumbTop, thumbBot = scrollThumb(h, total, vp.YOffset)
+		thumbTop, thumbBot = scrollThumb(h, total, vp.YOffset())
 	}
 	for i := range h {
 		if scrollable && i >= thumbTop && i <= thumbBot {
-			rows = append(rows, dim("▌"))
+			rows = append(rows, scrollThumbGlyph())
 		} else {
-			rows = append(rows, dim("│"))
+			rows = append(rows, scrollTrackGlyph())
 		}
 	}
 	return strings.Join(rows, "\n")
 }
 
-func (m model) View() string {
+// View renders the screen. Terminal modes (alt screen, focus reporting, title) are declared here, not
+// requested with commands, so the renderer owns their lifecycle.
+func (m model) View() tea.View {
+	v := tea.NewView(m.viewString())
+	v.AltScreen = true
+	v.ReportFocus = true
+	v.WindowTitle = m.windowTitle()
+	return v
+}
+
+func (m model) viewString() string {
 	if !m.ready {
 		return ""
 	}
+	if th.modern {
+		if bg := tkBase.sgrBg(); bg != "" {
+			return tintBlock(m.viewBody(), m.width-1, bg) // last column left to the terminal default (same colour via OSC 11): a full-width row can double-advance on ConPTY
+		}
+	}
+	return m.viewBody()
+}
+
+func (m model) viewBody() string {
 	// PTY pane: replace the transcript viewport with the VT terminal screen.
 	if m.ptyPane != nil {
 		vpH := m.viewportHeight()
@@ -394,39 +408,16 @@ func (m model) View() string {
 	// the background/workflow panel that triggered the attach stays visible,
 	// unlike the PTY-pane branch above, which is a full-screen takeover.
 	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, m.activeViewport().View(), sep)
-	if m.panelMemory {
-		panel := m.renderMemoryPanel(vpH)
-		pbar := m.renderPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, panel, pbar)
+	for _, region := range panelRenderOrder {
+		if m.panelVisible(region) {
+			mainArea = m.joinPanel(mainArea, region, vpH)
+		}
 	}
-	if m.panelTasks {
-		tpanel := m.renderTasksPanel(vpH)
-		tbar := m.renderTasksPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, tpanel, tbar)
-	}
-	if m.panelBackground {
-		bgpanel := m.renderBackgroundPanel(vpH)
-		bgbar := m.renderBackgroundPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, bgpanel, bgbar)
-	}
-	if m.workflowPanelVisible() {
-		wpanel := m.renderWorkflowPanel(vpH)
-		wbar := m.renderWorkflowPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, wpanel, wbar)
-	}
-	if m.projectPanelVisible() {
-		prpanel := m.renderProjectPanel(vpH)
-		prbar := m.renderProjectPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, prpanel, prbar)
-	}
-	if m.gitPanelVisible() {
-		gpanel := m.renderGitPanel(vpH)
-		gbar := m.renderGitPanelScrollbar(vpH)
-		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, mainArea, gpanel, gbar)
-	}
+	mainArea = m.overlayPanelTransitions(mainArea)
 	// Notification toasts (issue #162) float over the top-right of the whole
 	// main area — pure render-time overlay, no layout rows consumed.
 	mainArea = m.overlayToasts(mainArea)
+	mainArea = m.overlayPalette(mainArea)
 	if hints := m.hintRegion(); len(hints) > 0 {
 		return m.headerBar() + "\n" + mainArea + "\n" + strings.Join(hints, "\n") + "\n" + m.statusBar()
 	}

@@ -16,7 +16,7 @@ milk keeps a **Percept store** — small remembered facts that survive across se
 | `/memory [global\|session\|<pattern>]` | List percepts, optionally scoped or filtered |
 | `/memory show <pattern or #id>` | Show full detail for matching percepts |
 | `/forget <pattern or #id>` | Delete matching percepts |
-| `/panel memory` | Toggle the right-side memory panel (open by default) |
+| `/panel memory` | Toggle the right-side memory panel (closed by default; opens when memory content is present) |
 
 The `#id` form accepts a short hex prefix (4–64 chars); the `#` is optional.
 
@@ -103,6 +103,12 @@ Where it shows: the TUI status bar (live `tok/s` estimate while streaming; `(las
 ```
 
 `otel.log_context: true` logs the full content of every request payload at DEBUG level to `~/.milk/otel/logs.jsonl` (requires `log_level: "DEBUG"`) — covers the claude-cli static/dynamic context files and prompt, the full local/Bedrock inference request body, and subprocess agents' context/prompt temp files.
+
+### Colored structured log (`log_format: "pretty"`)
+
+`milk.log` is written as `text` by default. `"log_format": "pretty"` writes the same records through Charm's `log` handler: colored level, timestamp, message and `key=value` attributes. Colors are forced into the file, so read it with `tail -f` or `less -R`. `milk otel debug enable` switches a plain format to `pretty` and `milk otel debug disable` restores the previous one (an explicit `pretty`, `json` or `off` is respected; the change applies from the next start).
+
+Every answer from an agent logs one `agent response` line at INFO, so it shows without debug: `agent`, `model`, `role`, `input`, `output`, `cache_read`/`cache_write`, `ttft_ms`, `tok_s` and `cost_usd`. Values the provider did not report are left out, never written as 0.
 
 ### Raw debug logs
 
@@ -382,11 +388,13 @@ Tips are browsable, not just rotatable:
 | **F1 / F2 / F3 / F4 / F5 / F6** | Show/hide the memory / tasks / background-agents / workflow / project tree / git graph panel — same effect as `/panel <name>`. Works in any mode, including mid-turn. |
 | **Alt+Up / Alt+Down** | Show the previous / next idle tip (same as `/tips prev`, `/tips next`). Referenced at the right edge of every tip line. |
 | **Ctrl+G** | Dismiss all open notification toasts (history stays: `/notifications`) |
+| **Ctrl+O** | Open the command palette: filter the slash commands, Enter puts the command in the input line (Esc closes) |
+| `/keys` | List every shortcut (panels, navigation, input) from the one key registry (`keymap.go`) |
 | **Ctrl+T** | Toggle the most recent thinking block — the one still streaming, else the last completed one (works during streaming). Reasoning renders as foldable blocks, folded by default (streaming included — the header's line count updates live as reasoning arrives): click a `▸ thinking · N lines` header to expand/collapse just that block. |
 
 Turn-unrelated informational events — fold-state changes, panel open/close, background-job lifecycle, credential refreshes — surface as floating toasts in the top-right corner (timestamped, each with the related slash-command hint, auto-expiring after a few seconds). They are **not** part of the transcript; `/notifications` shows the full history with timestamps (`/notifications clear` empties them). Tool calls and turn-bound output stay in the transcript. One deliberate exception: a finished background job's *result* is content rather than lifecycle noise and is appended to the transcript as the job completes (capped to the model's delivery budget, `/bg show <id>` for the rest — see [Background sub-agents](#background-sub-agents)); only its lifecycle *notice* stays toast-only.
 
-Each panel's title shows its shortcut (e.g. `tasks    F2`) as a reminder. The tasks, background-agents, and workflow panels also open themselves automatically the moment their content becomes active — a task is created, a background job starts, a workflow launches — so you don't have to notice and press the shortcut first. Manually toggling a panel (`/panel <name>` or its F-key) overrides this while that panel's content stays live: once you've explicitly shown or hidden a panel, automatic management leaves it alone, in either direction. The override expires the moment the content finalizes (ADR-0059) — every task done, no background job still running, the workflow completed or cleared, the percept store emptied by `/forget` — which re-arms automatic opens so the *next* new content brings the panel back; and closing a panel whose content has already settled never locks it out in the first place. When two or more panels are open, every other one (by left-to-right position among the panels currently showing, not a fixed panel) gets a subtle background tint so adjacent panels are easier to tell apart.
+Each panel's title shows its shortcut (e.g. `tasks    F2`) as a reminder. The tasks, background-agents, and workflow panels also open themselves automatically the moment their content becomes active — a task is created, a background job starts, a workflow launches — so you don't have to notice and press the shortcut first; the memory panel follows the same content-driven rule (it is closed by default and opens when the percept store has content). Manually toggling a panel (`/panel <name>` or its F-key) overrides this in either direction — and by default it is a *durable* preference: with `remember_panel_state` on (the default), your open/closed choice is saved per folder to `~/.milk/panel-state/<name>-<hash>.json` (preferences follow the project, never another folder's session), restored at startup, and never overturned by automatic management ([ADR-0078](../adr/0078-persisted-panel-state.md)). Set `"remember_panel_state": false` for session-only panels with the earlier lifecycle rule (ADR-0059): the manual override then expires the moment the content finalizes — every task done, no background job still running, the workflow completed or cleared, the percept store emptied by `/forget` — which re-arms automatic opens so the *next* new content brings the panel back; and closing a panel whose content has already settled never locks it out in the first place. When two or more panels are open, every other one (by left-to-right position among the panels currently showing, not a fixed panel) gets a subtle background tint so adjacent panels are easier to tell apart.
 
 **Project tree and git graph** (issue #206, [ADR-0066](../adr/0066-project-tree-and-git-graph-panels.md)): `/panel project` (**F5**) shows the working directory's file tree — backed by the same git file listing the `@`-completion uses, top-level directories expanded, deeper ones collapsed; click a directory to expand/collapse it, click a file to preview it in the main area (Esc returns to the transcript), double-click a file to insert an `@`-mention into the input. `/panel git` (**F6**) shows the commit graph — lanes laid out in code from `git log` parent hashes, current branch and dirty count on top; click a commit to see its summary and diff in the main area. Both refresh every few seconds while open and degrade gracefully outside a git repo (the tree falls back to a pruned walk; the graph shows a note). The panels sit to the right of the workflow panel and never auto-open.
 

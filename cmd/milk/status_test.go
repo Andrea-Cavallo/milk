@@ -526,7 +526,7 @@ func TestCounterDelta(t *testing.T) {
 
 // TestHeaderBar_ShowsVersion pins the display design: the running version is
 // part of the header's identity group on a wide terminal —
-// "github.com/scoutme/milk vX  sess:…  /help" (headerBar, status.go).
+// "github.com/scoutme/milk vX  sess:…  ctrl+o palette  /help" (headerBar, status.go).
 func TestHeaderBar_ShowsVersion(t *testing.T) {
 	old := version
 	version = "v9.9.9-test"
@@ -567,6 +567,63 @@ func TestHeaderBar_VersionSurvivesNarrowWidth(t *testing.T) {
 	}
 	if want := "v9.9.9-test"; !strings.Contains(bar, want) {
 		t.Errorf("narrow header must still show version %q, got %q", want, bar)
+	}
+}
+
+// TestHeaderBar_ShowsPaletteHint pins the discoverability pair: the command
+// palette's key sits beside /help in every width variant and every skin — a
+// shortcut nobody can discover in the header is a shortcut that doesn't exist.
+func TestHeaderBar_ShowsPaletteHint(t *testing.T) {
+	// The real TUI always renders the header on a TTY (colorize no-ops
+	// otherwise); the accent assertion below needs real SGR bytes.
+	oldTTY := isTTY
+	isTTY = true
+	t.Cleanup(func() { isTTY = oldTTY })
+	sess := &session.Session{ID: "abcdef1234"}
+
+	for _, tc := range []struct {
+		name  string
+		theme string
+		width int
+	}{
+		{"wide/off", "off", 140},
+		{"narrow/off", "off", 70},
+		{"wide/supermilk", "supermilk", 140},
+		{"narrow/supermilk", "supermilk", 70},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldName := th.name
+			setTheme(tc.theme)
+			t.Cleanup(func() { setTheme(oldName) })
+
+			m := &model{
+				width: tc.width,
+				st:    &interactiveState{sess: sess, cfg: config.Config{}},
+			}
+			raw := m.headerBar()
+			// A narrow terminal wraps the header (accepted degradation —
+			// viewportRows measures the wrapped rows), so match on
+			// whitespace-normalized text rather than raw bytes.
+			bar := strings.Join(strings.Fields(ansi.Strip(raw)), " ")
+			if !strings.Contains(bar, "ctrl+o palette") {
+				t.Errorf("want the palette hint in the header, got %q", bar)
+			}
+			if !strings.Contains(bar, "/help") {
+				t.Errorf("want the /help hint beside it, got %q", bar)
+			}
+			// The hint must come before /help so the pair reads
+			// "open the palette, or read the help" left to right.
+			if i, j := strings.Index(bar, "ctrl+o palette"), strings.Index(bar, "/help"); i < 0 || j < 0 || i > j {
+				t.Errorf("want ctrl+o palette before /help, got %q", bar)
+			}
+			// In the supermilk skin both hints carry the accent — equal
+			// prominence, not a dim key next to a colored command. "mctrl+o"
+			// matches the SGR that opens right before the hint, which stays
+			// intact even when the phrase wraps between rows.
+			if tc.theme == "supermilk" && !strings.Contains(raw, "mctrl+o") {
+				t.Errorf("want the palette hint accent-colored under supermilk, got %q", raw)
+			}
+		})
 	}
 }
 

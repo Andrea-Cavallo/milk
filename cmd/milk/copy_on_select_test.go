@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/scoutme/milk/internal/config"
 )
 
@@ -19,9 +19,13 @@ func stubClipboard(t *testing.T) *[]string {
 func selectTranscriptWithMouse(m *model) tea.Cmd {
 	m.appendTranscript("hello world\n")
 	m.setViewportContent()
-	m.handleMouse(tea.MouseMsg(tea.MouseEvent{X: 0, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}))
-	m.handleMouse(tea.MouseMsg(tea.MouseEvent{X: 5, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}))
-	_, cmd := m.handleMouse(tea.MouseMsg(tea.MouseEvent{X: 5, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease}))
+	// Screen row for transcript content row 0 — derived from the rendered
+	// chrome, never a hardcoded header offset.
+	top, _ := m.viewportRows()
+	y := top
+	m.handleMouse(mouseEvent{X: 0, Y: y, Button: tea.MouseLeft, Action: mousePress}.msg())
+	m.handleMouse(mouseEvent{X: 5, Y: y, Button: tea.MouseLeft, Action: mouseMotion}.msg())
+	_, cmd := m.handleMouse(mouseEvent{X: 5, Y: y, Button: tea.MouseLeft, Action: mouseRelease}.msg())
 	return cmd
 }
 
@@ -66,8 +70,8 @@ func TestCopyOnSelect_ClickWithoutDragDoesNotCopy(t *testing.T) {
 	m.appendTranscript("hello world\n")
 	m.setViewportContent()
 
-	m.handleMouse(tea.MouseMsg(tea.MouseEvent{X: 3, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}))
-	m.handleMouse(tea.MouseMsg(tea.MouseEvent{X: 3, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease}))
+	m.handleMouse(mouseEvent{X: 3, Y: 2, Button: tea.MouseLeft, Action: mousePress}.msg())
+	m.handleMouse(mouseEvent{X: 3, Y: 2, Button: tea.MouseLeft, Action: mouseRelease}.msg())
 
 	if len(*copied) != 0 {
 		t.Fatalf("a plain click must not copy, got %q", *copied)
@@ -80,9 +84,9 @@ func TestCopyOnSelect_AttachRelease(t *testing.T) {
 	m := attachSelTestModel(t, "alpha beta\n")
 	m.st.cfg = config.Config{CopyOnSelect: &on}
 
-	attachClick(m, 0, 4)
-	attachDrag(m, 5, 4)
-	attachRelease(m, 5, 4)
+	attachClick(m, 0, 2)
+	attachDrag(m, 5, 2)
+	attachRelease(m, 5, 2)
 
 	if len(*copied) != 1 || (*copied)[0] != "alpha" {
 		t.Fatalf("expected clipboard [alpha], got %q", *copied)

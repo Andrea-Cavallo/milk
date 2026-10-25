@@ -1,10 +1,11 @@
 package main
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scoutme/milk/internal/livebuf"
@@ -119,13 +120,13 @@ const (
 // thinkBgParams is the thinking-surface background as the SGR parameters that
 // set it — the form sgr.State.BG reports, which the full-row painter
 // (tintThinkSurface) matches by value. ansiThinkBg is derived from it.
-const thinkBgParams = "48;5;235"
+var thinkBgParams = originalThinkBgParams
 
 // ansiThinkBg is the thinking-surface background: fold containers render on
 // it so the thinking region is a visibly different surface from the standard
 // transcript (header and body alike, every fold state). Applied at render
 // time only — the transcript and block buffers stay plain.
-const ansiThinkBg = "\033[" + thinkBgParams + "m"
+var ansiThinkBg = "\033[" + thinkBgParams + "m"
 
 // thinkSurfaceLines paints every line of s with code (see paintLines). A blank
 // line still gets its code+reset pair: a blank reasoning line is a row of the
@@ -135,11 +136,21 @@ const ansiThinkBg = "\033[" + thinkBgParams + "m"
 func thinkSurfaceLines(s, code string) string { return paintLines(s, code, true) }
 
 // thinkHeaderLine styles a fold-header line: dim on the thinking surface.
-func thinkHeaderLine(s string) string { return thinkSurfaceLines(s, ansiThinkBg+ansiDim) }
+func thinkHeaderLine(s string) string {
+	if th.modern {
+		return thinkSurfaceLines(s, ansiThinkBg+"\033[3m"+tkMuted.sgrFg())
+	}
+	return thinkSurfaceLines(s, ansiThinkBg+ansiDim)
+}
 
 // thinkBodyLine styles a reasoning body: full-contrast text on the thinking
 // surface (the background — not dimming — marks reasoning).
-func thinkBodyLine(s string) string { return thinkSurfaceLines(s, ansiThinkBg) }
+func thinkBodyLine(s string) string {
+	if th.modern {
+		return thinkSurfaceLines(compactBlankLines(s), ansiThinkBg+"\033[3m"+tkThink.sgrFg())
+	}
+	return thinkSurfaceLines(s, ansiThinkBg)
+}
 
 // tintThinkSurface makes the thinking surface a full-row one. content is the
 // already-wrapped render, whose rows are self-contained (wrapRows): every row
@@ -267,32 +278,68 @@ func (m *model) transcriptDisplayAt() (string, int) {
 }
 
 // isThinkHeaderLine reports whether a plain (ANSI-stripped) transcript line is
-// a fold header. A body line could in principle imitate the prefix and skew
-// thinkBlockAtLine's count — reasoning text is model output, not adversarial
-// input, and the worst case is a mis-targeted fold toggle, so the simple
-// prefix match is accepted here.
+// a fold header at its start. The click hit-test no longer keys off this (see
+// thinkHeaderCount); it stays as the plain-text predicate for tests and tools.
 func isThinkHeaderLine(line string) bool {
 	return strings.HasPrefix(line, thinkFoldedPrefix) || strings.HasPrefix(line, thinkExpandedPrefix)
 }
 
-// thinkBlockAtLine maps a clicked transcript line (index into
-// transcriptPlainLines — the same coordinate space selection uses) to the
+// thinkHeaderRe matches a complete fold header anywhere in a row — the folded
+// and expanded forms, including the "· streaming" marker ("▸ thinking · 12
+// lines", "▾ thinking · 1 line · streaming").
+var thinkHeaderRe = regexp.MustCompile(`[▸▾] thinking · [0-9]+ lines?( · streaming)?`)
+
+// thinkSurfaceRow reports whether a render row paints the thinking surface
+// (the render-time signature of a fold container). Matched by the surface's
+// SGR parameters, not by a literal escape substring — the row wrap
+// (sgr.SelfContain) rewrites escape sequences, so the exact ansiThinkBg bytes
+// may no longer appear verbatim.
+func thinkSurfaceRow(row string) bool {
+	return sgr.LastBackground(row, func(bg string) bool { return bg == thinkBgParams }) != ""
+}
+
+// thinkHeaderCount reports how many fold headers one render row of the wrapped
+// transcript carries (0 or 1 in practice). Two conditions must hold:
+//
+//   - the row carries a *complete* header, not just the prefix — ordinary
+//     transcript text that mentions "▸ thinking · " without a line count never
+//     counts, so it cannot skew the ordinal below; and
+//   - the row paints the thinking surface — the render-time signature of a
+//     fold container. The markdown reflow (colorizeFull) can glue a
+//     container's header onto a neighbouring line ("intro text▸ thinking · 2
+//     lines"), and that row still carries the surface background, so glued
+//     headers keep counting; an answer that merely quotes the header format
+//     carries no surface and never does.
+//
+// Reasoning text is model output, not adversarial input, and the worst case is
+// a mis-targeted fold toggle — a quoted, surface-painted full header is the
+// residual case accepted here.
+func thinkHeaderCount(row string) int {
+	// The surface check only exists in the painted render: paintLines is a
+	// no-op off-TTY, where every row is plain and the pattern is all there is
+	// (and nothing is clickable anyway).
+	if isTTY && !thinkSurfaceRow(row) {
+		return 0
+	}
+	return len(thinkHeaderRe.FindAllString(ansi.Strip(row), -1))
+}
+
+// thinkBlockAtLine maps a clicked transcript row (index into the wrapped
+// transcript render — the same coordinate space selection uses) to the
 // think-block index whose fold header sits there, or -1 when the click was not
-// on a header. Header lines appear in block order in the display, so the
-// ordinal of the clicked header is the block index.
+// on a header. Headers appear in block order in the display, so the ordinal of
+// the clicked header is the block index.
 func (m *model) thinkBlockAtLine(line int) int {
 	if line < 0 {
 		return -1
 	}
-	lines := m.transcriptPlainLines()
-	if line >= len(lines) || !isThinkHeaderLine(lines[line]) {
+	rows := strings.Split(m.wrappedTranscript(), "\n")
+	if line >= len(rows) || thinkHeaderCount(rows[line]) == 0 {
 		return -1
 	}
 	idx := 0
-	for i := 0; i < line && i < len(lines); i++ {
-		if isThinkHeaderLine(lines[i]) {
-			idx++
-		}
+	for i := 0; i < line && i < len(rows); i++ {
+		idx += thinkHeaderCount(rows[i])
 	}
 	if idx >= len(m.thinkBlocks) {
 		return -1

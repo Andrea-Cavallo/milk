@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/scoutme/milk/internal/livebuf"
 )
@@ -171,6 +171,11 @@ func refreshProjectCmd(cwd string) tea.Cmd {
 			if !strings.HasSuffix(e.path, "/") {
 				files = append(files, e.path)
 			}
+		}
+		if files == nil {
+			// Non-nil empty for a scanned-but-fileless folder: the builder's
+			// nil is the "loading" sentinel, an empty slice means "no files".
+			files = []string{}
 		}
 		return projectDataMsg{files: files, truncated: snap.truncated}
 	}
