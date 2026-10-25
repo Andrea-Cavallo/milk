@@ -9,15 +9,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/memory"
 	"github.com/scoutme/milk/internal/session"
 )
+
+// projectMapTestIsolate points the persistent index at a temp state root and
+// empties the in-memory cache, so tests neither touch ~/.milk nor leak cache
+// state into each other.
+func projectMapTestIsolate(t *testing.T) {
+	t.Helper()
+	prev := config.SetRoot(t.TempDir())
+	t.Cleanup(func() { config.SetRoot(prev) })
+	projectMapCache.Lock()
+	defer projectMapCache.Unlock()
+	projectMapCache.m = map[string]projectMapEntry{}
+	projectMapCache.roots = map[string]*projectMapIndex{}
+	projectMapCache.parseCalls = 0
+}
 
 // projectMapFixture writes a small mixed tree: a Go package with a struct,
 // a method, a func with a unique body sentinel, consts and vars; a second
 // package; and a non-Go file.
 func projectMapFixture(t *testing.T) string {
 	t.Helper()
+	projectMapTestIsolate(t)
 	root := t.TempDir()
 	write := func(rel, content string) {
 		p := filepath.Join(root, rel)
@@ -178,6 +194,7 @@ func TestProjectMap_SingleFileScope(t *testing.T) {
 }
 
 func TestProjectMap_NoBodyLeakOnParseFailure(t *testing.T) {
+	projectMapTestIsolate(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "broken.go"), []byte("package broken\nfunc {{{"), 0o644); err != nil {
 		t.Fatal(err)
@@ -185,5 +202,143 @@ func TestProjectMap_NoBodyLeakOnParseFailure(t *testing.T) {
 	out := projectMapCall(t, root, `{}`)
 	if !strings.Contains(out, "broken.go") {
 		t.Errorf("unparseable file must still be listed:\n%s", out)
+	}
+}
+
+func TestProjectMap_Framing(t *testing.T) {
+	projectMapTestIsolate(t)
+	root := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module example.com/thing\n\ngo 1.26\n")
+	write("README.md", "# thing\n")
+	write("Taskfile.yml", "version: '3'\n")
+	write("docs/guide.md", "# guide\n")
+	write("pkg/code.go", "package pkg\n\nfunc Do() {}\n")
+
+	out := projectMapCall(t, root, `{}`)
+	for _, want := range []string{
+		"project: example.com/thing (go)",
+		"docs: README.md, docs/guide.md",
+		"build/config: Taskfile.yml, go.mod",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("framing missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+func TestProjectMap_FramingAbsentWithoutManifest(t *testing.T) {
+	projectMapTestIsolate(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "x.go"), []byte("package x\n\nfunc X() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := projectMapCall(t, root, `{}`)
+	if strings.Contains(out, "project:") {
+		t.Errorf("no manifest — no project line expected:\n%s", out)
+	}
+}
+
+// projectMapNoFixture is a one-Go-file tree (isolation included).
+func projectMapNoFixture(t *testing.T) string {
+	t.Helper()
+	projectMapTestIsolate(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n\nfunc Alpha() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestProjectMap_PersistentIndexSurvivesRestart(t *testing.T) {
+	projectMapTestIsolate(t)
+	root := projectMapNoFixture(t)
+
+	first := projectMapCall(t, root, `{}`)
+
+	// The index must exist on disk after a parse.
+	base := projectMapSanitizeName(filepath.Base(root))
+	entries, err := filepath.Glob(filepath.Join(mustConfigDir(t), "outline-cache", base+"-*.json"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected exactly one index file, got %v (err=%v)", entries, err)
+	}
+
+	// Simulate a fresh process: wipe the in-memory cache only.
+	projectMapCache.Lock()
+	projectMapCache.m = map[string]projectMapEntry{}
+	projectMapCache.roots = map[string]*projectMapIndex{}
+	projectMapCache.parseCalls = 0
+	projectMapCache.Unlock()
+
+	second := projectMapCall(t, root, `{}`)
+	if second != first {
+		t.Errorf("disk-hydrated map differs:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	projectMapCache.Lock()
+	calls := projectMapCache.parseCalls
+	projectMapCache.Unlock()
+	if calls != 0 {
+		t.Errorf("unchanged tree must hydrate from disk without parsing, parsed %d", calls)
+	}
+
+	// A changed file must re-parse exactly that one file — and update the index.
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n\nfunc Beta() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(filepath.Join(root, "a.go"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	out := projectMapCall(t, root, `{}`)
+	if !strings.Contains(out, "func Beta") {
+		t.Errorf("change must re-parse:\n%s", out)
+	}
+	projectMapCache.Lock()
+	calls = projectMapCache.parseCalls
+	projectMapCache.Unlock()
+	if calls != 1 {
+		t.Errorf("exactly one re-parse expected, got %d", calls)
+	}
+}
+
+func mustConfigDir(t *testing.T) string {
+	t.Helper()
+	dir, err := config.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestProjectMap_RankedPruningKeepsReferencedSymbols(t *testing.T) {
+	projectMapTestIsolate(t)
+	root := t.TempDir()
+	// Hot is referenced across the tree; Cold is dead. Both live in the same
+	// file so per-file "keep at least one" cannot mask the ranking.
+	src := "package a\n\nfunc Hot() {}\n\nfunc Cold() {}\n"
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"b.go", "c.go", "d.go"} {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte("package x\n\nfunc Use() { Hot(); Hot() }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files := []projectMapFile{{rel: "a.go", syms: []projectMapSym{
+		{Name: "Hot", Full: "func Hot()"},
+		{Name: "Cold", Full: "func Cold()"},
+	}}}
+	pruned := projectMapPrune(root, files, 12) // small enough to force a drop
+	if len(pruned[0].syms) != 1 || pruned[0].syms[0].Name != "Hot" || pruned[0].dropped != 1 {
+		t.Errorf("ranking must drop Cold and keep Hot, got %+v", pruned[0])
 	}
 }

@@ -396,7 +396,7 @@ func schemas(mem *memory.Store, otelDir string, sess *session.Session, toolAgent
 			"type": "function",
 			"function": map[string]any{
 				"name":        "project_map",
-				"description": "Token-cheap structural map of a codebase (or a subtree): files grouped by directory with their symbols and signatures (Go: types, funcs/methods with receivers, consts/vars) — outlines, never bodies. Non-Go files are listed by name. Use it to orient in an unfamiliar project instead of reading files just to learn what they define. Output degrades gracefully (signatures → names → file tree) to stay within max_chars; per-file results are cached and re-parsed only on change.",
+				"description": "Token-cheap structural map of a codebase (or a subtree): a short framing header (project identity, docs and build/config landmarks) plus files grouped by directory with their symbols and signatures (Go: go/ast; JS/TS, Python, Java, Rust: heuristic scanners) — outlines, never bodies. Other files are listed by name. Use it to orient in an unfamiliar project instead of reading files just to learn what they define. Output degrades gracefully (signatures → names → reference-ranked names → file tree) to stay within max_chars; per-file results are cached in-process and on disk, re-parsed only on change.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

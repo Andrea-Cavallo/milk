@@ -356,6 +356,7 @@ func isUnknownToolResult(result string) bool {
 }
 
 func TestToolSetContract_EverySchemaToolDispatches(t *testing.T) {
+	projectMapTestIsolate(t) // project_map maps the package dir — keep its index out of ~/.milk
 	sess := &session.Session{}
 	otelDir := t.TempDir()
 	tools := schemas(&memory.Store{}, otelDir, sess, nil, &mockTaskStore{}, nil)
