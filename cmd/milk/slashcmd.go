@@ -173,7 +173,11 @@ var commandRegistry = []cmdSpec{
                          click a dir to expand/collapse, a file to preview it,
                          double-click a file to insert an @-mention
   /panel git             toggle the git graph panel (right side) — also F6
-                         click a commit to preview its summary and diff`},
+                         click a commit to preview its summary and diff
+                         on a tabbed theme (/theme supermilk) the six panels are
+                         tabs of one shared slot: on a hidden tab this switches
+                         to it instead of closing, and clicking a tab label
+                         does the same as its F-key`},
 	{name: cmdForget, hosts: hostTUI, desc: "delete a percept (asks for confirmation)", hint: "<pat|#id>", help: `  /forget <pat|#id>      delete a percept (asks for confirmation)`},
 	{name: cmdSkipPerms, hosts: hostBoth, desc: "approve every tool call without asking, or go back to asking", hint: "[on|off]", help: `  /skip-permissions      show current skip-permissions state
   /skip-permissions on   all agents auto-approve tool uses (no prompts)

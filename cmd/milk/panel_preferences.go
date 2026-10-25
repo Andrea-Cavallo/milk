@@ -24,10 +24,15 @@ import (
 
 // panelStateFile is the on-disk shape of ~/.milk/panel-state.json. Version
 // guards future shape changes; Panels maps panelSubName → the panel's raw
-// open flag at the time of the last manual toggle.
+// open flag at the time of the last manual toggle, and Active names the tab
+// in front of the shared panel slot on tabbed themes (ADR-0079) — which of
+// the open panels the user last looked at. Active is empty in files written
+// before it, and harmless if the named panel is not open after restore
+// (panelActive falls back to the first open panel).
 type panelStateFile struct {
 	Version int             `json:"version"`
 	Panels  map[string]bool `json:"panels"`
+	Active  string          `json:"active,omitempty"`
 }
 
 const panelStateFileVersion = 1
@@ -60,6 +65,11 @@ func (m *model) loadPanelState(path string) {
 		}
 		m.panelManualOverride[region] = true
 	}
+	if f.Active != "" {
+		if region := panelRegionForSubName(f.Active); region != regionNone {
+			m.activatePanelTab(region)
+		}
+	}
 }
 
 // savePanelState writes the manually toggled panels' current state to the
@@ -77,6 +87,14 @@ func (m *model) savePanelState() error {
 		if ptr := m.panelOpenPtr(region); ptr != nil {
 			f.Panels[panelSubName(region)] = *ptr
 		}
+	}
+	// The front tab of the shared slot (ADR-0079) is persisted only when
+	// the user themselves chose that panel (manual override) — the same
+	// rule as the open flags above: auto-opened state is not a preference.
+	// An auto-opened front panel is transient anyway (it will not be open
+	// after restore), so nothing is lost by leaving the key out.
+	if active := m.panelActive(); active != regionNone && m.panelManualOverride[active] {
+		f.Active = panelSubName(active)
 	}
 	data, err := json.Marshal(f)
 	if err != nil {

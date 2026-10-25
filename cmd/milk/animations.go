@@ -171,14 +171,24 @@ func (m *model) stepScroll(a *animState) {
 //     panels glide to their new column as full-width ghosts while their
 //     static slot renders blank — without this they teleport at t=0 and the
 //     toggle reads as a jump.
+//
+// A tabbed-theme tab switch is none of these: the panels share one slot and
+// only the slot's content changes, so it animates nothing (ADR-0079).
 func (m *model) trackAnimations(prev *model) tea.Cmd {
 	if !animationsEnabled || m.height <= 0 {
+		return nil
+	}
+	// A tabbed-theme tab switch swaps panels inside one shared slot (ADR-0079):
+	// the slot stays occupied, only its content changes. Swap in place —
+	// instant, like browser tabs — instead of stacking a close ghost and a
+	// slide-in on top of each other in the same columns.
+	if panelTabsActive() && prev.anyPanelVisible() && m.anyPanelVisible() {
 		return nil
 	}
 	a := m.animState()
 	changed := false
 	for _, region := range panelRenderOrder {
-		was, is := prev.panelOpen(region), m.panelOpen(region)
+		was, is := prev.panelVisible(region), m.panelVisible(region)
 		switch {
 		case !was && is:
 			if pa, ok := a.panels[region]; ok {
@@ -222,7 +232,7 @@ func (m *model) panelX(region panelRegion) int {
 		if r == region {
 			break
 		}
-		if m.panelOpen(r) {
+		if m.panelVisible(r) {
 			x += panelSlotWidth
 		}
 	}

@@ -100,27 +100,16 @@ func (m *model) viewportHeight() int {
 }
 
 // mainWidth returns the width available for the transcript+input area.
-// When the memory, tasks, and/or workflow panels are open it is reduced accordingly,
-// but only when the panel would actually be rendered (i.e. terminal is wide enough).
+// When side panels are in the layout it is reduced accordingly, but only when
+// the panel would actually be rendered (i.e. terminal is wide enough). On a
+// tabbed theme (ADR-0079) at most one panel — the front tab — is in the
+// layout, so the shared slot costs one panel width however many are open.
 func (m *model) mainWidth() int {
 	w := m.width
-	if m.panelMemory {
-		w -= memoryPanelWidth
-	}
-	if m.panelTasks {
-		w -= tasksPanelWidth
-	}
-	if m.panelBackground {
-		w -= backgroundPanelWidth
-	}
-	if m.workflowPanelVisible() {
-		w -= workflowPanelWidth
-	}
-	if m.projectPanelVisible() {
-		w -= projectPanelWidth
-	}
-	if m.gitPanelVisible() {
-		w -= gitPanelWidth
+	for _, r := range panelRenderOrder {
+		if m.panelVisible(r) {
+			w -= panelWidth(r)
+		}
 	}
 	if w < 20 {
 		w = 20
@@ -128,30 +117,18 @@ func (m *model) mainWidth() int {
 	return w
 }
 
-// sidePanelsWidthExcept sums the widths of the side panels currently marked
-// open, excluding exclude — raw open flags, never the width-guarded
-// visibility helpers (those call this, so consulting them here would recurse).
-// Used by the project/git visibility guards so a panel is only rendered when a
+// sidePanelsWidthExcept sums the widths of the side panels sharing the
+// layout, excluding exclude — raw open flags with the tabbed front-tab
+// filter (panelInLayout), never the width-guarded visibility helpers (those
+// call this, so consulting them here would recurse). Used by the
+// project/git/workflow visibility guards so a panel is only rendered when a
 // usable main area (40 cols) remains.
 func (m *model) sidePanelsWidthExcept(exclude panelRegion) int {
 	w := 0
-	if m.panelMemory && exclude != regionMemory {
-		w += memoryPanelWidth
-	}
-	if m.panelTasks && exclude != regionTasks {
-		w += tasksPanelWidth
-	}
-	if m.panelBackground && exclude != regionBackground {
-		w += backgroundPanelWidth
-	}
-	if m.workflowPanelOpen && exclude != regionWorkflow {
-		w += workflowPanelWidth
-	}
-	if m.panelProject && exclude != regionProject {
-		w += projectPanelWidth
-	}
-	if m.panelGit && exclude != regionGit {
-		w += gitPanelWidth
+	for _, r := range panelRenderOrder {
+		if r != exclude && m.panelInLayout(r) {
+			w += panelWidth(r)
+		}
 	}
 	return w
 }
@@ -182,13 +159,13 @@ func (m *model) workflowPanelVisible() bool {
 		return false
 	}
 	memW := 0
-	if m.panelMemory {
+	if m.panelInLayout(regionMemory) {
 		memW = memoryPanelWidth
 	}
-	if m.panelTasks {
+	if m.panelInLayout(regionTasks) {
 		memW += tasksPanelWidth
 	}
-	if m.panelBackground {
+	if m.panelInLayout(regionBackground) {
 		memW += backgroundPanelWidth
 	}
 	return m.width >= memW+workflowPanelWidth+40
@@ -414,7 +391,7 @@ func (m model) viewBody() string {
 	// unlike the PTY-pane branch above, which is a full-screen takeover.
 	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, m.activeViewport().View(), sep)
 	for _, region := range panelRenderOrder {
-		if m.panelOpen(region) {
+		if m.panelVisible(region) {
 			mainArea = m.joinPanel(mainArea, region, vpH)
 		}
 	}

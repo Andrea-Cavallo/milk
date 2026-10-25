@@ -867,6 +867,14 @@ type model struct {
 	panelStatePath     string
 	rememberPanelState bool
 
+	// panelTabMRU is the tabbed-theme (ADR-0079) most-recently-viewed stack
+	// of panel tabs, front = the panel in the shared slot. Activation order
+	// only — which panels exist and which are open lives in the per-panel
+	// flags — so closing the front tab hands the slot back to the tab the
+	// user looked at before, like closing a browser tab. Unused when the
+	// theme has no tabs (panels are laid out side by side there).
+	panelTabMRU []panelRegion
+
 	// memory panel
 	panelMemory        bool
 	memoryExpanded     string

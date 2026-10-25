@@ -109,6 +109,11 @@ func (m *model) autoOpenPanel(region panelRegion) {
 		*ptr = true
 	}
 	if !wasOpen && m.panelOpen(region) {
+		// Tabbed themes (ADR-0079): the panel that just opened takes the
+		// shared slot — once. Later content for the same already-open panel
+		// (every workflow chunk, every task update) never yanks the tab back
+		// from wherever the user has moved on to.
+		m.activatePanelTab(region)
 		m.notify(panelDisplayName(region)+" panel opened", "/panel "+panelSubName(region))
 	}
 }
@@ -278,17 +283,18 @@ var panelRenderOrder = []panelRegion{regionMemory, regionTasks, regionBackground
 
 // panelAltBackground reports whether region should render with the subtle
 // alternating background tint (see withPanelBackground): true for every
-// other panel among those *currently open*, counted left-to-right in
+// other panel among those *currently in the layout*, counted left-to-right in
 // panelRenderOrder — not a fixed per-region parity. The count starts with
 // the panel adjacent to the transcript, so the chat/panel boundary is
 // always a tint change (the first panel must differ from the chat).
-// Counting only open panels means two panels that end up visually adjacent
+// Counting only visible panels means two panels that end up visually adjacent
 // because something between them is closed never land on the same
-// background by coincidence.
+// background by coincidence — and on a tabbed theme (ADR-0079) the one panel
+// in the shared slot is always the first, so it always differs from the chat.
 func (m *model) panelAltBackground(region panelRegion) bool {
 	idx := 0
 	for _, r := range panelRenderOrder {
-		if !m.panelOpen(r) {
+		if !m.panelVisible(r) {
 			continue
 		}
 		if r == region {

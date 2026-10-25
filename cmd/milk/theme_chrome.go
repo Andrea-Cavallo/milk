@@ -9,18 +9,24 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// panelTabStrip is the themed title row of every side panel: the panel tabs,
-// the open one in the accent colour and underlined.
+// panelTabs is the tab bar of a tabbed theme (ADR-0079), left to right:
+// one tab per side panel — the strip is both the panel's title row and the
+// only navigation between the tabs of the shared panel slot, so the render
+// (panelTabStrip) and the click hit-test (panelTabAt) share this one table.
+var panelTabs = []struct {
+	region panelRegion
+	name   string
+}{
+	{regionMemory, "memory"}, {regionTasks, "tasks"}, {regionBackground, "jobs"},
+	{regionWorkflow, "flow"}, {regionProject, "files"}, {regionGit, "git"},
+}
+
+// panelTabStrip is the themed title row of the side panel: the panel tabs,
+// the open one in the accent colour and underlined. On a tabbed theme the
+// panels share one slot, so this strip is the single tab bar over it.
 func panelTabStrip(region panelRegion, inner int) string {
-	tabs := []struct {
-		region panelRegion
-		name   string
-	}{
-		{regionMemory, "memory"}, {regionTasks, "tasks"}, {regionBackground, "jobs"},
-		{regionWorkflow, "flow"}, {regionProject, "files"}, {regionGit, "git"},
-	}
 	var b strings.Builder
-	for i, t := range tabs {
+	for i, t := range panelTabs {
 		if i > 0 {
 			b.WriteString(" ")
 		}
@@ -31,6 +37,22 @@ func panelTabStrip(region panelRegion, inner int) string {
 		}
 	}
 	return ansi.Truncate(b.String(), inner, "")
+}
+
+// panelTabAt maps a column offset within the strip (0-based from the tab
+// bar's left edge) to the tab whose label covers it — regionNone on a gap or
+// past the strip. Walks the same single-space join panelTabStrip renders
+// with, so the click target can never drift from what is drawn.
+func panelTabAt(col int) panelRegion {
+	x := 0
+	for _, t := range panelTabs {
+		w := len([]rune(t.name))
+		if col >= x && col < x+w {
+			return t.region
+		}
+		x += w + 1
+	}
+	return regionNone
 }
 
 // handleThemeCmd handles /theme [off|supermilk]: switches the theme live,

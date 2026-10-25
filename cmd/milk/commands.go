@@ -1695,7 +1695,31 @@ func (m model) handleHistoryCmd(sub string) model {
 	return m
 }
 
+// handlePanelCmd runs /panel <name> and the F1-F6 shortcut. On a tabbed
+// theme (ADR-0079) the six panels are tabs of one shared slot, so the toggle
+// is tab-shaped: on a panel that is open but not in front the command just
+// brings its tab to the front — it must not close a panel the user cannot
+// even see. On the front panel it is the plain toggle (close), and on a
+// closed one it is the plain toggle (open, taking the slot); either way the
+// tab goes through the MRU first, so closing the front tab hands the slot
+// back to the one viewed before it.
 func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
+	region := panelRegionForSubName(sub)
+	if panelTabsActive() && region != regionNone {
+		if m.panelRawOpen(region) && region != m.panelActive() {
+			m.activatePanelTab(region)
+			m.savePanelStateReport()
+			m.syncLayout()
+			return m, nil
+		}
+		m.activatePanelTab(region)
+	}
+	return m.handlePanelCmdToggle(sub)
+}
+
+// handlePanelCmdToggle is the plain show/hide toggle behind /panel <name>
+// and F1-F6 (the tab-aware entry point is handlePanelCmd).
+func (m model) handlePanelCmdToggle(sub string) (tea.Model, tea.Cmd) {
 	if m.panelManualOverride == nil {
 		m.panelManualOverride = map[panelRegion]bool{}
 	}

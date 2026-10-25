@@ -28,47 +28,23 @@ const (
 
 // regionAt maps an absolute terminal column to the panel region it falls in
 // (regionNone for the main viewport) and the column offset within that
-// region's own rendered width, in the same left-to-right order the panels are
-// joined in View(): viewport, memory, tasks, background, workflow.
+// region's own rendered width, walking the panels in the same left-to-right
+// order View() joins them in (panelRenderOrder) — and the same visibility
+// test (panelVisible), so on a tabbed theme the one panel in the shared slot
+// owns every panel column.
 func (m *model) regionAt(x int) (panelRegion, int) {
 	off := m.mainWidth()
 	if x < off {
 		return regionNone, x
 	}
-	if m.panelMemory {
-		if x < off+memoryPanelWidth {
-			return regionMemory, x - off
+	for _, r := range panelRenderOrder {
+		if !m.panelVisible(r) {
+			continue
 		}
-		off += memoryPanelWidth
-	}
-	if m.panelTasks {
-		if x < off+tasksPanelWidth {
-			return regionTasks, x - off
+		if x < off+panelWidth(r) {
+			return r, x - off
 		}
-		off += tasksPanelWidth
-	}
-	if m.panelBackground {
-		if x < off+backgroundPanelWidth {
-			return regionBackground, x - off
-		}
-		off += backgroundPanelWidth
-	}
-	if m.workflowPanelVisible() {
-		if x < off+workflowPanelWidth {
-			return regionWorkflow, x - off
-		}
-		off += workflowPanelWidth
-	}
-	if m.projectPanelVisible() {
-		if x < off+projectPanelWidth {
-			return regionProject, x - off
-		}
-		off += projectPanelWidth
-	}
-	if m.gitPanelVisible() {
-		if x < off+gitPanelWidth {
-			return regionGit, x - off
-		}
+		off += panelWidth(r)
 	}
 	return regionNone, x
 }
@@ -182,6 +158,18 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev mouseEvent)
 			// background/workflow, attach to that job's/the workflow's live
 			// buffer (ADR-0047) instead of printing.
 			m.clearPanelSelection()
+			// Tab bar (ADR-0079): on a tabbed theme the tab strip is the
+			// panel's first content row (on screen row panelRowStart while
+			// the panel is scrolled to the top). A click on a tab label does
+			// what that tab's F-key does: bring the panel's tab to the
+			// front of the shared slot, opening the panel first when its tab
+			// is closed.
+			if panelTabsActive() && ev.Y == panelRowStart && lineIdx == 0 {
+				if tab := panelTabAt(col); tab != regionNone {
+					dragCmd = m.handlePanelTabClick(tab)
+					break
+				}
+			}
 			switch region {
 			case regionMemory:
 				m.handleMemoryPanelClick(lineIdx)
@@ -205,6 +193,25 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev mouseEvent)
 		}
 	}
 	return m, dragCmd
+}
+
+// handlePanelTabClick runs a click on a tab of the tabbed theme's tab bar
+// (ADR-0079) — the same effect as the tab's F-key / /panel <name>: a closed
+// tab opens its panel (through the regular toggle path, so the manual
+// override, persistence and the project/git content fetches all happen), an
+// open one just brings its tab to the front of the shared slot.
+func (m *model) handlePanelTabClick(region panelRegion) tea.Cmd {
+	if !m.panelRawOpen(region) {
+		res, cmd := m.handlePanelCmd(panelSubName(region))
+		if mm, ok := res.(model); ok {
+			*m = mm
+		}
+		return cmd
+	}
+	m.activatePanelTab(region)
+	m.savePanelStateReport()
+	m.syncLayout()
+	return nil
 }
 
 // handleMemoryPanelClick runs the memory panel's existing click-for-detail
