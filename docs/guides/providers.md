@@ -659,6 +659,14 @@ Real example — an enterprise Copilot proxy using Responses instead of Chat Com
 
 ---
 
+### Environment-provided keys (`api_key_env`)
+
+Point an agent at a key that already lives in the environment instead of copying it into `config.json`: `"api_key_env": "OPENROUTER_API_KEY"` — milk resolves the variable when the key is needed, so the config stores only a pointer, never the secret itself, and rotating the key needs no config edit. A literal `api_key` on the same entry still wins over the environment. `/config init` writes keys this way when its setup scan finds them (name + masked fingerprint only).
+
+```json
+{ "name": "openrouter", "provider": "bearer", "url": "https://openrouter.ai/api/v1", "model": "anthropic/claude-sonnet-4.5", "api_key_env": "OPENROUTER_API_KEY" }
+```
+
 ### Dynamic token providers (`token_cmd`)
 
 For providers using short-lived tokens managed by an external CLI (company SSO, a vault CLI, a cloud provider's auth tool), use `token_cmd` instead of a static `api_key`. milk runs the command at startup, uses stdout as the Bearer token, and retries with a fresh token on 401/403 — run via `sh -c`, so shell syntax and env vars work.
