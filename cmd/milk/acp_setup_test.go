@@ -267,8 +267,8 @@ func TestACPSetup_WizardCancelSwapAndBadToken(t *testing.T) {
 		t.Fatal("/config init did not start the init wizard")
 	}
 	if last := acpChunks(conn); strings.Contains(last[len(last)-1], "telegram setup cancelled") ||
-		!strings.Contains(last[len(last)-1], "primary agent name") {
-		t.Errorf("swap reply = %q, want the init wizard banner and no telegram cancel note", last[len(last)-1])
+		!strings.Contains(last[len(last)-1], "Which AI should answer your everyday prompts") {
+		t.Errorf("swap reply = %q, want the init wizard's first question and no telegram cancel note", last[len(last)-1])
 	}
 	acpPromptText(t, server, id, "cancel") // clear the init wizard
 
