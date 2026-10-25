@@ -1696,23 +1696,28 @@ func (m model) handleHistoryCmd(sub string) model {
 }
 
 // handlePanelCmd runs /panel <name> and the F1-F6 shortcut. On a tabbed
-// theme (ADR-0079) the six panels are tabs of one shared slot, so the toggle
-// is tab-shaped: on a panel that is open but not in front the command just
-// brings its tab to the front — it must not close a panel the user cannot
-// even see. On the front panel it is the plain toggle (close), and on a
-// closed one it is the plain toggle (open, taking the slot); either way the
-// tab goes through the MRU first, so closing the front tab hands the slot
-// back to the one viewed before it.
+// theme (ADR-0079) the six panels are tabs of one shared slot and tabs are
+// exclusive: moving to a panel CLOSES the one you moved away from, so at
+// most one panel is ever open. The one state the invariant does not cover
+// itself is multi-open residue (flags set outside the activation paths,
+// e.g. sibling-session state restored before the theme was known): a press
+// on an open-but-not-front panel brings it to the front and closes the rest
+// — it must not close the panel the user is pointing at, and it must not
+// leave invisible siblings behind. On the front panel the toggle still
+// closes it (the slot empties — nothing waits behind), and on a closed one
+// it opens it after the others are out of the way.
 func (m model) handlePanelCmd(sub string) (tea.Model, tea.Cmd) {
 	region := panelRegionForSubName(sub)
 	if panelTabsActive() && region != regionNone {
 		if m.panelRawOpen(region) && region != m.panelActive() {
 			m.activatePanelTab(region)
+			m.closeAllButPanelTabs(region)
 			m.savePanelStateReport()
 			m.syncLayout()
 			return m, nil
 		}
 		m.activatePanelTab(region)
+		m.closeAllButPanelTabs(region)
 	}
 	return m.handlePanelCmdToggle(sub)
 }

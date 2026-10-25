@@ -6,17 +6,23 @@ package main
 // wearing the same six tabs. Six tab labels over six stacked panels is what a
 // tab bar means; six copies of the strip over six side-by-side panels is not.
 //
-//   - one slot: at most one panel occupies layout columns — the front tab
-//     (panelActive). The other open panels keep their flags, scroll offsets
-//     and content behind their tabs.
-//   - switching: F1-F6 / /panel <name> on a hidden tab brings it to the
-//     front (on the front tab they still close it), and a click on a tab
-//     label does the same as its F-key. Content-driven auto-open takes the
-//     slot only on a real closed→open transition, so live content for an
-//     already-open panel (workflow chunks, task updates) never yanks the tab
-//     back from wherever the user is.
-//   - closing the front tab hands the slot to the most recently viewed other
-//     open panel (panelTabMRU) — like closing a browser tab.
+//   - one slot, one panel: exactly one panel occupies layout columns — the
+//     front tab (panelActive). Tabs are exclusive (the user's rule):
+//     moving to a panel CLOSES the one you moved away from, so a tabbed
+//     theme never runs hidden-open siblings. The activation paths below
+//     keep that invariant; the layout predicates still filter to the front
+//     tab, and enforceTabbedPanelExclusivity collapses multi-open states
+//     set outside them (sibling-session state restored before the theme is
+//     known, /theme switching from siblings to tabs).
+//   - switching: F1-F6 / /panel <name> and a click on a tab label open the
+//     target panel — whatever was in the slot is closed — and on the front
+//     panel the F-key still closes it, leaving the slot empty. Content-
+//     driven auto-open only fires while the slot is free, so live content
+//     never moves the user off the panel they are looking at.
+//   - closing the front tab leaves the slot empty: with exclusivity there
+//     is no other open panel to hand it back to. panelTabMRU still picks
+//     the front among the open panels a restored multi-open state hands
+//     the loader — its only remaining job.
 //
 // Without tabs (theme "off") nothing here applies: panels stay siblings,
 // joined left-to-right in panelRenderOrder, and every predicate below
@@ -119,7 +125,8 @@ func (m *model) panelVisible(region panelRegion) bool {
 
 // anyPanelVisible reports whether the panel slot is occupied at all — the
 // animation tracker uses it to tell a slot appearing/disappearing (slide in,
-// shrink out) apart from a tab swap inside an occupied slot (instant).
+// shrink out) apart from a tab swap inside an occupied slot (instant), and
+// autoOpenPanel uses it to keep content from moving the user.
 func (m *model) anyPanelVisible() bool {
 	for _, r := range panelRenderOrder {
 		if m.panelVisible(r) {
@@ -127,4 +134,43 @@ func (m *model) anyPanelVisible() bool {
 		}
 	}
 	return false
+}
+
+// closeAllButPanelTabs closes every open panel except keep — the
+// exclusivity rule of the tabbed slot (ADR-0079): moving to a panel closes
+// the ones you moved away from, so a tabbed theme never runs hidden-open
+// siblings. This is a navigation close, not a dismissal: the manual
+// override (the user's own preference, ADR-0059/0078) is left untouched,
+// so panels the user opened themselves still stick and auto-open behaviour
+// is unchanged. Reports whether it actually closed anything. No-op on a
+// sibling (theme "off") layout.
+func (m *model) closeAllButPanelTabs(keep panelRegion) bool {
+	if !panelTabsActive() {
+		return false
+	}
+	closed := false
+	for _, r := range panelRenderOrder {
+		if r == keep || !m.panelRawOpen(r) {
+			continue
+		}
+		if ptr := m.panelOpenPtr(r); ptr != nil {
+			*ptr = false
+			closed = true
+		}
+	}
+	return closed
+}
+
+// enforceTabbedPanelExclusivity collapses a multi-open panel state — state
+// restored from a theme-"off" session, or /theme switching from siblings to
+// tabs — to the single front panel. The activation paths keep the invariant
+// themselves; this covers the two moments where panel flags are set outside
+// them: right after the theme is known at startup, and on /theme. No-op
+// while tabs are inactive; when it does collapse something, the new state is
+// persisted right away — the collapse must not wait for the user's next
+// panel action to reach the state file.
+func (m *model) enforceTabbedPanelExclusivity() {
+	if m.closeAllButPanelTabs(m.panelActive()) {
+		m.savePanelStateReport()
+	}
 }

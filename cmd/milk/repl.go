@@ -4936,6 +4936,11 @@ func runREPL(cfg config.Config, cwd string, initialFlagNew bool, initialFlagSess
 	}
 
 	setTheme(st.cfg.Theme)
+	// The panel state and the memory default above were applied before the
+	// theme was known; tabs are exclusive (ADR-0079), so a sibling session's
+	// multi-open state collapses to its front panel now that the tabbed
+	// theme (if chosen) is active. No-op on theme "off".
+	m.enforceTabbedPanelExclusivity()
 	animationsEnabled = isTTY && st.cfg.AnimationsEnabled()
 	defer applyThemeTerminal()()
 	p := tea.NewProgram(m)

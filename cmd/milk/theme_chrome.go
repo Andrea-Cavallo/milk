@@ -72,6 +72,10 @@ func (m model) handleThemeCmd(arg string) (tea.Model, tea.Cmd) {
 	setTheme(arg)
 	applyThemeTerminal()
 	m.st.cfg.Theme = th.name
+	// Tabs are exclusive (ADR-0079): arriving from a sibling (theme "off")
+	// layout, only the front panel survives — the rest would be hidden-open
+	// siblings under a tab bar that cannot show them side by side.
+	m.enforceTabbedPanelExclusivity()
 	m.colorizeForce = true
 	m.viewportDirty = true
 	if err := saveLocalOrGlobal(m.st.cfg, activeConfigDir(m.st)); err != nil {

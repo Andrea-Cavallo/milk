@@ -10,10 +10,12 @@ import (
 )
 
 // Tabbed panel docking (ADR-0079): a theme that renders the tab strip docks
-// every side panel into one shared slot — the front tab owns the columns,
-// the other open panels wait behind their tabs. These tests pin the shared
-// slot, the tab-shaped F-key semantics, the tab-bar click, the instant tab
-// swap (no animation), and that theme "off" keeps the side-by-side layout.
+// every side panel into one shared slot — and tabs are exclusive: moving to
+// a panel closes the one you moved away from, auto-open only takes a free
+// slot, and multi-open residue collapses on the first interaction and at
+// startup/theme-switch. These tests pin the shared slot, the exclusive
+// F-key semantics, the tab-bar click, the instant tab swap (no animation),
+// and that theme "off" keeps the side-by-side layout.
 
 // withPanelTabs activates the tabbed (supermilk) theme for one test and
 // restores whatever theme was active afterwards.
@@ -24,9 +26,11 @@ func withPanelTabs(t *testing.T) {
 	t.Cleanup(func() { setTheme(old) })
 }
 
-// TestTabbedTheme_PanelsShareOneSlot: with two panels open only the front
-// tab occupies layout columns — one panel slot wide, one panel in regionAt,
-// and the hidden panel still open behind its tab.
+// TestTabbedTheme_PanelsShareOneSlot: only the front tab occupies layout
+// columns — one panel slot wide, one panel in regionAt. The second panel is
+// seeded directly (the activation paths never leave multi-open state
+// behind); the front filter is what keeps such residue out of layout before
+// enforceTabbedPanelExclusivity collapses it.
 func TestTabbedTheme_PanelsShareOneSlot(t *testing.T) {
 	withPanelTabs(t)
 	m := newTestModelForPanels(t)
@@ -39,10 +43,10 @@ func TestTabbedTheme_PanelsShareOneSlot(t *testing.T) {
 		t.Fatal("expected the front tab (memory) to be visible")
 	}
 	if m.panelVisible(regionTasks) {
-		t.Fatal("expected the tasks panel to wait behind its tab, not sit beside memory")
+		t.Fatal("expected the seeded tasks panel to stay out of layout, not sit beside memory")
 	}
 	if !m.panelRawOpen(regionTasks) {
-		t.Fatal("the hidden tab's panel must stay open")
+		t.Fatal("the seeded panel's open flag must be untouched by the layout filter")
 	}
 	if got := m.mainWidth(); got != 200-panelSlotWidth {
 		t.Errorf("mainWidth=%d, want %d (one shared slot)", got, 200-panelSlotWidth)
@@ -72,48 +76,69 @@ func TestPanelTabsOff_PanelsStaySiblings(t *testing.T) {
 	}
 }
 
-// TestTabbedTheme_FKeyOnHiddenTabBringsToFront: the toggle is tab-shaped —
-// on an open-but-hidden panel the F-key switches to it instead of closing a
-// panel the user cannot see; only on the front tab does it close.
-func TestTabbedTheme_FKeyOnHiddenTabBringsToFront(t *testing.T) {
+// TestTabbedTheme_MovingToAPanelClosesThePrevious: tabs are exclusive —
+// opening or moving to a panel closes the one you moved away from, and
+// closing the front panel leaves the slot empty (no hidden sibling waits to
+// take it). Multi-open residue (flags set outside the activation paths)
+// obeys the same rule on first interaction.
+func TestTabbedTheme_MovingToAPanelClosesThePrevious(t *testing.T) {
 	withPanelTabs(t)
 	m := newTestModelForPanels(t)
 	m.width = 200
 
+	// Open memory, then move to tasks: memory closes — it must not sit
+	// hidden behind its tab.
 	updated, _ := m.handlePanelCmd("memory")
 	m = updated.(model)
+	if !m.panelRawOpen(regionMemory) || m.panelActive() != regionMemory {
+		t.Fatalf("opening memory: open=%v front=%v", m.panelRawOpen(regionMemory), m.panelActive())
+	}
 	updated, _ = m.handlePanelCmd("tasks")
 	m = updated.(model)
 	if m.panelActive() != regionTasks {
 		t.Fatalf("front tab = %v, want regionTasks", m.panelActive())
 	}
-
-	// F1 on the hidden memory panel: switch, don't close.
-	updated, _ = m.handlePanelCmd("memory")
-	m = updated.(model)
-	if !m.panelRawOpen(regionMemory) || m.panelActive() != regionMemory {
-		t.Fatalf("F-key on a hidden tab must bring it to the front, got open=%v front=%v",
-			m.panelRawOpen(regionMemory), m.panelActive())
-	}
-	if !m.panelRawOpen(regionTasks) {
-		t.Fatal("switching tabs must not close the other panel")
-	}
-
-	// F1 on the front panel: the plain toggle, closing it — the slot falls
-	// back to the tab viewed before (the MRU), like closing a browser tab.
-	updated, _ = m.handlePanelCmd("memory")
-	m = updated.(model)
 	if m.panelRawOpen(regionMemory) {
-		t.Fatal("F-key on the front tab must close it")
+		t.Fatal("moving to tasks must close the panel moved away from (memory)")
 	}
-	if m.panelActive() != regionTasks {
-		t.Errorf("front tab = %v after close, want the previously viewed regionTasks", m.panelActive())
+
+	// Move back to memory: tasks closes, memory reopens.
+	updated, _ = m.handlePanelCmd("memory")
+	m = updated.(model)
+	if m.panelActive() != regionMemory || !m.panelRawOpen(regionMemory) {
+		t.Fatalf("front=%v open=%v after moving back", m.panelActive(), m.panelRawOpen(regionMemory))
+	}
+	if m.panelRawOpen(regionTasks) {
+		t.Fatal("moving back to memory must close tasks")
+	}
+
+	// F-key on the front panel closes it: the slot empties — nothing waits
+	// behind it (the old browser-tab fallback is gone with exclusivity).
+	updated, _ = m.handlePanelCmd("memory")
+	m = updated.(model)
+	if m.panelActive() != regionNone {
+		t.Errorf("front tab = %v after closing the only open panel, want regionNone", m.panelActive())
+	}
+
+	// Multi-open residue (seeded directly, as a sibling session or early
+	// startup might leave it): moving to the hidden panel brings it forward
+	// AND closes the rest — the invariant repairs itself on first use.
+	m.panelTasks = true
+	m.activatePanelTab(regionTasks)
+	m.panelMemory = true
+	updated, _ = m.handlePanelCmd("memory")
+	m = updated.(model)
+	if m.panelActive() != regionMemory || !m.panelRawOpen(regionMemory) {
+		t.Fatalf("front=%v open=%v after moving to the seeded memory tab", m.panelActive(), m.panelRawOpen(regionMemory))
+	}
+	if m.panelRawOpen(regionTasks) {
+		t.Fatal("moving to a hidden panel must close the front one")
 	}
 }
 
 // TestTabbedTheme_TabBarClickSwitches: a click on a tab label does what that
-// tab's F-key does — open the panel when its tab is closed, bring it to the
-// front when it is already open.
+// tab's F-key does — open the panel when its tab is closed (closing whatever
+// was in the slot: tabs are exclusive), no-op on the front label.
 func TestTabbedTheme_TabBarClickSwitches(t *testing.T) {
 	withPanelTabs(t)
 	m := layoutTestModel(t, 200, 40)
@@ -141,13 +166,16 @@ func TestTabbedTheme_TabBarClickSwitches(t *testing.T) {
 	if m.panelActive() != regionGit {
 		t.Fatalf("front tab = %v, want regionGit after clicking its tab", m.panelActive())
 	}
+	if m.panelMemory {
+		t.Fatal("moving to the git tab must close the memory panel")
+	}
 
 	clickTab(0) // "memory"
 	if m.panelActive() != regionMemory {
 		t.Fatalf("front tab = %v, want regionMemory after clicking its tab", m.panelActive())
 	}
-	if !m.panelGit {
-		t.Fatal("switching tabs must leave the other panel open")
+	if m.panelGit {
+		t.Fatal("moving back to the memory tab must close git")
 	}
 }
 
@@ -196,55 +224,62 @@ func TestTabbedTheme_TabSwitchAnimatesNothing(t *testing.T) {
 
 	// First panel: the slot appears — a slide-in must run.
 	prev := m
-	m.panelMemory = true
-	m.activatePanelTab(regionMemory)
+	updated, _ := m.handlePanelCmd("memory")
+	m = updated.(model)
 	if cmd := step(prev); cmd == nil {
 		t.Fatal("opening the first panel must animate (slot appears)")
 	}
 
-	// Tab switch: instant.
+	// Tab switch: the F-key moves to tasks, closing memory — the slot stays
+	// occupied, so the swap is instant: no slide, no ghost.
 	prev = m
-	m.panelTasks = true
-	m.activatePanelTab(regionTasks)
+	updated, _ = m.handlePanelCmd("tasks")
+	m = updated.(model)
 	if cmd := step(prev); cmd != nil {
 		t.Fatal("a tab switch must swap in place, not animate")
 	}
 
-	// Closing the front tab while another waits: still just a swap.
-	prev = m
-	m.panelTasks = false
-	if cmd := step(prev); cmd != nil {
-		t.Fatal("closing the front tab of an occupied slot must swap, not animate")
-	}
-
 	// Closing the last panel: the slot disappears — the exit must run.
 	prev = m
-	m.panelMemory = false
+	updated, _ = m.handlePanelCmd("tasks")
+	m = updated.(model)
 	if cmd := step(prev); cmd == nil {
 		t.Fatal("closing the last panel must animate (slot disappears)")
 	}
 }
 
-// TestTabbedTheme_AutoOpenTakesSlotOnce: content-driven auto-open brings a
-// freshly opened panel to the front — but only on the closed→open
-// transition; later content for the same already-open panel must never yank
-// the tab back from wherever the user has moved on to.
-func TestTabbedTheme_AutoOpenTakesSlotOnce(t *testing.T) {
+// TestTabbedTheme_AutoOpenOnlyTakesAFreeSlot: content-driven auto-open is
+// not allowed to move the user — it fires only while the shared slot is
+// free (or the panel already holds it). Content for a closed panel while
+// another panel is shown stays a notification, and content for the shown
+// panel keeps it exactly where it is.
+func TestTabbedTheme_AutoOpenOnlyTakesAFreeSlot(t *testing.T) {
 	withPanelTabs(t)
 	m := newTestModelForPanels(t)
 	m.width = 200
-	m.panelMemory = true
-	m.activatePanelTab(regionMemory)
 
-	m.autoOpenPanel(regionTasks) // tasks content arrives while memory is front
-	if m.panelActive() != regionTasks {
-		t.Fatalf("front tab = %v, want the freshly opened regionTasks", m.panelActive())
+	// Slot free: the first auto-open takes it.
+	m.autoOpenPanel(regionTasks)
+	if !m.panelRawOpen(regionTasks) || m.panelActive() != regionTasks {
+		t.Fatalf("auto-open with a free slot: open=%v front=%v", m.panelRawOpen(regionTasks), m.panelActive())
 	}
 
-	m.activatePanelTab(regionMemory) // user goes back to the memory tab
-	m.autoOpenPanel(regionTasks)     // more tasks content arrives
+	// The user moves to memory (closing tasks), then task content arrives:
+	// the view must not move and tasks must not reopen.
+	updated, _ := m.handlePanelCmd("memory")
+	m = updated.(model)
+	m.autoOpenPanel(regionTasks)
 	if m.panelActive() != regionMemory {
-		t.Fatalf("front tab = %v, want regionMemory (auto-open must not yank an open tab back)", m.panelActive())
+		t.Fatalf("front tab = %v, want regionMemory (content must not move the user)", m.panelActive())
+	}
+	if m.panelRawOpen(regionTasks) {
+		t.Fatal("auto-open must not reopen a panel while the shared slot is taken")
+	}
+
+	// Content for the panel already in the slot leaves it in place.
+	m.autoOpenPanel(regionMemory)
+	if m.panelActive() != regionMemory || !m.panelRawOpen(regionMemory) {
+		t.Fatalf("front=%v open=%v, want memory untouched", m.panelActive(), m.panelRawOpen(regionMemory))
 	}
 }
 
@@ -285,7 +320,66 @@ func TestTabbedTheme_PanelStateRoundTripsFrontTab(t *testing.T) {
 	if !m2.panelVisible(regionGit) {
 		t.Error("expected the restored front tab's panel to occupy the shared slot")
 	}
-	if m2.panelVisible(regionMemory) {
-		t.Error("the other restored panel must wait behind its tab")
+	if m2.panelRawOpen(regionMemory) {
+		t.Error("the panel moved away from must stay closed on restore, not reappear behind a tab")
+	}
+}
+
+// TestTabbedTheme_ExclusivityEnforcedOutsideActivationPaths: multi-open
+// panel states set outside the activation paths — sibling-session state
+// restored at startup, or /theme switching from siblings to tabs — collapse
+// to the single front panel instead of lingering as hidden-open residue.
+func TestTabbedTheme_ExclusivityEnforcedOutsideActivationPaths(t *testing.T) {
+	withPanelTabs(t)
+	openCount := func(mm model) int {
+		n := 0
+		for _, r := range panelRenderOrder {
+			if mm.panelRawOpen(r) {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Directly seeded multi-open (what restore can hand startup): the helper
+	// keeps the front panel, closes the rest, and persists the collapse —
+	// the state file must reflect it without waiting for a panel action.
+	m := newTestModelForPanels(t)
+	m.width = 200
+	m.panelStatePath = filepath.Join(t.TempDir(), "panel-state.json")
+	m.panelMemory = true
+	m.panelTasks = true
+	m.panelManualOverride = map[panelRegion]bool{regionMemory: true, regionTasks: true}
+	m.activatePanelTab(regionTasks)
+	m.enforceTabbedPanelExclusivity()
+	if !m.panelRawOpen(regionTasks) || m.panelActive() != regionTasks {
+		t.Fatalf("front = %v open(tasks) = %v, want tasks kept", m.panelActive(), m.panelRawOpen(regionTasks))
+	}
+	if m.panelRawOpen(regionMemory) {
+		t.Fatal("enforcement must close the panel that is not in front")
+	}
+	data, err := os.ReadFile(m.panelStatePath)
+	if err != nil {
+		t.Fatalf("expected the collapse to be persisted: %v", err)
+	}
+	if !strings.Contains(string(data), `"memory":false`) || !strings.Contains(string(data), `"tasks":true`) {
+		t.Errorf("persisted state must show the collapse, got %s", data)
+	}
+
+	// Theme switch from siblings to tabs, through the /theme command the
+	// user would actually run: same collapse.
+	setTheme("off")
+	t.Cleanup(func() { setTheme("supermilk") })
+	m2 := newTestModelForPanels(t)
+	m2.width = 200
+	m2.panelMemory = true
+	m2.panelTasks = true
+	updated, _ := m2.handleThemeCmd("supermilk")
+	m2 = updated.(model)
+	if got := openCount(m2); got != 1 {
+		t.Errorf("%d panels open after /theme supermilk, want exactly 1", got)
+	}
+	if m2.panelActive() == regionNone || !m2.panelVisible(m2.panelActive()) {
+		t.Error("the surviving panel must occupy the shared slot")
 	}
 }

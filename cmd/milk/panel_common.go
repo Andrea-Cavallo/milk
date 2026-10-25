@@ -100,19 +100,30 @@ func panelTitleLine(title string, region panelRegion, inner int) string {
 // ADR-0044's panel state changes), post a notification toast with the
 // command that closes it again. Repeated calls while already open — e.g.
 // every workflow chunk — stay silent.
+//
+// On a tabbed theme (ADR-0079) content never moves the user: an auto-open
+// only fires while the shared slot is free (see the gate below), so live
+// content can never yank the view off the panel the user is looking at.
 func (m *model) autoOpenPanel(region panelRegion) {
 	if m.panelManualOverride[region] {
 		return
 	}
 	wasOpen := m.panelOpen(region)
+	// Tabbed themes (ADR-0079): while another panel occupies the shared
+	// slot, content for a closed panel stays a notification instead of
+	// switching the user's tab — auto-open takes a free slot or none.
+	if panelTabsActive() && !wasOpen && m.anyPanelVisible() {
+		return
+	}
 	if ptr := m.panelOpenPtr(region); ptr != nil {
 		*ptr = true
 	}
 	if !wasOpen && m.panelOpen(region) {
 		// Tabbed themes (ADR-0079): the panel that just opened takes the
-		// shared slot — once. Later content for the same already-open panel
-		// (every workflow chunk, every task update) never yanks the tab back
-		// from wherever the user has moved on to.
+		// shared slot (the gate above means the slot was free) — once.
+		// Later content for the same already-open panel (every workflow
+		// chunk, every task update) never yanks the tab back from wherever
+		// the user has moved on to.
 		m.activatePanelTab(region)
 		m.notify(panelDisplayName(region)+" panel opened", "/panel "+panelSubName(region))
 	}

@@ -21,30 +21,38 @@ When the theme renders the tab strip (exactly `th.modern` — the two are tied
 so the tab bar and the layout can never disagree, `panelTabsActive()`), the
 side panels are **tabs of one shared slot**:
 
-- **One slot.** At most one panel occupies layout columns — the *front tab*
-  (`panelActive`). The other open panels keep their flags, scroll offsets and
-  content behind their tabs. Everything that measures or joins the layout
-  (`mainWidth`, `regionAt`, `viewBody`, `panelX`, `panelAltBackground`, the
-  animation tracker) derives from `panelVisible` (open + width-permitted +
-  front tab); `panelOpen` stays the plain "is this panel open" for state,
-  persistence and notifications. The alternating background invariant holds
-  trivially: the single panel in the slot is always the first one, so it
-  always differs from the chat.
-- **Tab-shaped toggles.** F1-F6 / `/panel <name>` on a panel that is open but
-  not in front *bring its tab to the front* — closing a panel the user cannot
-  even see would be a trap. On the front tab they still close it, and on a
-  closed one they still open it (taking the slot). A click on a tab label
-  (the strip is the panel's first row) does what that tab's F-key does;
-  the click hit-test (`panelTabAt`) walks the same join the strip renders
-  with.
-- **Front-tab history.** Activation goes through an MRU stack
-  (`panelTabMRU`), so closing the front tab hands the slot to the tab viewed
-  before it — like closing a browser tab — instead of an arbitrary one.
-- **Auto-open takes the slot once.** Content-driven auto-open (ADR-0044)
-  brings a *freshly opened* panel to the front — "panel opened" must mean the
-  user can see it — but only on the closed→open transition. Later content for
-  an already-open panel (every workflow chunk, every task update) never yanks
-  the tab back from wherever the user has moved on to.
+- **One slot, one panel.** Exactly one panel occupies layout columns —
+  the *front tab* (`panelActive`) — and tabs are **exclusive**: moving to a
+  panel closes the one you moved away from (see the amendment below), so a
+  tabbed theme never runs hidden-open siblings. Everything that measures or
+  joins the layout (`mainWidth`, `regionAt`, `viewBody`, `panelX`,
+  `panelAltBackground`, the animation tracker) derives from `panelVisible`
+  (open + width-permitted + front tab), so multi-open states seeded outside
+  the activation paths — sibling-session state restored before the theme is
+  known, a `/theme` switch from siblings — can never render side by side
+  either; `enforceTabbedPanelExclusivity` collapses them to the front panel
+  at startup and on `/theme`. `panelOpen` stays the plain "is this panel
+  open" for state, persistence and notifications. The alternating
+  background invariant holds trivially: the single panel in the slot is
+  always the first one, so it always differs from the chat.
+- **Exclusive navigation.** F1-F6 / `/panel <name>` and a click on a tab
+  label open the target panel *after closing whatever was in the slot*
+  (`closeAllButPanelTabs`); on the front panel the F-key still closes it,
+  leaving the slot empty. The navigation close is not a dismissal — the
+  user's manual override (ADR-0059/0078) is untouched, so panels the user
+  opened themselves still stick over auto-open. A press on an open-but-
+  hidden panel (only reachable as multi-open residue) brings it forward
+  *and* closes the rest, so the invariant repairs itself on first use; the
+  click hit-test (`panelTabAt`) walks the same join the strip renders with.
+- **No fallback on close.** With exclusivity, closing the front tab empties
+  the slot — there is no sibling to hand it back to. `panelTabMRU` remains
+  only to pick the front among whatever open panels a legacy multi-open
+  state hands the loader (`active` in `panel-state.json`).
+- **Auto-open takes a free slot only.** Content-driven auto-open (ADR-0044)
+  fires while the shared slot is empty — "panel opened" must mean the user
+  can see it — and never while another panel is shown: live content (every
+  workflow chunk, every task update) cannot yank the view off the panel the
+  user is looking at, and content for the shown panel updates it in place.
 - **Tab switches animate nothing.** The slot stays occupied and only its
   content changes: a browser-like instant swap. The existing slide-in /
   shrink-out choreography (ADR-0076) still runs for what it was built for —
@@ -63,11 +71,29 @@ to the plain open flag — the pre-existing behaviour is untouched.
 
 - Opening several panels on a tabbed theme costs one panel width of screen
   instead of N, and switching is a click on a tab or a press of its F-key.
+- Panels you move away from are closed — their flags go false (the layout
+  collapses to the single slot) and they come back with their F-key or tab
+  click; scroll offsets and manual preferences survive in the model/state
+  file as before. There is no hidden-open panel to close separately.
+- Arriving from a sibling layout (theme `"off"`, or a restored
+  multi-open state) collapses to one panel: the MRU front if history says
+  so, otherwise the leftmost open panel.
 - The tab bar is the panel's first content row, so it scrolls with the
   panel's content like any title row — a tab click is only possible while the
   panel is scrolled to the top. Pinning the bar to the panel's top edge would
   change every panel's line indexing (selection, click → row); left for a
   follow-up if it bothers anyone.
-- To close a *hidden* panel you first switch to its tab (then its F-key
-  closes it). There is no "close background tab" gesture beyond `/panel`'s
-  toggle-on-front rule.
+
+## Amendment (2026-10-25): tabs are exclusive
+
+The first cut kept moved-away panels open behind their tabs, browser-style,
+with an MRU fallback handing the slot back when the front tab closed. The
+follow-up report was direct: *when using tabbed panels, moving to a panel
+must close the previously opened ones.* Tabs are therefore exclusive — the
+Decision above reflects the amended behaviour: every activation closes what
+it displaces (`closeAllButPanelTabs`, a navigation close that never touches
+the user's manual override), closing the front tab empties the slot instead
+of reviving the MRU, and content-driven auto-open is limited to a free slot
+so it still never moves the user. Residue from outside the activation paths
+is collapsed by `enforceTabbedPanelExclusivity` (after the theme is known at
+startup, and on `/theme`).

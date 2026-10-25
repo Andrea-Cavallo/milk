@@ -196,10 +196,13 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev mouseEvent)
 }
 
 // handlePanelTabClick runs a click on a tab of the tabbed theme's tab bar
-// (ADR-0079) — the same effect as the tab's F-key / /panel <name>: a closed
-// tab opens its panel (through the regular toggle path, so the manual
-// override, persistence and the project/git content fetches all happen), an
-// open one just brings its tab to the front of the shared slot.
+// (ADR-0079) — same effect as that tab's F-key / /panel <name>: a closed tab
+// opens its panel through the regular toggle path (manual override,
+// persistence and the project/git content fetches all happen), which also
+// closes whatever was in the slot — tabs are exclusive. An open tab just
+// comes to the front: for the front label that is a no-op (closing stays the
+// F-key / /panel gesture), and for open-but-hidden residue it brings the
+// panel forward and closes the rest, restoring the invariant.
 func (m *model) handlePanelTabClick(region panelRegion) tea.Cmd {
 	if !m.panelRawOpen(region) {
 		res, cmd := m.handlePanelCmd(panelSubName(region))
@@ -209,6 +212,7 @@ func (m *model) handlePanelTabClick(region panelRegion) tea.Cmd {
 		return cmd
 	}
 	m.activatePanelTab(region)
+	m.closeAllButPanelTabs(region)
 	m.savePanelStateReport()
 	m.syncLayout()
 	return nil
