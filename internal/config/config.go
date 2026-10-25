@@ -552,6 +552,12 @@ type AgentConfig struct {
 	// APIKey is a Bearer token / API key used when Provider is not "", "local", "bedrock", or "claude-cli".
 	APIKey string `json:"api_key,omitempty"`
 
+	// APIKeyEnv names an environment variable holding the key, resolved when
+	// the agent is built. It keeps the secret out of config.json: the setup
+	// wizard writes this instead of a discovered key's value. APIKey wins
+	// when both are set.
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+
 	// TokenCmd is a shell command whose stdout is used as the Bearer token,
 	// evaluated once at startup. Takes precedence over APIKey when non-empty.
 	// Example: "gh auth token --hostname myorg.ghe.com"
@@ -2990,6 +2996,19 @@ func providerDisplay(p string) string {
 		return "local"
 	}
 	return p
+}
+
+// ResolvedAPIKey is the Bearer key for this agent: the literal api_key, else
+// the value of the environment variable api_key_env names ("" when neither
+// yields one).
+func (a AgentConfig) ResolvedAPIKey() string {
+	if a.APIKey != "" {
+		return a.APIKey
+	}
+	if a.APIKeyEnv != "" {
+		return strings.TrimSpace(os.Getenv(a.APIKeyEnv))
+	}
+	return ""
 }
 
 // InitConfig builds a minimal valid Config from one primary agent entry and an

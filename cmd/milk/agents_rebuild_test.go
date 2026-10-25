@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -32,6 +33,7 @@ func TestHandleInitWizardKey_CommitRebuildsRunners(t *testing.T) {
 	cfg := config.Config{}
 	st := &interactiveState{cfg: cfg, cwd: t.TempDir()}
 	m := newModel(context.Background(), st, router.New(cfg, nil), dispatchAgents{}, nil)
+	stubWizardModels(t, nil, errors.New("no server"))
 	m.pendingInit, _ = initWizardStart("")
 
 	answer := func(s string) {
@@ -41,13 +43,11 @@ func TestHandleInitWizardKey_CommitRebuildsRunners(t *testing.T) {
 		m = res.(model)
 	}
 
-	answer("mock")       // agent name
 	answer("1")          // provider: local
 	answer(srv.URL)      // server URL
-	answer("default")    // run_cmd: skip
 	answer("mock-model") // model
-	answer("default")    // context window: skip
-	answer("n")          // escalation: no — this answer commits the config
+	answer("n")          // escalation: no
+	answer("n")          // optional tuning: no — this answer commits the config
 
 	if !m.hasInferenceAgent {
 		t.Error("the wizard commit must mark an inference agent as configured")

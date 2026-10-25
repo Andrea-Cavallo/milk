@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -135,7 +136,7 @@ func firstMissingStep(ac config.AgentConfig) addAgentStep {
 	if !isCLI && ac.Model == "" {
 		return addStepModel
 	}
-	if !isCLI && p != "local" && p != "bedrock" && ac.APIKey == "" {
+	if !isCLI && p != "local" && p != "bedrock" && ac.APIKey == "" && ac.APIKeyEnv == "" {
 		return addStepAPIKey
 	}
 	if p == "bedrock" && ac.AWSRegion == "" {
@@ -737,7 +738,7 @@ func copilotHostname(u string) string {
 func (m model) handleConfigInitCmd() (tea.Model, tea.Cmd) {
 	st, banner := initWizardStart(activeConfigDir(m.st))
 	m.pendingInit = st
-	m.appendTranscript(banner + initWizardPrompt(st))
+	m.appendTranscript(banner + initWizardRule() + initWizardPrompt(st))
 	m.ta.Reset()
 	return m, nil
 }
@@ -812,8 +813,21 @@ func (m model) handleInitWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.appendTranscript(milkTag() + " agents rebuilt from config — active now, no restart needed\n")
 			rebuildCmd = tea.Batch(rebuildCmd, initSmokeCmd(*res.Committed))
 		}
+		if res.RunClaudeLogin && !res.Done {
+			// Hand the terminal to Claude Code's own browser login; the next
+			// question is asked once it returns (claudeLoginDoneMsg).
+			m.appendTranscript(res.Output + milkTag() + " opening Claude Code login in your browser…\n")
+			return m, tea.Batch(rebuildCmd, tea.ExecProcess(exec.Command("claude", "auth", "login"), func(err error) tea.Msg {
+				enableMouseTracking()
+				return claudeLoginDoneMsg{err: err}
+			}))
+		}
 		if res.Output != "" || res.Prompt != "" {
-			m.appendTranscript(res.Output + res.Prompt)
+			rule := ""
+			if res.Prompt != "" {
+				rule = initWizardRule()
+			}
+			m.appendTranscript(res.Output + rule + res.Prompt)
 		}
 		if res.Done {
 			m.pendingInit = nil

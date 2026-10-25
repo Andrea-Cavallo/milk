@@ -2418,6 +2418,17 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendTranscript(msg.text)
 		return m, nil
 
+	case claudeLoginDoneMsg:
+		if msg.err != nil {
+			m.appendTranscript(milkTag() + " login did not finish (" + msg.err.Error() + ") — run `claude auth login` yourself, then /config init again\n")
+		} else {
+			m.appendTranscript(milkTag() + " " + green("✓ signed in to Claude Code") + "\n")
+		}
+		if m.pendingInit != nil {
+			m.appendTranscript(initWizardRule() + initWizardPrompt(m.pendingInit))
+		}
+		return m, nil
+
 	case permRequestMsg:
 		return m.handlePermRequest(msg)
 

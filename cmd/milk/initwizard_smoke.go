@@ -28,6 +28,10 @@ const initSmokeTimeout = 45 * time.Second
 // a stub backend don't depend on a real completion round trip.
 var initSmokeCheckFn = initWizardSmokeCheck
 
+// claudeLoginDoneMsg reports that the Claude Code browser login the wizard
+// handed the terminal to has returned.
+type claudeLoginDoneMsg struct{ err error }
+
 // initSmokeMsg carries the closing text of the smoke check back to the TUI.
 type initSmokeMsg struct{ text string }
 

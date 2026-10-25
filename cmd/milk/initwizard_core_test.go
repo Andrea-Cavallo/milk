@@ -23,9 +23,20 @@ func localWizardOpts(numAgents int) initWizardOpts {
 	return initWizardOpts{NumAgents: numAgents, OfferOpenEditor: false}
 }
 
+// stubWizardDiscovery fixes what the first-run scan finds and Claude Code's
+// login state, so wizard tests never read the developer's real environment.
+func stubWizardDiscovery(t *testing.T, found []initWizardFinding, claude claudeAuthState) {
+	t.Helper()
+	prevD, prevC := initWizardDiscoverFn, claudeAuthStatusFn
+	initWizardDiscoverFn = func() []initWizardFinding { return found }
+	claudeAuthStatusFn = func() claudeAuthState { return claude }
+	t.Cleanup(func() { initWizardDiscoverFn, claudeAuthStatusFn = prevD, prevC })
+}
+
 // stubWizardModels fixes what the wizard's local-server probe finds.
 func stubWizardModels(t *testing.T, models []string, err error) {
 	t.Helper()
+	stubWizardDiscovery(t, nil, claudeAuthState{})
 	prev := initWizardListModelsFn
 	initWizardListModelsFn = func(context.Context, string) ([]string, error) { return models, err }
 	t.Cleanup(func() { initWizardListModelsFn = prev })
@@ -49,7 +60,7 @@ func TestInitWizardApply_LocalProviderFlow(t *testing.T) {
 	pinClaudeOnPath(t, true)
 
 	st, banner := initWizardStart("")
-	if !strings.Contains(banner, "setup wizard") || !strings.Contains(banner, "primary") || !strings.Contains(banner, "no restart") {
+	if !strings.Contains(banner, "setup wizard") || !strings.Contains(banner, "primary") || !strings.Contains(banner, "applied at once") {
 		t.Fatalf("banner = %q, want the setup banner explaining primary/escalation and hot reload", banner)
 	}
 	if p := initWizardPrompt(st); !strings.Contains(p, "Which AI should answer") {
@@ -277,26 +288,29 @@ func TestInitWizardSmokeCheck(t *testing.T) {
 }
 
 // TestInitWizardStart_BannerNamesConfigRoot pins the banner's config-location
-// bullet: "~/.milk" byte-identical to the long-standing wording on the
-// default root, and the *real* root (home-compressed by config.DirLabel)
-// whenever SetRoot/$MILK_CONFIG_ROOT redirects it — never a hardcoded ~
-// claim for a sandboxed root (live-tested nit on this branch).
+// line: "~/.milk/config.json" on the default root, and the *real* root
+// (home-compressed by config.DirLabel) whenever SetRoot/$MILK_CONFIG_ROOT
+// redirects it — never a hardcoded ~ claim for a sandboxed root (live-tested
+// nit; wording follows the condensed discovery-era banner from #322).
 func TestInitWizardStart_BannerNamesConfigRoot(t *testing.T) {
 	prev := config.SetRoot("")
 	defer config.SetRoot(prev)
+	prevDiscover := initWizardDiscoverFn
+	initWizardDiscoverFn = func() []initWizardFinding { return nil } // hermetic: no machine scan
+	defer func() { initWizardDiscoverFn = prevDiscover }()
 
 	_, banner := initWizardStart("")
-	if !strings.Contains(banner, "config.json (~/.milk)") {
+	if !strings.Contains(banner, "~/.milk/config.json") {
 		t.Errorf("default banner must name ~/.milk, got:\n%s", banner)
 	}
 
 	root := t.TempDir()
 	config.SetRoot(root)
 	_, banner = initWizardStart("")
-	if !strings.Contains(banner, "config.json ("+root+")") {
+	if !strings.Contains(banner, root+"/config.json") {
 		t.Errorf("sandboxed banner must name the real root %q, got:\n%s", root, banner)
 	}
-	if strings.Contains(banner, "(~/.milk)") {
+	if strings.Contains(banner, "~/.milk") {
 		t.Errorf("sandboxed banner must not claim ~/.milk, got:\n%s", banner)
 	}
 }

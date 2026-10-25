@@ -1178,10 +1178,10 @@ func buildAgentTransport(ac config.AgentConfig) (transport http.RoundTripper, tc
 		// tokens (e.g. "gh auth token") are re-fetched on 401/403.
 		tct = &tokenCmdTransport{inner: transport, cmd: ac.TokenCmd}
 		transport = tct
-	} else if ac.APIKey != "" {
+	} else if key := ac.ResolvedAPIKey(); key != "" {
 		transport = &headerTransport{
 			inner:   transport,
-			headers: map[string]string{"Authorization": "Bearer " + ac.APIKey},
+			headers: map[string]string{"Authorization": "Bearer " + key},
 		}
 	}
 	// Extra headers (e.g. Copilot editor headers, Azure api-key) on top.

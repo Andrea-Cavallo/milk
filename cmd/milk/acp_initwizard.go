@@ -76,6 +76,16 @@ func (as *acpSession) commitInitWizard(res initWizardResult) string {
 	return initSmokeCheckFn(ctx, *res.Committed)
 }
 
+// initLoginNote runs Claude Code's browser login when the wizard asked for it
+// (an ACP client has no terminal to hand over, so it runs headless — the CLI
+// opens the browser itself) and returns the verdict line, "" otherwise.
+func (as *acpSession) initLoginNote(ctx context.Context, res initWizardResult) string {
+	if !res.RunClaudeLogin {
+		return ""
+	}
+	return milkTag() + " opening Claude Code login in your browser…\n" + runClaudeLogin(ctx)
+}
+
 // initWizardFieldHint describes what the blank/'default' answer does for a
 // field — attached to form fields so the client can show it next to the
 // input (initWizardChatHintFor is the typed-input flavour).
@@ -220,6 +230,7 @@ func (as *acpSession) runInitDialogs(ctx context.Context, st *initWizardState) (
 		}
 		wr := initWizardApply(st, answer, opts)
 		b.WriteString(wr.Output)
+		b.WriteString(as.initLoginNote(ctx, wr))
 		b.WriteString(as.commitInitWizard(wr))
 		if wr.Done {
 			return b.String(), true
