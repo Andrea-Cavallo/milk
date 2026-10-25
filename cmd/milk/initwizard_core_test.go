@@ -276,6 +276,31 @@ func TestInitWizardSmokeCheck(t *testing.T) {
 	}
 }
 
+// TestInitWizardStart_BannerNamesConfigRoot pins the banner's config-location
+// bullet: "~/.milk" byte-identical to the long-standing wording on the
+// default root, and the *real* root (home-compressed by config.DirLabel)
+// whenever SetRoot/$MILK_CONFIG_ROOT redirects it — never a hardcoded ~
+// claim for a sandboxed root (live-tested nit on this branch).
+func TestInitWizardStart_BannerNamesConfigRoot(t *testing.T) {
+	prev := config.SetRoot("")
+	defer config.SetRoot(prev)
+
+	_, banner := initWizardStart("")
+	if !strings.Contains(banner, "config.json (~/.milk)") {
+		t.Errorf("default banner must name ~/.milk, got:\n%s", banner)
+	}
+
+	root := t.TempDir()
+	config.SetRoot(root)
+	_, banner = initWizardStart("")
+	if !strings.Contains(banner, "config.json ("+root+")") {
+		t.Errorf("sandboxed banner must name the real root %q, got:\n%s", root, banner)
+	}
+	if strings.Contains(banner, "(~/.milk)") {
+		t.Errorf("sandboxed banner must not claim ~/.milk, got:\n%s", banner)
+	}
+}
+
 // TestInitWizardCancelWord: the plain-text escape hatches ACP relies on
 // (the TUI cancels with esc).
 func TestInitWizardCancelWord(t *testing.T) {

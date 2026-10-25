@@ -68,7 +68,7 @@ func initWizardStart(cwd string) (*initWizardState, string) {
 	st := &initWizardState{step: initStepProvider, escCLI: true, cwd: cwd}
 	return st, milkTag() + " setup wizard — a few questions and you're talking to an agent\n" +
 		dim("  • primary: the everyday AI (cheap, fast).  escalation: a stronger AI milk hands hard tasks to.\n"+
-			"  • Everything is saved to config.json (~/.milk) and applies immediately — no restart.\n"+
+			"  • Everything is saved to config.json ("+config.DirLabel()+") and applies immediately — no restart.\n"+
 			"  • Press Enter to accept the [default]; Esc (or 'cancel') aborts.\n") + "\n"
 }
 
