@@ -422,6 +422,7 @@ milk's own, not ports:
 - **[Claude Code](https://claude.com/claude-code)** — the escalation-agent subprocess milk drives via `claude --print`, and the reference for milk's own project-instruction loading (AGENTS.md/CLAUDE.md).
 - **[MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code)** (Xiaomi's fork of OpenCode) — compared for loop-detection thresholds (the doom-loop gate, n-gram repetition monitor), prompt-caching breakpoint strategy, and checkpoint/distillation memory design.
 - **[OpenCode](https://github.com/anomalyco/opencode)** — compared for `AGENTS.md` project-instruction loading, sub-agent context isolation (`ForkContext`), and prompt-caching strategy.
+- **[Aider](https://aider.chat/)** — its [repo map](https://aider.chat/2023/10/22/repomap.html) design informed `project_map`'s outline contract (definition lines, never bodies) and its reference-ranked budget pruning, plus the `project_map_context` push/hybrid (ADR-0081); adapted to milk's tool + persistent-cache architecture, not ported.
 
 The full comparison (findings, what was and wasn't adopted, and why) lives in a design analysis
 kept out of this published site — see the `prompt-context-management-review.md` doc in the

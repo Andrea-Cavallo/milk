@@ -270,5 +270,6 @@ milk's prompt/context-management and loop-detection design was informed by study
 - **[Claude Code](https://claude.com/claude-code)** — the escalation-agent subprocess milk drives, and the reference for project-instruction loading (`AGENTS.md`/`CLAUDE.md`).
 - **[MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code)** — compared for loop-detection thresholds, prompt-caching breakpoints, and checkpoint/distillation memory.
 - **[OpenCode](https://github.com/anomalyco/opencode)** — compared for project-instruction loading, sub-agent context isolation, and prompt-caching strategy.
+- **[Aider](https://aider.chat/)** — its published [repo map](https://aider.chat/2023/10/22/repomap.html) design (definition-line outlines, reference-ranked budget selection) informed `project_map` and the pushed `project_map_context` (ADR-0081); adapted to milk's tool + persistent-cache architecture, not ported.
 
 See [the full comparison](docs/internal/analysis/prompt-context-management-review.md) for details.
