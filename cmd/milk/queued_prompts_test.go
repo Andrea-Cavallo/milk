@@ -245,3 +245,52 @@ func TestQueuePreview(t *testing.T) {
 		t.Errorf("multi-line preview must be the first line: %q", got)
 	}
 }
+
+// TestCtrlC_QueueUndoStack: the enriched Ctrl+C chain — drop the last
+// queued prompt first (one press per entry), then the pre-existing stages
+// (clear input → interrupt the turn).
+func TestCtrlC_QueueUndoStack(t *testing.T) {
+	m := busyQueueModel(t, true)
+	m.queuePrompt("first queued")
+	m.queuePrompt("second queued")
+	m.ta.SetValue("draft in progress")
+	interrupts := 0
+	m.cancelTurn = func() { interrupts++ }
+
+	// Press 1: drops the *last* entry (the queueing's undo), leaves input.
+	next, _ := m.handleCtrlC()
+	out := next.(model)
+	if len(out.st.queuedPrompts) != 1 || out.st.queuedPrompts[0].text != "first queued" {
+		t.Fatalf("press 1 must drop the last entry only, got %#v", out.st.queuedPrompts)
+	}
+	if out.ta.Value() != "draft in progress" {
+		t.Errorf("press 1 touched the input: %q", out.ta.Value())
+	}
+	if !strings.Contains(out.transcript.String(), "removed the last queued prompt (1 left)") {
+		t.Errorf("press 1 missing the undo notice:\n%s", out.transcript.String())
+	}
+
+	// Press 2: drops the remaining entry.
+	next, _ = out.handleCtrlC()
+	out = next.(model)
+	if len(out.st.queuedPrompts) != 0 {
+		t.Fatalf("press 2 must empty the queue, got %#v", out.st.queuedPrompts)
+	}
+
+	// Press 3: clears the input (the pre-existing clear stage).
+	next, _ = out.handleCtrlC()
+	out = next.(model)
+	if out.ta.Value() != "" {
+		t.Errorf("press 3 must clear the input, got %q", out.ta.Value())
+	}
+	if interrupts != 0 {
+		t.Errorf("press 3 must not interrupt, got %d interrupts", interrupts)
+	}
+
+	// Press 4: interrupts the running turn.
+	next, _ = out.handleCtrlC()
+	out = next.(model)
+	if interrupts != 1 || !out.interrupted {
+		t.Errorf("press 4 must interrupt the turn: interrupts=%d interrupted=%v", interrupts, out.interrupted)
+	}
+}

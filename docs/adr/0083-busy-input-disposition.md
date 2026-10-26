@@ -57,3 +57,18 @@ persisting the queue, queueing slash commands.
   and are not in this cut.
 - Historical note: ADR-0043's "Enter shows a hint" contract is amended by
   this record.
+
+## Amendment
+
+- **2026-10-26 (two-step confirm + Ctrl+C undo).** Queuing on the first
+  Enter made the fork alternative invisible — the user saw their input
+  vanish with only a receipt after the fact. Enter is now **two-step**: the
+  first press announces both choices in the busy hint (`Enter again to
+  queue it for the next turn · Ctrl+Enter to spawn a background agent with
+  this`), the second press on the same gesture queues. Any other key
+  disarms the confirm (it chains across consecutive Enters only), and a
+  confirm never survives a turn boundary. **Ctrl+C gains an undo stage
+  first**: with a non-empty queue it drops the *last* queued entry (one
+  press per entry, notice + `/queue` pointer) before falling through to its
+  usual chain (clear input → interrupt the turn → quit) — the receipt's
+  counterpart, so queueing is reversible by keystroke alone.

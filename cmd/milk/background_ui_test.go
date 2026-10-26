@@ -300,8 +300,17 @@ func TestHandleBusyKey_CtrlJSpawnsBackgroundAgent(t *testing.T) {
 	m.busy = true
 	m.ta.SetValue("dig into the physics module")
 
-	// Enter: queues for the next turn (buffer captured and cleared).
+	// Enter: first press announces the choices (confirm hint + arm), the
+	// second press queues (buffer captured and cleared).
 	updated, _ := m.handleBusyKey(teaKeyEnter())
+	m1 := updated.(model)
+	if m1.ta.Value() != "dig into the physics module" {
+		t.Errorf("expected the textarea to survive the confirm Enter, got %q", m1.ta.Value())
+	}
+	if !m1.busyEnterArmed || !strings.Contains(m1.busyHint, "Enter again") {
+		t.Errorf("expected the confirm hint + arm, got hint %q armed=%v", m1.busyHint, m1.busyEnterArmed)
+	}
+	updated, _ = m1.handleBusyKey(teaKeyEnter())
 	m2 := updated.(model)
 	if m2.ta.Value() != "" {
 		t.Errorf("expected the textarea to be cleared after queueing, got %q", m2.ta.Value())
@@ -355,22 +364,27 @@ func TestHandleBusyKey_EnterDoesNotSpawn(t *testing.T) {
 	m.busy = true
 	m.ta.SetValue("dig into the physics module")
 
-	// First Enter: queued for the next turn (buffer captured and cleared).
+	// First Enter: the confirm hint; second Enter: queued (buffer captured
+	// and cleared).
 	updated, _ := m.handleBusyKey(teaKeyEnter())
+	m1 := updated.(model)
+	updated, _ = m1.handleBusyKey(teaKeyEnter())
 	m2 := updated.(model)
 	if m2.ta.Value() != "" {
 		t.Errorf("expected the textarea to be cleared after queueing, got %q", m2.ta.Value())
 	}
 	if len(m2.st.queuedPrompts) != 1 {
-		t.Errorf("expected 1 queued prompt after first Enter, got %d", len(m2.st.queuedPrompts))
+		t.Errorf("expected 1 queued prompt after first double-Enter, got %d", len(m2.st.queuedPrompts))
 	}
 
-	// Second Enter: a second queue entry — must NOT spawn.
+	// Again: a second queue entry — must NOT spawn.
 	m2.ta.SetValue("and the chemistry module")
 	updated2, _ := m2.handleBusyKey(teaKeyEnter())
 	m3 := updated2.(model)
+	updated2, _ = m3.handleBusyKey(teaKeyEnter())
+	m3 = updated2.(model)
 	if len(m3.st.queuedPrompts) != 2 {
-		t.Errorf("expected 2 queued prompts after second Enter, got %d", len(m3.st.queuedPrompts))
+		t.Errorf("expected 2 queued prompts after two double-Enters, got %d", len(m3.st.queuedPrompts))
 	}
 	if got := mgr.ActiveCount(); got != 0 {
 		t.Errorf("expected 0 active jobs after double-Enter, got %d", got)

@@ -991,6 +991,11 @@ type model struct {
 
 	copyFeedback   string // transient "[copied N chars]" shown in status bar
 	busyHint       string // transient "agent is responding" shown in status bar
+	// busyEnterArmed is set by the first Enter while busy (the busy-input
+	// disposition's confirm step): the first press announces both choices
+	// (queue / fork), the second press on the same gesture queues. Any
+	// non-Enter key disarms (handleBusyKey top).
+	busyEnterArmed bool
 	credRefreshing bool   // true while any background credential refresh is running
 	credLabel      string // which credential is being refreshed (e.g. "AWS", "token")
 	credStatus     string // non-empty after refresh completes: last result message
@@ -1409,19 +1414,25 @@ func (m model) drainQueuedPrompt() (tea.Model, tea.Cmd, bool) {
 // for all navigation, editing, history, undo/redo, and viewport scroll.
 // Safe slash commands (display/read-only) are executed immediately even during a turn.
 func (m model) handleBusyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// The double-Enter queue confirmation only chains across consecutive
+	// Enters: any other key (including Ctrl+Enter's fork) disarms it, so an
+	// armed press can never queue text the user has since edited.
+	if msg.String() != "enter" && msg.String() != "ctrl+m" {
+		m.busyEnterArmed = false
+	}
 	switch msg.String() {
 	case "ctrl+c":
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-			m.cancelTurn = nil
-			m.interrupted = true
-		}
-		return m, nil
+		// The Ctrl+C stack is shared with the idle path (handleCtrlC):
+		// undo queue entry → clear input → interrupt → quit, one stage per
+		// press.
+		return m.handleCtrlC()
 	case "enter", "ctrl+m":
 		// Enter-as-accept (tab completion / arrow-hint selection) is not a
 		// submission, so it is not trapped while busy — only Enter below,
 		// which would send the buffer as a prompt, is. Completion only
 		// edits the input buffer, safe to use mid-turn.
+		armed := m.busyEnterArmed
+		m.busyEnterArmed = false
 		var accepted bool
 		m, accepted = m.acceptActiveCompletion()
 		if accepted {
@@ -1476,16 +1487,23 @@ func (m model) handleBusyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.busyHint = "agent is responding — Ctrl+C to interrupt"
 			return m, busyHintClearCmd()
 		}
-		// Enter = queue it for this agent's next turn (the queue half of the
-		// busy-input disposition; Ctrl+Enter below forks to a background
-		// agent). Slash commands never reach here as queue candidates —
-		// non-busy-safe ones were rejected above with their own hint.
-		// "queue_while_busy": false restores the hint-only behavior.
-		if m.st.cfg.QueueWhileBusyEnabled() {
+		// Busy-input disposition, two-step (the queue half; Ctrl+Enter below
+		// forks to a background agent). The first Enter announces both
+		// choices — queueing silently would make the fork alternative
+		// invisible — and the second Enter on the same gesture queues. Slash
+		// commands never reach here as queue candidates (non-busy-safe ones
+		// were rejected above with their own hint). "queue_while_busy": false
+		// keeps the hint-only Enter.
+		if !m.st.cfg.QueueWhileBusyEnabled() {
+			m.busyHint = "agent is working — Ctrl+Enter to spawn a background agent with this"
+			return m, busyHintClearCmd()
+		}
+		if armed {
 			m.queuePrompt(input)
 			return m, nil
 		}
-		m.busyHint = "agent is working — Ctrl+Enter to spawn a background agent with this"
+		m.busyEnterArmed = true
+		m.busyHint = "agent is working — Enter again to queue it for the next turn · Ctrl+Enter to spawn a background agent with this"
 		return m, busyHintClearCmd()
 	case "ctrl+enter", "ctrl+j":
 		// Bubble Tea v2 parses the extended Ctrl+Enter encodings (kitty
@@ -1863,6 +1881,8 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.refreshPrompt()
 	m.syncLayout()
 
+	// A double-Enter confirmation never survives a turn boundary.
+	m.busyEnterArmed = false
 	// Busy-input queue first (design: one queued prompt per turn, before the
 	// background-followup and remote-input chain).
 	if next, cmd, ok := m.drainQueuedPrompt(); ok {
@@ -3713,6 +3733,17 @@ func (m model) extendTranscriptSel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleCtrlC() (tea.Model, tea.Cmd) {
+	// Stage 0 — undo the most recent queueing (the busy-input disposition's
+	// counterpart to the receipt line): one press per entry, before any of
+	// the stages below. The chain is therefore: drop last queued prompt →
+	// clear input → interrupt the turn → quit (each press advances one).
+	if m.st != nil && len(m.st.queuedPrompts) > 0 {
+		m.st.queuedPrompts = m.st.queuedPrompts[:len(m.st.queuedPrompts)-1]
+		m.busyEnterArmed = false
+		m.appendTranscript(milkTag() + fmt.Sprintf("⋯ removed the last queued prompt (%d left) · /queue to review\n", len(m.st.queuedPrompts)))
+		m.syncLayout()
+		return m, nil
+	}
 	if m.selText != "" {
 		copyToClipboard(m.selText)
 		m.copyFeedback = fmt.Sprintf("copied %d chars", len([]rune(m.selText)))
@@ -3763,6 +3794,14 @@ func (m model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.appendTranscript("\n" + milkTag() + " workflow cancelled\n")
 		m.refreshPrompt()
 		m.syncLayout()
+		return m, nil
+	}
+	// Interrupt a running turn (busy only — cancelTurn may linger past a
+	// finished turn, so gate on m.busy exactly like the busy-key routing).
+	if m.busy && m.cancelTurn != nil {
+		m.cancelTurn()
+		m.cancelTurn = nil
+		m.interrupted = true
 		return m, nil
 	}
 	if m.quitPending {

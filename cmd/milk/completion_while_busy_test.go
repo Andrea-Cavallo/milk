@@ -126,14 +126,23 @@ func TestBusyEnter_CommitsArrowHint(t *testing.T) {
 }
 
 // TestBusyEnter_PlainTextQueued: the busy Enter disposition — with no
-// completion active, Enter on plain text queues it for the live agent's next
-// turn (buffer captured and cleared).
+// completion active, the first Enter announces the choices and the second
+// Enter on the same gesture queues the plain text (buffer captured and
+// cleared).
 func TestBusyEnter_PlainTextQueued(t *testing.T) {
 	m := newTestModelForPanels(t)
 	m.busy = true
 	m.ta.SetValue("plain prompt text")
 
 	next, _ := m.handleBusyKey(teaKeyEnter())
+	first := next.(model)
+	if first.ta.Value() != "plain prompt text" {
+		t.Errorf("buffer touched on the confirm Enter: %q", first.ta.Value())
+	}
+	if !first.busyEnterArmed {
+		t.Errorf("first Enter did not arm the queue confirm")
+	}
+	next, _ = first.handleBusyKey(teaKeyEnter())
 	out := next.(model)
 
 	if out.ta.Value() != "" {
@@ -141,6 +150,32 @@ func TestBusyEnter_PlainTextQueued(t *testing.T) {
 	}
 	if len(out.st.queuedPrompts) != 1 || out.st.queuedPrompts[0].text != "plain prompt text" {
 		t.Errorf("expected the plain text queued, got %#v", out.st.queuedPrompts)
+	}
+}
+
+// TestBusyEnter_ArmDisarmsOnOtherKey: the queue confirm chains across
+// consecutive Enters only — any other key disarms it, so a later Enter
+// announces again instead of queueing.
+func TestBusyEnter_ArmDisarmsOnOtherKey(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.busy = true
+	m.ta.SetValue("plain prompt text")
+
+	next, _ := m.handleBusyKey(teaKeyEnter())
+	armed := next.(model)
+	if !armed.busyEnterArmed {
+		t.Fatal("first Enter did not arm the queue confirm")
+	}
+	// Typing disarms.
+	next, _ = armed.handleBusyKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	typed := next.(model)
+	if typed.busyEnterArmed {
+		t.Fatalf("arm survived a typing key")
+	}
+	// Ctrl+Enter's fork disarms too.
+	next, _ = armed.handleBusyKey(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	if after := next.(model); after.busyEnterArmed {
+		t.Fatalf("arm survived Ctrl+J")
 	}
 }
 
@@ -164,6 +199,16 @@ func TestBusyEnter_KnobOffKeepsHint(t *testing.T) {
 	}
 	if len(out.st.queuedPrompts) != 0 {
 		t.Errorf("expected nothing queued with the knob off, got %d", len(out.st.queuedPrompts))
+	}
+	// The confirm chain never arms with the knob off: a second Enter is
+	// the same hint again.
+	next, _ = out.handleBusyKey(teaKeyEnter())
+	out = next.(model)
+	if out.busyEnterArmed {
+		t.Errorf("knob-off Enter armed the queue confirm")
+	}
+	if len(out.st.queuedPrompts) != 0 {
+		t.Errorf("knob-off second Enter queued: %#v", out.st.queuedPrompts)
 	}
 }
 
