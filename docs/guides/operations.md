@@ -241,6 +241,10 @@ The spawning agent has a model-facing equivalent to `/bg stop`: a `cancel_backgr
 
 **Watching a job (or workflow) live** (ADR-0047): double-click a job's row in the background panel (**F3**), or the workflow panel (**F4**) while a `/workflow` is running, to swap the main transcript for that job's/workflow's own live output — its tool calls and streamed text, kept off the main transcript the whole time, not just summarized after the fact. Esc detaches back to the main transcript, which keeps accumulating underneath the whole time. A workflow with a `parallel_group` (e.g. `swarm`) shows a header note there: its workers run without live output, so the fan-out stage shows only `[item N] started`/`done`/`failed` lines. The buffer keeps growing after the job/workflow finishes, so re-attaching (or never detaching) still shows the full output; nothing auto-detaches on completion. `obs.Debug` logs `attach.start`/`attach.stop` with the job/workflow ID and label, so this is checkable from `milk.log` even without watching the terminal live.
 
+### Prompt queue (Enter while busy)
+
+Typed input during a running turn has two dispositions (ADR-0083): **Enter** queues it for the live agent's next turn — FIFO, one flushed per turn, before the background-followup and remote-input chain — while **Ctrl+Enter**/**Ctrl+J** forks it to a background agent as before. Queueing is two-step and explicit: the first Enter announces both choices in the hint, the second Enter on the same gesture queues (any other key disarms the confirm). Ctrl+C drops the most recent queued prompt first — one press per entry — before falling through to its usual chain (clear input → interrupt the turn → quit). A queued entry takes the staged attachments and paste provenance with it, and its flush echoes with a `[queued]` label so no turn answers an invisible prompt. The receipt line at queue time names the review surface: `/queue` (`list`, `show <n>`, `drop <n|last|all>`, `clear`), also visible as a `» N queued` status-bar chip. The queue is in-memory (cap 20, refused with a hint past it) and drops on session switch with a notice; `queue_while_busy: false` restores Enter's old hint-only behavior.
+
 ---
 
 ## Live configuration reload
@@ -376,6 +380,7 @@ Tips are browsable, not just rotatable:
 |---|---|
 | **Enter** | Submit prompt / accept tab completion (accepting a completion or hint works while an agent turn is running too — only plain Enter-as-submission is trapped mid-turn) |
 | **Ctrl+Enter** | Spawn a background agent from the current input (while an agent turn is in progress). **Ctrl+J** works as a universal fallback in terminals without extended key protocols. |
+| **Enter** (while busy) | Two-step disposition: the first Enter shows the hint (queue vs fork), the second queues the input for the live agent's next turn — `/queue` reviews it, `/queue drop last` undoes. `queue_while_busy: false` restores the hint-only behavior. |
 | **Tab** | Cycle slash-command and @-path completions (also available while a turn is in progress). `@` paths come from a cached index of the project's tracked and untracked-not-ignored files (git's own ignore rules; a bounded, ballast-pruning walk outside git), ranked file-name-prefix first — see ADR-0057 |
 | **Shift-Tab** | Reverse cycle completions |
 | **Ctrl-C** | Copy selection → clear input → cancel the running turn → quit (double press; also cancels a running workflow — to stop only the workflow use `/workflow cancel`) |

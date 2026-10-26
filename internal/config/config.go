@@ -189,6 +189,9 @@ func DeepMerge(dst, src Config) Config {
 	if src.ShowTips != nil {
 		dst.ShowTips = src.ShowTips
 	}
+	if src.QueueWhileBusy != nil {
+		dst.QueueWhileBusy = src.QueueWhileBusy
+	}
 	if src.Animations != nil {
 		dst.Animations = src.Animations
 	}
@@ -1167,6 +1170,12 @@ type Config struct {
 	// shown (ADR-0061). Can be toggled live with /tips on|off.
 	// unset (default) = shown; false = hidden.
 	ShowTips *bool `json:"show_tips,omitempty"`
+
+	// QueueWhileBusy controls the busy-input disposition of Enter (true by
+	// default): while an agent turn runs, Enter queues the typed prompt for
+	// the live agent's next turn. "queue_while_busy": false restores the
+	// hint-only behavior (Ctrl+Enter forks to a background agent either way).
+	QueueWhileBusy *bool `json:"queue_while_busy,omitempty"`
 
 	// CopyOnSelect copies a mouse selection to the clipboard as soon as the
 	// button is released, instead of waiting for a right-click or ctrl+c.
@@ -2339,6 +2348,13 @@ func intOr(v, def int) int {
 // "show_tips": false turns them off).
 func (c Config) ShowTipsEnabled() bool {
 	return c.ShowTips == nil || *c.ShowTips
+}
+
+// QueueWhileBusyEnabled reports whether Enter while an agent turn is running
+// queues the typed prompt for the live agent's next turn (true when unset —
+// "queue_while_busy": false restores the hint-only behavior).
+func (c Config) QueueWhileBusyEnabled() bool {
+	return c.QueueWhileBusy == nil || *c.QueueWhileBusy
 }
 
 // RememberPanelStateEnabled reports whether side-panel state management is

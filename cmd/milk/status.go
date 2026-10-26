@@ -174,6 +174,11 @@ func (m *model) statusBar() string {
 			left += dim(" [» " + pluralize(n, "background agent") + " running]")
 		}
 	}
+	if m.st != nil {
+		if n := len(m.st.queuedPrompts); n > 0 {
+			left += dim(fmt.Sprintf(" [» %d queued]", n))
+		}
+	}
 	if m.workflowRunning {
 		left += dim(" [» " + workflowStatusLabel(m.workflowState) + "]")
 	}

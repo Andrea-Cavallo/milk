@@ -283,8 +283,9 @@ func TestMaybeAutoFollowup_ActiveJobsRemain_DoesNotDispatch(t *testing.T) {
 }
 
 // TestHandleBusyKey_CtrlJSpawnsBackgroundAgent verifies the busy-key flow:
-// Enter while busy just shows a hint (does not touch the textarea), and
-// Ctrl+J (the universal fallback for Ctrl+Enter) spawns a background job
+// Enter while busy queues the input for the live agent's next turn (the
+// queue half of the busy-input disposition; buffer cleared, receipt shown),
+// and Ctrl+J (the universal fallback for Ctrl+Enter) spawns a background job
 // from whatever is currently in the textarea.
 func TestHandleBusyKey_CtrlJSpawnsBackgroundAgent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -299,19 +300,29 @@ func TestHandleBusyKey_CtrlJSpawnsBackgroundAgent(t *testing.T) {
 	m.busy = true
 	m.ta.SetValue("dig into the physics module")
 
-	// Enter: shows the hint, leaves the textarea untouched.
+	// Enter: first press announces the choices (confirm hint + arm), the
+	// second press queues (buffer captured and cleared).
 	updated, _ := m.handleBusyKey(teaKeyEnter())
-	m2 := updated.(model)
-	if m2.ta.Value() != "dig into the physics module" {
-		t.Errorf("expected the textarea to survive Enter, got %q", m2.ta.Value())
+	m1 := updated.(model)
+	if m1.ta.Value() != "dig into the physics module" {
+		t.Errorf("expected the textarea to survive the confirm Enter, got %q", m1.ta.Value())
 	}
-	if !strings.Contains(m2.busyHint, "Ctrl+Enter") {
-		t.Errorf("expected the hint to mention Ctrl+Enter, got %q", m2.busyHint)
+	if !m1.busyEnterArmed || !strings.Contains(m1.busyHint, "Enter again") {
+		t.Errorf("expected the confirm hint + arm, got hint %q armed=%v", m1.busyHint, m1.busyEnterArmed)
+	}
+	updated, _ = m1.handleBusyKey(teaKeyEnter())
+	m2 := updated.(model)
+	if m2.ta.Value() != "" {
+		t.Errorf("expected the textarea to be cleared after queueing, got %q", m2.ta.Value())
+	}
+	if len(m2.st.queuedPrompts) != 1 || m2.st.queuedPrompts[0].text != "dig into the physics module" {
+		t.Errorf("expected the input queued for the next turn, got %#v", m2.st.queuedPrompts)
 	}
 
 	// Ctrl+J: spawns — the actual Spawn call is deferred into a
 	// tea.Cmd to avoid deadlocking bubbletea's unbuffered msgs channel
 	// (p.Send inside onStart would block if called from within Update).
+	m2.ta.SetValue("dig into the physics module")
 	updated2, cmd := m2.handleBusyKey(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	m3 := updated2.(model)
 	if m3.ta.Value() != "" {
@@ -337,9 +348,9 @@ func TestHandleBusyKey_CtrlJSpawnsBackgroundAgent(t *testing.T) {
 	}
 }
 
-// TestHandleBusyKey_EnterDoesNotSpawn verifies Enter while busy only shows
-// the hint — it never spawns a background agent (the old double-Enter
-// trigger was too easy to fire accidentally).
+// TestHandleBusyKey_EnterDoesNotSpawn verifies Enter while busy queues the
+// input for the next turn — it never spawns a background agent (the old
+// double-Enter trigger was too easy to fire accidentally).
 func TestHandleBusyKey_EnterDoesNotSpawn(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sess, err := session.New("/repo", "")
@@ -353,21 +364,27 @@ func TestHandleBusyKey_EnterDoesNotSpawn(t *testing.T) {
 	m.busy = true
 	m.ta.SetValue("dig into the physics module")
 
-	// First Enter: shows hint.
+	// First Enter: the confirm hint; second Enter: queued (buffer captured
+	// and cleared).
 	updated, _ := m.handleBusyKey(teaKeyEnter())
+	m1 := updated.(model)
+	updated, _ = m1.handleBusyKey(teaKeyEnter())
 	m2 := updated.(model)
-	if !strings.Contains(m2.busyHint, "Ctrl+Enter") {
-		t.Errorf("expected the hint to mention Ctrl+Enter, got %q", m2.busyHint)
+	if m2.ta.Value() != "" {
+		t.Errorf("expected the textarea to be cleared after queueing, got %q", m2.ta.Value())
 	}
-	if m2.ta.Value() != "dig into the physics module" {
-		t.Errorf("expected the textarea to survive Enter, got %q", m2.ta.Value())
+	if len(m2.st.queuedPrompts) != 1 {
+		t.Errorf("expected 1 queued prompt after first double-Enter, got %d", len(m2.st.queuedPrompts))
 	}
 
-	// Second Enter: just shows the hint again — must NOT spawn.
+	// Again: a second queue entry — must NOT spawn.
+	m2.ta.SetValue("and the chemistry module")
 	updated2, _ := m2.handleBusyKey(teaKeyEnter())
 	m3 := updated2.(model)
-	if m3.ta.Value() != "dig into the physics module" {
-		t.Errorf("expected the textarea to survive a second Enter, got %q", m3.ta.Value())
+	updated2, _ = m3.handleBusyKey(teaKeyEnter())
+	m3 = updated2.(model)
+	if len(m3.st.queuedPrompts) != 2 {
+		t.Errorf("expected 2 queued prompts after two double-Enters, got %d", len(m3.st.queuedPrompts))
 	}
 	if got := mgr.ActiveCount(); got != 0 {
 		t.Errorf("expected 0 active jobs after double-Enter, got %d", got)

@@ -45,6 +45,7 @@ const cmdAgent = "/agent"
 const cmdColorize = "/colorize"
 const cmdThink = "/think"
 const cmdTips = "/tips"
+const cmdQueue = "/queue"
 const cmdTheme = "/theme"
 const cmdRestart = "/restart"
 const cmdInterrupt = "/interrupt"
@@ -238,6 +239,18 @@ func isSubcmd(word string) bool {
 const errFmt = "error: %v\n"
 
 // interactiveState holds mutable state for the interactive loop.
+// queuedPrompt is one Enter-while-busy input captured for the live agent's
+// next turn (the queue half of the busy-input disposition; Ctrl+Enter forks
+// to a background agent instead). The entry takes the staged attachments and
+// the paste provenance with it, so the flush replays them exactly (the
+// issue-#151 paste gate).
+type queuedPrompt struct {
+	text          string
+	leadingPasted bool
+	attachments   []PendingAttachment
+	queuedAt      time.Time
+}
+
 type interactiveState struct {
 	sess *session.Session
 	// claudeApproved records that the user allowed the implicit Claude CLI for
@@ -285,6 +298,13 @@ type interactiveState struct {
 	// interface (e.g. Telegram) while a turn is in progress. Drained one at a
 	// time by handleAgentDone once the current turn completes.
 	pendingRemoteInputs []string
+
+	// queuedPrompts holds Enter-while-busy inputs — the queue half of the
+	// busy-input disposition (Enter queues for this agent's next turn,
+	// Ctrl+Enter forks to a background agent). In-memory only (cap 20),
+	// drained one per turn by handleAgentDone before the background-followup
+	// and remote-input chain, dropped on session switch with a notice.
+	queuedPrompts []queuedPrompt
 
 	// lastEscalationContextHash is a short hash of the last per-turn context block
 	// prepended to a resumed CLI escalation prompt. Used to avoid appending the same
@@ -348,6 +368,7 @@ var busySafeCommands = map[string]bool{
 	"/help":          true,
 	cmdThink:         true,
 	cmdTips:          true,
+	cmdQueue:         true,
 	cmdTheme:         true,
 	cmdColorize:      true,
 	cmdPanel:         true,
