@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/scoutme/milk/internal/config"
 	"github.com/scoutme/milk/internal/updater"
+	"github.com/scoutme/milk/internal/workflow"
 )
 
 // The idle tip line (ADR-0061) is pinned here: the built list is complete
@@ -19,11 +23,12 @@ import (
 // is what both View and viewportHeight see.
 
 func TestBuildTipList_CuratedFirstNoDuplicates(t *testing.T) {
+	curated := curatedTips()
 	list := buildTipList()
-	if len(list) < len(curatedTips) {
-		t.Fatalf("buildTipList() = %d tips, want at least the %d curated ones", len(list), len(curatedTips))
+	if len(list) < len(curated) {
+		t.Fatalf("buildTipList() = %d tips, want at least the %d curated ones", len(list), len(curated))
 	}
-	for i, tip := range curatedTips {
+	for i, tip := range curated {
 		if list[i] != tip {
 			t.Errorf("buildTipList()[%d] = %q, want curated tip %q — curated must lead the rotation", i, list[i], tip)
 		}
@@ -552,7 +557,7 @@ func TestHelpDocumentsTipBrowsing(t *testing.T) {
 // immediately; every panel name is checked individually.
 func TestCuratedPanelTip_CoversEveryPanel(t *testing.T) {
 	var tip string
-	for _, c := range curatedTips {
+	for _, c := range curatedTips() {
 		if strings.Contains(c, "toggle the memory") {
 			tip = c
 			break
@@ -575,5 +580,74 @@ func TestCuratedPanelTip_CoversEveryPanel(t *testing.T) {
 		if name := panelSubName(region); name == "" || !strings.Contains(tip, name) {
 			t.Errorf("panel tip missing panel name %q for region %v (tip: %s)", name, region, tip)
 		}
+	}
+}
+
+// TestCuratedWorkflowTip_TracksConfiguredTypes pins the /workflow tip as
+// registry-derived — the same no-drift contract registryTips grants the
+// command set. The old hardcoded "(dev, pair, swarm)" copy went stale when
+// team shipped and never knew about ~/.milk/workflows/ definitions at all;
+// the tip must now name every configured workflow type (built-ins and user
+// definitions) and refresh through the TTL cache (resetTipWorkflowNames)
+// instead of freezing whatever the first render saw.
+func TestCuratedWorkflowTip_TracksConfiguredTypes(t *testing.T) {
+	sandboxMilkHome(t)
+	resetTipWorkflowNames()
+	t.Cleanup(resetTipWorkflowNames)
+
+	reg, _ := workflow.LoadRegistry()
+	tip := workflowTip()
+	if !strings.Contains(tip, "{/workflow") {
+		t.Errorf("workflow tip %q must keep the /workflow span — tipCoveredCmds reads its first token", tip)
+	}
+	for _, name := range reg.Names() {
+		if !strings.Contains(tip, name) {
+			t.Errorf("workflow tip %q must name configured workflow %q", tip, name)
+		}
+	}
+
+	// A user-defined workflow is configured the moment it lands in
+	// ~/.milk/workflows/ — the tip follows on the next cache refresh.
+	writeTinyWorkflow(t)
+	if got := workflowTip(); strings.Contains(got, "tiny") {
+		t.Errorf("workflow tip %q must serve the cached names until the TTL lapses (30s did not pass mid-test)", got)
+	}
+	resetTipWorkflowNames()
+	if got := workflowTip(); !strings.Contains(got, "tiny") {
+		t.Errorf("workflow tip %q must name the user-defined workflow %q after a refresh", got, "tiny")
+	}
+}
+
+// TestWorkflowTip_CapsEnumeratedNames pins the one-liner budget: past
+// workflowTipMaxNames configured types the tip summarizes ("+N more")
+// instead of growing with every ~/.milk/workflows/ file — the bare
+// /workflow listing is where the full set belongs.
+func TestWorkflowTip_CapsEnumeratedNames(t *testing.T) {
+	sandboxMilkHome(t)
+	resetTipWorkflowNames()
+	t.Cleanup(resetTipWorkflowNames)
+
+	dir := filepath.Join(os.Getenv("HOME"), ".milk", "workflows")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"zeta", "yotta", "xray"} {
+		def := "name: " + name + "\nroles: [writer]\nstages:\n  - id: write\n    kind: agent_turn\n    role: writer\n    save_as: out\n    prompt: |\n      {{.task}}\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(def), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resetTipWorkflowNames()
+	reg, _ := workflow.LoadRegistry()
+	names := reg.Names()
+	if len(names) <= workflowTipMaxNames {
+		t.Fatalf("test set up %d workflows, need more than %d to exercise the cap", len(names), workflowTipMaxNames)
+	}
+	tip := workflowTip()
+	if want := fmt.Sprintf("+%d more", len(names)-workflowTipMaxNames); !strings.Contains(tip, want) {
+		t.Errorf("workflow tip %q must summarize the tail as %q", tip, want)
+	}
+	if want := names[len(names)-1]; strings.Contains(tip, want) {
+		t.Errorf("workflow tip %q must not enumerate past the cap — %q belongs in the /workflow listing only", tip, want)
 	}
 }

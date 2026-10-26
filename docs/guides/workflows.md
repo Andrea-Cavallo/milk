@@ -153,7 +153,7 @@ Routing and escalation handle a single agent handing off to a smarter one mid-co
 
 The motivating problem: orchestrating a multi-stage pipeline (e.g. design → implement → review, looping until the reviewer signs off) through an interactive coding agent is fragile — there's no structured handoff between stages, no typed verdict, and no reliable way to know a background stage actually finished. `/workflow` gives milk direct control over stage transitions instead.
 
-Workflows are **data, not code**: each one is a YAML (or JSON) *definition* — a list of stages an interpreter (`internal/workflow/interp`) walks through — not a hand-written Go pipeline. Three ship built in; you can add your own the same way.
+Workflows are **data, not code**: each one is a YAML (or JSON) *definition* — a list of stages an interpreter (`internal/workflow/interp`) walks through — not a hand-written Go pipeline. Four ship built in; you can add your own the same way.
 
 ### Built-in workflows
 
@@ -164,7 +164,7 @@ Workflows are **data, not code**: each one is a YAML (or JSON) *definition* — 
 | `swarm` | designer, worker, evaluator, implementer | Designer splits the task into independent (or dependency-ordered) items; a worker+evaluator retry loop runs **per item, concurrently** (bounded fan-out); a final evaluator checks cross-item integration; an optional implementer pass fixes integration issues, skipped entirely if the final evaluator found none. |
 | `team` | designer, worker, evaluator, coordinator, implementer | Like `swarm`, but for **loosely coupled** work over a shared board (issue #197): items are claimed (`board_claim` — first claimer wins) instead of assumed-disjoint, every stage sees the live board (`{{.board}}`), findings (`board_post`) unblock teammates mid-flight, and a **coordinator stand-up** between passes reconciles, re-queues blocked items and verdicts `all_done` / `more_work` (ADR-0071). |
 
-All three separate ambiguity resolution from execution: the designer either asks clarifying questions up front (paused for a user reply, with the design proceeding on stated defaults if you don't answer) or proceeds straight to planning when the task is already clear.
+All four separate ambiguity resolution from execution: the designer either asks clarifying questions up front (paused for a user reply, with the design proceeding on stated defaults if you don't answer) or proceeds straight to planning when the task is already clear.
 
 ### Usage
 

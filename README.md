@@ -18,7 +18,7 @@ milk routes each prompt between a cheap primary agent and a deeper escalation ag
 - **Automatic routing and handoff** — per-prompt routing from explicit flags, session state, a rules/scorer layer, and a primary-model classifier. The primary agent can escalate itself with `escalate(reason)`, and auto-sticky escalation keeps follow-ups on the stronger model.
 - **Any backend, either role** — OpenAI-compatible HTTP, AWS Bedrock, Claude Code CLI, aider, smolagents, and Bearer-token providers. Any backend can be primary or escalation; escalation should be the stronger, usually pricier model.
 - **Tools and MCP** — built-in bash, file I/O, grep/find, HTTP, memory, and task tools; MCP servers over stdio or HTTP with OAuth; agent-as-tool; inline images for `vision: true` agents.
-- **Orchestration** — `spawn_background_agent` for asynchronous work, plus the native `/workflow` engine (`dev`, `pair`, `swarm`, or custom YAML) with typed verdicts, checkpoint/resume, and live attach.
+- **Orchestration** — `spawn_background_agent` for asynchronous work, plus the native `/workflow` engine (`dev`, `pair`, `swarm`, `team`, or custom YAML) with typed verdicts, checkpoint/resume, and live attach.
 - **Memory and safety** — a persistent percept store with consolidation, loop detection with auto-interrupt, task tracking, and session-level tool permissions.
 - **Observability and evaluation** — per-role token usage, OpenTelemetry JSONL exporters, and `milk eval` for side-by-side quality, token, cache, and latency comparisons.
 - **Editor and script surfaces** — `milk serve --acp` for Agent Client Protocol v2 clients, and `--output-format json|stream-json` for one-shot automation.

@@ -28,11 +28,14 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	rw "github.com/mattn/go-runewidth"
+
+	"github.com/scoutme/milk/internal/workflow"
 )
 
 // tipRotateInterval is how often the idle tip advances while the user is
@@ -46,37 +49,111 @@ const tipRotateInterval = 20 * time.Second
 // — the same generation check as toastTickMsg (issue #168's lesson).
 type tipsTickMsg struct{ gen int }
 
-// curatedTips is the hand-written half of the built tip list, in priority
-// order — the rotation starts at the top, so a fresh session shows the most
-// valuable tips first (the ordering is how this list expresses priority; it
-// has no separate weights).
+// curatedTips returns the hand-written half of the built tip list, in
+// priority order — the rotation starts at the top, so a fresh session shows
+// the most valuable tips first (the ordering is how this list expresses
+// priority; it has no separate weights).
+//
+// A function rather than a static slice: the /workflow entry is generated
+// from the live workflow registry (workflowTip), so it names the workflow
+// types actually configured — built-ins and ~/.milk/workflows/ definitions
+// — instead of a hardcoded sample that goes stale ("(dev, pair, swarm)"
+// never learned about team, let alone user-defined workflows).
 //
 // Markup: "{span}" is highlighted in the rendered line (yellow), everything
 // else is dim. A tip that names a command (e.g. "{/learn <fact>} …") marks
 // that command as covered — registryTips skips it so the same command is
 // never tipped twice. Keep the command name as the first token inside the
 // span; that is what the coverage scan reads.
-var curatedTips = []string{
-	`Type {@} followed by a filename to fuzzy-find and reference it — {Tab} cycles the candidates`,
-	`Start a line with {!} to run a shell command directly, e.g. {!git status}`,
-	`{Ctrl+R} searches your input history — {Ctrl+S} searches forward`,
-	`{F1}–{F6} toggle the memory / tasks / background / workflow / project / git panels (same as {/panel <name>})`,
-	`{/think view} shows the model's reasoning on its own — {Ctrl+T} toggles the last thinking block`,
-	`{/escalate <msg>} forces one turn to the escalation agent — bare {/escalate} pins every turn`,
-	`{/learn <fact>} stores a persistent memory — {/memory} lists them, {/forget} deletes one`,
-	`{/bg start <task>} runs a background agent — {Ctrl+Enter} while a turn runs starts one too`,
-	`{/attach <file>} stages a file or image for the next turn — {/paste} grabs one from the clipboard`,
-	`{/export} prints this session's transcript — {/export <path>} writes it to a file`,
-	`{/sessions} lists stored conversations — {/resume <id>} switches to one`,
-	`{/workflow <name>} runs a multi-stage workflow (dev, pair, swarm)`,
-	`{/usage} shows token usage by model and role`,
-	`{/config init} runs the setup wizard`,
-	`{/mcp auth <server>} connects an MCP server with OAuth`,
-	`{/open <file>} edits a file in $EDITOR`,
-	`{/permissions} tunes when unanswered tool prompts auto-allow or auto-deny`,
-	`{/setup telegram} lets you approve tool prompts from your phone`,
-	`{/colorize off|fenced|balanced|full} adjusts markdown highlighting`,
-	`{Ctrl+C} interrupts the current turn — press it twice to exit`,
+func curatedTips() []string {
+	return []string{
+		`Type {@} followed by a filename to fuzzy-find and reference it — {Tab} cycles the candidates`,
+		`Start a line with {!} to run a shell command directly, e.g. {!git status}`,
+		`{Ctrl+R} searches your input history — {Ctrl+S} searches forward`,
+		`{F1}–{F6} toggle the memory / tasks / background / workflow / project / git panels (same as {/panel <name>})`,
+		`{/think view} shows the model's reasoning on its own — {Ctrl+T} toggles the last thinking block`,
+		`{/escalate <msg>} forces one turn to the escalation agent — bare {/escalate} pins every turn`,
+		`{/learn <fact>} stores a persistent memory — {/memory} lists them, {/forget} deletes one`,
+		`{/bg start <task>} runs a background agent — {Ctrl+Enter} while a turn runs starts one too`,
+		`{/attach <file>} stages a file or image for the next turn — {/paste} grabs one from the clipboard`,
+		`{/export} prints this session's transcript — {/export <path>} writes it to a file`,
+		`{/sessions} lists stored conversations — {/resume <id>} switches to one`,
+		workflowTip(),
+		`{/usage} shows token usage by model and role`,
+		`{/config init} runs the setup wizard`,
+		`{/mcp auth <server>} connects an MCP server with OAuth`,
+		`{/open <file>} edits a file in $EDITOR`,
+		`{/permissions} tunes when unanswered tool prompts auto-allow or auto-deny`,
+		`{/setup telegram} lets you approve tool prompts from your phone`,
+		`{/colorize off|fenced|balanced|full} adjusts markdown highlighting`,
+		`{Ctrl+C} interrupts the current turn — press it twice to exit`,
+	}
+}
+
+// workflowTipMaxNames caps how many workflow names the /workflow tip
+// enumerates before summarizing the rest — a tip line is a one-liner, and a
+// user with a dozen definitions gets "+N more", not a paragraph (the bare
+// /workflow listing shows the full set).
+const workflowTipMaxNames = 6
+
+// workflowTip builds the /workflow curated tip from the configured workflow
+// registry (workflow.LoadRegistry: built-ins plus ~/.milk/workflows/), so
+// the parenthetical is the user's actual workflow-type set and cannot drift
+// the way the old hardcoded "(dev, pair, swarm)" did. The span keeps
+// "/workflow" as its first token so tipCoveredCmds still marks the command
+// covered.
+func workflowTip() string {
+	names := tipWorkflowNames()
+	if len(names) == 0 {
+		return `{/workflow <name>} runs a multi-stage workflow`
+	}
+	if len(names) > workflowTipMaxNames {
+		return fmt.Sprintf(`{/workflow <name>} runs a multi-stage workflow (%s, +%d more)`,
+			strings.Join(names[:workflowTipMaxNames], ", "), len(names)-workflowTipMaxNames)
+	}
+	return fmt.Sprintf(`{/workflow <name>} runs a multi-stage workflow (%s)`, strings.Join(names, ", "))
+}
+
+// tipWorkflowNamesTTL bounds how stale the workflow-type list behind
+// workflowTip may get. The tip line renders every frame (View → hintRegion →
+// currentTip → buildTipList, hintRegion more than once per render), while
+// LoadRegistry deliberately re-reads ~/.milk/workflows/ and re-parses every
+// definition on each call — right for command invocations, far too heavy per
+// frame. The cache keeps the tip dynamic (a new definition shows up within
+// half a rotation beat) without the fs churn.
+const tipWorkflowNamesTTL = 30 * time.Second
+
+// tipWorkflowNamesCache memoizes the registry's names for tipWorkflowNamesTTL.
+// A zero at means "never loaded" (time.Since on it is far past the TTL, so
+// the first call loads).
+var tipWorkflowNamesCache struct {
+	mu    sync.Mutex
+	at    time.Time
+	names []string
+}
+
+// tipWorkflowNames returns the configured workflow names for workflowTip,
+// re-reading the registry at most once per tipWorkflowNamesTTL.
+func tipWorkflowNames() []string {
+	tipWorkflowNamesCache.mu.Lock()
+	defer tipWorkflowNamesCache.mu.Unlock()
+	if time.Since(tipWorkflowNamesCache.at) < tipWorkflowNamesTTL {
+		return tipWorkflowNamesCache.names
+	}
+	reg, _ := workflow.LoadRegistry() //nolint:errcheck // load errors are per-file; usable definitions are still returned
+	tipWorkflowNamesCache.at = time.Now()
+	tipWorkflowNamesCache.names = reg.Names()
+	return tipWorkflowNamesCache.names
+}
+
+// resetTipWorkflowNames drops the tipWorkflowNames cache so the next
+// tipWorkflowNames call re-reads the registry — tests that change the
+// configured workflow set mid-run (and clean up after themselves) use it.
+func resetTipWorkflowNames() {
+	tipWorkflowNamesCache.mu.Lock()
+	defer tipWorkflowNamesCache.mu.Unlock()
+	tipWorkflowNamesCache.at = time.Time{}
+	tipWorkflowNamesCache.names = nil
 }
 
 // tipCoveredCmds returns the set of canonical command names (with leading
@@ -85,7 +162,7 @@ var curatedTips = []string{
 // automatically retires its registry-derived duplicate.
 func tipCoveredCmds() map[string]bool {
 	covered := map[string]bool{}
-	for _, tip := range curatedTips {
+	for _, tip := range curatedTips() {
 		for _, seg := range tipSegments(tip) {
 			if !seg.hl || !strings.HasPrefix(seg.s, "/") {
 				continue
@@ -138,9 +215,12 @@ func registryTip(s cmdSpec) string {
 // buildTipList is the full rotation pool: curated tips first (priority
 // order), then the registry-derived long tail. Deterministic — the rotation
 // is a plain cycle, so tests can pin positions and a session never sees a
-// tip twice before the pool is exhausted.
+// tip twice before the pool is exhausted. Position math always re-derives
+// the pool (tipIdx is taken modulo the current list): the workflow tip's
+// name list tracks configuration, so nothing may pin a hardcoded index into
+// a pool captured earlier.
 func buildTipList() []string {
-	return append(append([]string{}, curatedTips...), registryTips()...)
+	return append(append([]string{}, curatedTips()...), registryTips()...)
 }
 
 // tipSeg is one run of tip text: highlighted (hl) or plain.
