@@ -114,6 +114,22 @@ render the registry's full argument grammar (`{/name <hint>}`), and the
 hints behind them were completed and corrected so that grammar is worth
 rendering (the `/server` gap).
 
+*Extended 2026-10-26 (dynamic workflow-type tip).* The curated `/workflow`
+tip used to hardcode its workflow-type sample — "(dev, pair, swarm)" — which
+was stale the day `team` shipped and never knew about user-defined
+`~/.milk/workflows/` definitions at all. `curatedTips` is now a function and
+that one entry is generated from the live workflow registry (`workflowTip`):
+it names the workflow types actually configured (built-ins and user
+definitions alike, capped at six names with a `+N more` tail — the bare
+`/workflow` listing carries the full set), so it cannot drift the way the
+F1–F4 panel tip did. The registry lookup is memoized for 30s
+(`tipWorkflowNames`): the tip line renders every frame while `LoadRegistry`
+re-reads and re-parses every definition per call (right for command
+invocations, far too heavy per render), so a new definition shows up within
+half a rotation beat instead of immediately. `TestCuratedWorkflowTip_
+TracksConfiguredTypes` pins the no-drift contract, the same role
+`TestCuratedPanelTip_CoversEveryPanel` plays for the panel tip.
+
 ## Consequences
 
 - Users idle at the prompt discover features they would never have found in
