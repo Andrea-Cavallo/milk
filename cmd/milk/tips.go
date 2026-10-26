@@ -266,7 +266,9 @@ const tipNavRef = "prev/next: Alt+Up/Down"
 // with an ellipsis (tips are one-liners; a narrow terminal must not wrap
 // them into the layout's line budget), then the tipNavRef shortcut
 // reference. On narrow terminals the reference is dropped first; the tip
-// text is the content, the reference is the affordance.
+// text is the content, the reference is the affordance. Callers pass the
+// full window width (hintRegion: m.width) — the hint row lives below the
+// side panels, so their columns are the tip's to use.
 func renderTip(text string, width int) string {
 	const labelPlain = "tip: "
 	suffix := " · " + tipNavRef

@@ -75,6 +75,12 @@ func (m *model) hasPendingPrompt() bool {
 // they are up (they are the user's active task); otherwise the idle tip
 // line (ADR-0061) fills the slot when enabled. Nothing while the PTY pane
 // owns the screen: its layout branch renders no hint rows at all.
+//
+// The tip line renders at the full window width (m.width, the same budget
+// the header/status bars use) — not vpWidth(): the hint rows sit below the
+// whole main area, and a side panel block is only viewportHeight() rows
+// tall, ending on the row above. Open panels never cover the tip row, so
+// they must not narrow it either.
 func (m *model) hintRegion() []string {
 	if m.ptyPane != nil {
 		return nil
@@ -85,7 +91,7 @@ func (m *model) hintRegion() []string {
 	if !m.showTips {
 		return nil
 	}
-	return []string{renderTip(m.currentTip(), m.vpWidth())}
+	return []string{renderTip(m.currentTip(), m.width)}
 }
 
 // viewportHeight is the full terminal height minus the chrome lines.
