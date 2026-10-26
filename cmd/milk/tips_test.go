@@ -199,6 +199,50 @@ func TestHintRegion(t *testing.T) {
 	}
 }
 
+// TestHintRegion_TipFullWidth pins the tip line's width budget: the hint
+// rows sit below the whole main area — a side panel block is only
+// viewportHeight() rows tall and ends on the row above — so open panels
+// must never narrow the tip. It renders at the full window width (m.width,
+// the header/status bar budget), not vpWidth().
+func TestHintRegion_TipFullWidth(t *testing.T) {
+	m := newTestModelForPanels(t)
+	m.width, m.height = 120, 40
+	m.hasInferenceAgent = true
+	m.agents.localAvail = true
+	// Pin the pool's longest tip: only a tip that cannot fit a narrowed
+	// budget reveals a width regression as a rendering difference.
+	list := buildTipList()
+	longest := 0
+	for i, tip := range list {
+		if len(tip) > len(list[longest]) {
+			longest = i
+		}
+	}
+	if ok, _ := m.tipPick(longest + 1); !ok {
+		t.Fatalf("tipPick(%d) refused — pool has %d tips", longest+1, len(list))
+	}
+	solo := m.hintRegion()
+
+	m.panelMemory = true // 33-col side panel: vpWidth() drops to 86
+	if m.vpWidth() >= m.width-10 {
+		t.Fatalf("test setup: vpWidth() = %d with the panel open, want it narrowed well below width %d", m.vpWidth(), m.width)
+	}
+	withPanel := m.hintRegion()
+	if len(withPanel) != 1 {
+		t.Fatalf("hintRegion() with a panel open = %d lines, want 1 tip line", len(withPanel))
+	}
+	if solo[0] != withPanel[0] {
+		t.Errorf("tip line must ignore open panels (they end on the row above):\n  solo:  %q\n  panel: %q", ansi.Strip(solo[0]), ansi.Strip(withPanel[0]))
+	}
+	w := ansi.StringWidth(ansi.Strip(withPanel[0]))
+	if w > m.width {
+		t.Errorf("tip line width = %d, want ≤ full width %d", w, m.width)
+	}
+	if w <= m.vpWidth() {
+		t.Errorf("tip line width = %d, want to use the panel columns too (> vpWidth() = %d)", w, m.vpWidth())
+	}
+}
+
 // TestHandleTipsCmd pins the /tips surface: query answers, the toggle, and
 // that the toggle flips both the live model and the persisted config
 // default (the same saveLocalOrGlobal contract /colorize has).

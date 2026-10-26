@@ -48,7 +48,11 @@ absent under the PTY pane, whose layout branch renders no hint rows.
 
 Rendering (`renderTip`, `cmd/milk/tips.go`): a gold `tip:` label, dim
 prose, yellow `{span}` highlights, truncated to the available width with an
-ellipsis — one row is a hard layout invariant. The line ends with the
+ellipsis — one row is a hard layout invariant. The available width is the
+full window width (the header/status-bar budget), not the transcript
+column's: the hint rows sit below the whole main area, where side panels
+(only `viewportHeight()` rows tall) end on the row above, so open panels
+never narrow the tip. The line ends with the
 browse-shortcut reference (`tipNavRef`), which yields before the tip text
 does on narrow terminals.
 
