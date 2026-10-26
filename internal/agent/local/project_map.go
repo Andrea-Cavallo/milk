@@ -110,14 +110,29 @@ func runProjectMap(ctx context.Context, args map[string]any, cwd string) (string
 	maxFiles := projectMapIntArg(args, "max_files", projectMapDefaultMaxFiles, projectMapFilesCap)
 	maxChars := projectMapIntArg(args, "max_chars", projectMapDefaultMaxChars, projectMapCharsCap)
 
+	out, ok := projectMapBuild(ctx, root, cwd, scopeFile, maxFiles, maxChars)
+	if !ok {
+		return toolResult{Output: "no files under " + root}.String(), false
+	}
+	return toolResult{Output: out}.String(), false
+}
+
+// projectMapBuild assembles the map text for root: enumerate (git first,
+// walk fallback), optional scope filter (a base filename — single-file
+// maps), framing over the full enumeration, max_files truncation, symbol
+// resolution through the persistent index, the full → names →
+// reference-ranked → tree degradation ladder, and the textbudget backstop.
+// ok is false when nothing maps. Shared by the tool and the pushed
+// project_map_context block (ADR-0081).
+func projectMapBuild(ctx context.Context, root, cwd, scope string, maxFiles, maxChars int) (string, bool) {
 	relFiles, ok := gitEnumerate(ctx, root)
 	if !ok {
 		relFiles = walkEnumerate(root)
 	}
-	if scopeFile != "" {
+	if scope != "" {
 		var one []string
 		for _, rel := range relFiles {
-			if rel == scopeFile {
+			if rel == scope {
 				one = append(one, rel)
 				break
 			}
@@ -148,7 +163,7 @@ func runProjectMap(ctx context.Context, args map[string]any, cwd string) (string
 	projectMapFlushIndex(root)
 
 	if len(files) == 0 {
-		return toolResult{Output: "no files under " + root}.String(), false
+		return "", false
 	}
 
 	// Degrade to fit the budget; textbudget is the hard backstop.
@@ -167,7 +182,7 @@ func runProjectMap(ctx context.Context, args map[string]any, cwd string) (string
 		}
 	}
 	out = textbudget.SummarizeLong(out, maxChars)
-	return toolResult{Output: out}.String(), false
+	return out, true
 }
 
 // projectMapIntArg reads a positive integer tool argument (JSON numbers
@@ -376,6 +391,85 @@ func projectMapDirLabel(root, cwd, dir string) string {
 		}
 	}
 	return filepath.ToSlash(label)
+}
+
+// --- pushed context (project_map_context, ADR-0081) -----------------------
+
+// projectMapMinimalBlockMaxChars bounds the minimal orientation block:
+// a huge flat tree must not turn "minimal" into "full".
+const projectMapMinimalBlockMaxChars = 1200
+
+// projectMapContextBlock builds the pushed orientation block for the
+// project_map_context mode (ADR-0081 amendment): "off" pushes nothing
+// (tool-only), ""/"minimal" push the framing header + top-level directory
+// shape, and "full" pushes the budgeted symbol map rebuilt per turn (à la
+// Aider's repo map). toolRegistered controls the closing pointer at
+// project_map — never advertise a tool the agent doesn't have (issue #172).
+// The block is plain prompt content; it never carries symbol bodies.
+func projectMapContextBlock(ctx context.Context, root, cwd string, mode config.ProjectMapMode, toolRegistered bool) string {
+	switch mode {
+	case config.ProjectMapOff:
+		return ""
+	case config.ProjectMapFull:
+		out, ok := projectMapBuild(ctx, root, cwd, "", projectMapDefaultMaxFiles, projectMapDefaultMaxChars)
+		if !ok {
+			return ""
+		}
+		return "Project map (as of this turn's start; call project_map to narrow by path):\n" + out
+	default: // "", minimal
+		relFiles, ok := gitEnumerate(ctx, root)
+		if !ok {
+			relFiles = walkEnumerate(root)
+		}
+		if len(relFiles) == 0 {
+			return ""
+		}
+		sort.Strings(relFiles)
+		var b strings.Builder
+		b.WriteString("Project orientation (as of this turn's start):\n")
+		b.WriteString(projectMapFraming(root, relFiles))
+		b.WriteString(projectMapTopTree(relFiles))
+		if toolRegistered {
+			b.WriteString("\nFor symbols and signatures call project_map (cheap, cached) — never read files just to learn what they define.")
+		}
+		return textbudget.SummarizeLong(b.String(), projectMapMinimalBlockMaxChars)
+	}
+}
+
+// projectMapTopTree renders the top-level shape: one entry per top-level
+// directory with its file count, then top-level files — capped so a flat
+// 500-entry directory can't blow the block up.
+func projectMapTopTree(relFiles []string) string {
+	dirs := map[string]int{}
+	var files []string
+	for _, rel := range relFiles {
+		if i := strings.IndexByte(rel, '/'); i >= 0 {
+			dirs[rel[:i]]++
+		} else {
+			files = append(files, rel)
+		}
+	}
+	items := make([]string, 0, len(dirs)+len(files))
+	dnames := make([]string, 0, len(dirs))
+	for d := range dirs {
+		dnames = append(dnames, d)
+	}
+	sort.Strings(dnames)
+	for _, d := range dnames {
+		items = append(items, fmt.Sprintf("%s/ (%d files)", d, dirs[d]))
+	}
+	items = append(items, files...)
+	const maxEntries = 24
+	hidden := 0
+	if len(items) > maxEntries {
+		hidden = len(items) - maxEntries
+		items = items[:maxEntries]
+	}
+	out := "top level: " + strings.Join(items, ", ")
+	if hidden > 0 {
+		out += fmt.Sprintf(", …+%d more", hidden)
+	}
+	return out + "\n"
 }
 
 // --- non-code framing ------------------------------------------------------
