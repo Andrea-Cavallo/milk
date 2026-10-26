@@ -660,6 +660,19 @@ type AgentConfig struct {
 	// Empty string is treated as "standard".
 	SystemPromptTier string `json:"system_prompt_tier,omitempty"`
 
+	// ProjectMapContext selects how much pushed project-structure context
+	// this agent's prompt carries around the project_map tool (ADR-0081).
+	// Valid values: "minimal" (default), "off", "full"; boolean aliases
+	// true (="full") and false (="off") are accepted.
+	//   "minimal" — framing header (project identity, docs, build/config)
+	//               plus the top-level directory shape, rebuilt per turn;
+	//               symbols stay behind the project_map tool pull.
+	//   "off"     — no pushed structure context; the project_map tool only.
+	//   "full"    — a budgeted Aider-style map (files → symbols/signatures,
+	//               degrading to fit max_chars) rebuilt every turn.
+	// Empty string is treated as "minimal".
+	ProjectMapContext ProjectMapMode `json:"project_map_context,omitempty"`
+
 	// DisableProjectInstructions turns off loading the target repo's
 	// AGENTS.md/CLAUDE.md into this agent's system/static context. Default:
 	// false (enabled) — set true if a repo's instructions file is irrelevant
@@ -898,6 +911,54 @@ func (c *ContextReductionConfig) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("context_reduction: unknown mode %q (valid: %s, %s)", raw.Mode, contextReductionModeAuto, contextReductionModeOff)
 	}
 	*c = ContextReductionConfig(raw)
+	return nil
+}
+
+// ProjectMapMode is the tri-state project_map_context mode (ADR-0081).
+type ProjectMapMode string
+
+// Values of ProjectMapMode. Empty means ProjectMapMinimal (the default).
+const (
+	// ProjectMapOff pushes no project-structure context: tool only.
+	ProjectMapOff ProjectMapMode = "off"
+	// ProjectMapMinimal pushes the framing header + top-level tree.
+	ProjectMapMinimal ProjectMapMode = "minimal"
+	// ProjectMapFull pushes a budgeted symbol map, Aider-style.
+	ProjectMapFull ProjectMapMode = "full"
+)
+
+// UnmarshalJSON accepts the three mode strings plus the boolean aliases
+// (true = full, false = off) and the "false"/"true" spellings, rejecting
+// anything else at config-load time instead of silently falling back (the
+// same spirit as the context_reduction.mode check above).
+func (m *ProjectMapMode) UnmarshalJSON(data []byte) error {
+	if strings.TrimSpace(string(data)) == "null" {
+		*m = ProjectMapMinimal // explicit null = the default
+		return nil
+	}
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		if b {
+			*m = ProjectMapFull
+		} else {
+			*m = ProjectMapOff
+		}
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("project_map_context: want \"minimal\", \"off\", \"full\" (or true/false)")
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "minimal":
+		*m = ProjectMapMinimal
+	case "off", "false", "none":
+		*m = ProjectMapOff
+	case "full", "true", "on":
+		*m = ProjectMapFull
+	default:
+		return fmt.Errorf("project_map_context: unknown mode %q (valid: minimal, off, full — true/false accepted)", s)
+	}
 	return nil
 }
 
@@ -2888,6 +2949,14 @@ func Validate(cfg Config) []ValidationWarning {
 		// Both prompt and prompt_file set: prompt_file wins; warn so the user knows.
 		if a.Prompt != "" && a.PromptFile != "" {
 			warn(a.Name, "both prompt and prompt_file are set — prompt_file takes precedence")
+		}
+
+		// project_map_context values are rejected at unmarshal; warn on
+		// anything that slipped through programmatically.
+		switch a.ProjectMapContext {
+		case "", ProjectMapOff, ProjectMapMinimal, ProjectMapFull:
+		default:
+			warn(a.Name, fmt.Sprintf("project_map_context %q is not a valid mode (valid: minimal, off, full — true/false accepted) — treating as minimal", a.ProjectMapContext))
 		}
 
 		// HTTP providers must have a url.

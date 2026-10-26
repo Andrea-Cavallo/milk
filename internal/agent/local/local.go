@@ -655,6 +655,11 @@ type Agent struct {
 	// systemPromptTier selects the verbosity level of the system prompt.
 	// Valid values: "minimal", "standard" (default), "full". Empty = "standard".
 	systemPromptTier string
+	// projectMapContext is the pushed project-structure mode (ADR-0081):
+	// ""/"minimal" (default) framing + top-level tree per turn, "off" tool
+	// only, "full" a budgeted Aider-style map per turn. Stable config
+	// (AgentConfig.ProjectMapContext) — copied by cloneForBackground.
+	projectMapContext config.ProjectMapMode
 	// disableProjectInstructions turns off loading the target repo's
 	// AGENTS.md/CLAUDE.md into the system prompt (AgentConfig.DisableProjectInstructions).
 	disableProjectInstructions bool
@@ -1076,6 +1081,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 			sigv4:                      sv4,
 			limits:                     ac.Limits,
 			systemPromptTier:           ac.SystemPromptTier,
+			projectMapContext:          ac.ProjectMapContext,
 			disableProjectInstructions: ac.DisableProjectInstructions,
 			bashAllowedPatterns:        ac.BashAllowedPatterns,
 			postEditCommand:            ac.PostEditCommand,
@@ -1105,6 +1111,7 @@ func NewFromConfig(ac config.AgentConfig) *Agent {
 		backgroundClient:           &http.Client{Transport: bgTransport},
 		limits:                     ac.Limits,
 		systemPromptTier:           ac.SystemPromptTier,
+		projectMapContext:          ac.ProjectMapContext,
 		disableProjectInstructions: ac.DisableProjectInstructions,
 		bashAllowedPatterns:        ac.BashAllowedPatterns,
 		postEditCommand:            ac.PostEditCommand,
@@ -1870,6 +1877,14 @@ func (a *Agent) Run(ctx context.Context, history []Message, userPrompt string, o
 	}
 	if hasToolNamed(tools, "project_map") {
 		spb.guidance = append(spb.guidance, projectMapGuidance)
+	}
+	// Pushed project-structure context (ADR-0081, project_map_context):
+	// "minimal" (default) appends the framing + top-level tree, "full" a
+	// budgeted symbol map rebuilt per turn (à la Aider's repo map), "off"
+	// nothing. Rides the guidance list so the reduction ladder's first
+	// level sheds it with the other optional static layers under pressure.
+	if blk := projectMapContextBlock(ctx, sess.CWD, sess.CWD, a.projectMapContext, hasToolNamed(tools, "project_map")); blk != "" {
+		spb.guidance = append(spb.guidance, blk)
 	}
 	systemPrompt := spb.render(contextreduce.LevelNone, a.reductionPolicy)
 	msgs := []Message{{Role: "system", Content: systemPrompt}}
@@ -2827,6 +2842,9 @@ func (a *Agent) cloneForBackground() *Agent {
 		// always took the "not configured for vision" drop branch, with a
 		// notice that blamed the wrong configuration.
 		supportsVision: a.supportsVision,
+		// projectMapContext is stable config like supportsVision: without it
+		// a background job would lose its pushed orientation block mid-task.
+		projectMapContext: a.projectMapContext,
 		// Resolve the memory-visibility consumer now: a background job is a
 		// fork of the spawning agent and sees the same percepts it does
 		// (issue #172).

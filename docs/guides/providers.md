@@ -518,13 +518,34 @@ The tier is also the first knob the [layered context-reduction ladder](#layered-
 
 ---
 
+### Project map context (`project_map_context`)
+
+The [`project_map` tool](tooling.md#built-in-tools) is a *pull*: the agent calls it when it wants structure. `project_map_context` adds a small *push* on top — project-structure context rebuilt into the system prompt every turn (ADR-0081):
+
+| Value | What gets pushed | Cost |
+|---|---|---|
+| `"minimal"` | Framing header (project identity, docs/build landmarks) + top-level directory shape + a pointer at the tool | ~100–300 tokens (default) |
+| `"off"` | Nothing — the `project_map` tool only | none |
+| `"full"` | A budgeted Aider-style map: files → symbols/signatures, degrading to fit the budget (signatures → names → reference-ranked names → file tree) | up to ~1500 tokens |
+
+Boolean aliases are accepted: `true` = `"full"`, `false` = `"off"` (also as strings). The block is rebuilt per turn (so `full` never serves yesterday's tree), rides the optional-guidance layer of the [context reduction](#layered-context-reduction-context_reduction) ladder — shed first under pressure — and the tool pointer is only included when the agent actually has `project_map` (e.g. not when `limits.excluded_tools` removes it).
+
+```json
+{ "name": "cloud-big", "provider": "bedrock", "model": "…",
+  "project_map_context": "full" }
+```
+
+Pick per agent: `full` for a capable model with context room to spare (the Aider repo-map measurements were taken on GPT-4-class models), `minimal` for most, `off` for tiny contexts or non-code sessions. `full` costs up to ~1.5k tokens *every turn* — that's the one to think about.
+
+---
+
 ### Layered context reduction (`context_reduction`)
 
 A static tier is a fixed guess, but context pressure is dynamic — a request that fits at turn 2 can overflow by turn 20. `context_reduction` configures an automatic ladder that shrinks the request's *static* layers as pressure rises, before any history is touched. Pressure is the prompt size over the usable window: the previous request's provider-reported prompt tokens (a chars/4 estimate until the provider reports one) divided by the same window-minus-output-reserve denominator `compaction_trigger_tokens` derives — `context_window_tokens` minus the models.dev output limit capped at 32K (20K if unlisted) and at a quarter of the window. The level is recomputed at every tool-loop iteration from the pristine prompt and tool list (session state is never mutated), so a layer eases back on its own as soon as pressure drops — e.g. right after a compaction.
 
 | Pressure | Layer | What shrinks |
 |---|---|---|
-| ≥ 55% | instructions | System-prompt tier steps down one level (`full`→`standard`, `standard`→`minimal`); the optional per-turn guidance blocks (background-agent, task-tool, memory-tool) are dropped |
+| ≥ 55% | instructions | System-prompt tier steps down one level (`full`→`standard`, `standard`→`minimal`); the optional per-turn guidance blocks (background-agent, task-tool, memory-tool, project-map) are dropped |
 | ≥ 65% | tools_compact | Tier forced to `minimal`; the project-instructions (AGENTS.md/CLAUDE.md) block is head+tail-trimmed to `instructions_trim_chars`; tool descriptions are one-lined (first sentence, ≤ 120 chars) |
 | ≥ 75% | tools_prune | The tool set is pruned to the tools observed in use this session plus `protected_tools` |
 
@@ -719,6 +740,7 @@ Common to all inference-server providers (everything except `claude-cli`):
 | `prompt_caching` | bool | Bedrock-only, experimental — see [Prompt caching](#prompt-caching-prompt_caching--️-experimental-not-live-tested) |
 | `context_window_tokens` | int | See [Context window declaration](#context-window-declaration-context_window_tokens) |
 | `system_prompt_tier` | string | See [System prompt verbosity](#system-prompt-verbosity-system_prompt_tier) |
+| `project_map_context` | string/bool | See [Project map context](#project-map-context-project_map_context) |
 | `context_reduction` | object | See [Layered context reduction](#layered-context-reduction-context_reduction) |
 | `disable_project_instructions` | bool | See [Project instructions](#project-instructions-disable_project_instructions) |
 | `disable_compaction` | bool | See [Context compaction](#context-compaction-disable_compaction) |

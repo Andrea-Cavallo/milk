@@ -75,6 +75,34 @@ optimization only: every entry is re-verified by mtime+size on use, a
 missing or corrupt index simply means "parse again". Stale entries for
 deleted files are left behind (bounded by project size, never consulted).
 
+## Amendment — pushed context (`project_map_context`, 2026-10-26)
+
+The "tool vs injected context" question (issue #324, PR #330) is resolved as
+**hybrid**: the tool stays the pull path, and a per-agent *push* was added on
+top. `project_map_context` (agent field, see docs/guides/providers.md) is a
+tri-state — string or boolean aliases (`true`=full, `false`=off):
+
+- **`minimal` (default)** — the framing header (project identity, docs,
+  build/config landmarks) plus the top-level directory shape, ≤1200 chars,
+  rebuilt per turn. Symbols stay behind the tool pull: this captures
+  Aider's "oriented from turn one" property at a fraction of the token
+  cost and cannot go stale at the symbol level.
+- **`off`** — pure tooling (the pre-amendment behavior).
+- **`full`** — Aider's regime: the budgeted symbol map (the tool's
+  full → names → reference-ranked → tree ladder) rebuilt every turn and
+  injected into the prompt.
+
+Both paths share one builder (`projectMapBuild`) — one map implementation,
+two delivery routes. The block rides the system prompt's optional-guidance
+layer, so the context-reduction ladder (issue #236) sheds it at its first
+level under pressure, and the closing pointer at the tool is included only
+when `project_map` is actually registered (never advertise a missing tool,
+issue #172). Why push at all: orientation maps pay off for capable models
+(Aider's measurements were GPT-4-class) and the first turn of an
+unfamiliar repo is where a pull-only design is weakest. Why not push
+symbols by default: per-turn cost and stale-map trust — both opt-in via
+`full`.
+
 ## Consequences
 
 - Five languages outline with signatures; everything else degrades to the
