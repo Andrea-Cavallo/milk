@@ -90,11 +90,11 @@ func (m *model) panelSelLines() []string {
 }
 
 // handlePanelMouse handles left-button mouse events over any side panel: a
-// click that starts and ends on the same cell runs the memory panel's
-// percept/brick detail lookup (double-click for details; a no-op for every
-// other panel); any drag selects panel text for copying, scoped to that
-// panel's own lines so the selection never crosses into the transcript or
-// another panel.
+// click that starts and ends on the same cell runs the region's own click
+// behavior (memory/tasks expand content in place on double-click; a no-op for
+// the project and git panels on a plain click); any drag selects panel text
+// for copying, scoped to that panel's own lines so the selection never crosses
+// into the transcript or another panel.
 func (m *model) handlePanelMouse(region panelRegion, regionX int, ev mouseEvent) (tea.Model, tea.Cmd) {
 	// Same measured chrome as the main viewport (viewportRows): the panel
 	// column starts below the header bar's rendered rows, never a hardcoded 2.
@@ -175,6 +175,8 @@ func (m *model) handlePanelMouse(region panelRegion, regionX int, ev mouseEvent)
 			switch region {
 			case regionMemory:
 				m.handleMemoryPanelClick(lineIdx)
+			case regionTasks:
+				m.handleTasksPanelClick(lineIdx)
 			case regionBackground:
 				dragCmd = m.handleBackgroundPanelClick(lineIdx)
 			case regionWorkflow:
@@ -241,6 +243,34 @@ func (m *model) handleMemoryPanelClick(lineIdx int) {
 		m.lastPanelClickID = ""
 	} else {
 		m.lastPanelClickID = id
+		m.lastPanelClickTime = now
+	}
+}
+
+// handleTasksPanelClick runs the tasks panel's click behavior: double-click
+// expands or collapses the task title in place (memory-panel semantics). The
+// arm key is prefixed "task:" so task IDs can never collide with the memory
+// percept IDs sharing m.lastPanelClickID (the "bg:" precedent in attach.go).
+func (m *model) handleTasksPanelClick(lineIdx int) {
+	_, ids := taskPanelRows(m.taskStore, tasksPanelInner, m.taskExpanded)
+	if lineIdx < 0 || lineIdx >= len(ids) {
+		return
+	}
+	id := ids[lineIdx]
+	if id == "" {
+		return
+	}
+	key := "task:" + id
+	now := time.Now()
+	if key == m.lastPanelClickID && now.Sub(m.lastPanelClickTime) <= 400*time.Millisecond {
+		if m.taskExpanded == id {
+			m.taskExpanded = ""
+		} else {
+			m.taskExpanded = id
+		}
+		m.lastPanelClickID = ""
+	} else {
+		m.lastPanelClickID = key
 		m.lastPanelClickTime = now
 	}
 }

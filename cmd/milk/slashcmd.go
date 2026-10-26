@@ -166,7 +166,9 @@ var commandRegistry = []cmdSpec{
   /history global        navigate global input history
   /history session       navigate session input history (default)`},
 	{name: cmdPanel, hosts: hostTUI, desc: "toggle a side panel (memory, tasks, background, workflow, project, git)", hint: "memory|tasks|background|workflow|project|git", help: `  /panel memory          toggle the memory panel (right side) — also F1
+                         double-click an entry to expand/collapse its content
   /panel tasks           toggle the tasks panel (right side) — also F2
+                         double-click a task to expand/collapse its title
   /panel background      toggle the background-agents panel (right side) — also F3
   /panel workflow        toggle the workflow panel (right side) — also F4
   /panel project         toggle the project tree panel (right side) — also F5
@@ -407,8 +409,8 @@ var helpBlocks = []helpBlock{
   Tips
     Alt+Up / Alt+Down   show the previous / next idle tip (same as /tips prev|next)
 
-  Memory panel
-    Double-click entry   print memory entry details to transcript
+  Memory / tasks panels
+    Double-click entry   expand/collapse the content in place
 
   @ prefix
     @path   reference a file path (Tab-completes)

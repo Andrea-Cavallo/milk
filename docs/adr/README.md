@@ -80,3 +80,4 @@
 * [79. Tabbed panel docking: one shared slot when the theme draws tabs](0079-tabbed-panel-slot.md)
 * [80. Thinking-block click mapping: one measured layout, one deterministic render](0080-thinking-click-mapping.md)
 * [81. project_map: heuristic multi-language outlines, ranked pruning, persistent index](0081-project-map-tool.md)
+* [82. Tasks panel in-place expansion (memory-panel parity)](0082-tasks-panel-in-place-expansion.md)

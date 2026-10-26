@@ -23,7 +23,8 @@ func (m *model) sidePanelLines(region panelRegion) (lines []string, inner int) {
 		lines, _ := memoryPanelRows(m.mem, memoryPanelInner, m.currentSessionBricks(), m.memoryExpanded)
 		return lines, memoryPanelInner
 	case regionTasks:
-		return buildTasksPanelLines(m.taskStore, tasksPanelInner), tasksPanelInner
+		lines, _ := taskPanelRows(m.taskStore, tasksPanelInner, m.taskExpanded)
+		return lines, tasksPanelInner
 	case regionBackground:
 		var jobs []local.Job
 		if m.agents.backgroundMgr != nil {
