@@ -323,6 +323,7 @@ Not available over ACP (the client cannot survive its server process being repla
   "think_fold_default": "folded",
   "sticky_escalation": true,
   "copy_on_select": false,
+  "queue_while_busy": true,
   "acp_resume": true,
   "experimental_lazy_history_management": false,
   "aws_auth_refresh": false,

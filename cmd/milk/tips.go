@@ -75,6 +75,7 @@ func curatedTips() []string {
 		`{/escalate <msg>} forces one turn to the escalation agent — bare {/escalate} pins every turn`,
 		`{/learn <fact>} stores a persistent memory — {/memory} lists them, {/forget} deletes one`,
 		`{/bg start <task>} runs a background agent — {Ctrl+Enter} while a turn runs starts one too`,
+		`While a turn runs, {Enter} queues your input for the next turn — {/queue} reviews it, {Ctrl+Enter} forks a background agent`,
 		`{/attach <file>} stages a file or image for the next turn — {/paste} grabs one from the clipboard`,
 		`{/export} prints this session's transcript — {/export <path>} writes it to a file`,
 		`{/sessions} lists stored conversations — {/resume <id>} switches to one`,

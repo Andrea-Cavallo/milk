@@ -125,11 +125,31 @@ func TestBusyEnter_CommitsArrowHint(t *testing.T) {
 	}
 }
 
-// TestBusyEnter_PlainTextStillTrapped: the invariant guard — with no
-// completion active, Enter on plain text keeps the old busy trap (no
-// submission, hint points at Ctrl+Enter).
-func TestBusyEnter_PlainTextStillTrapped(t *testing.T) {
+// TestBusyEnter_PlainTextQueued: the busy Enter disposition — with no
+// completion active, Enter on plain text queues it for the live agent's next
+// turn (buffer captured and cleared).
+func TestBusyEnter_PlainTextQueued(t *testing.T) {
 	m := newTestModelForPanels(t)
+	m.busy = true
+	m.ta.SetValue("plain prompt text")
+
+	next, _ := m.handleBusyKey(teaKeyEnter())
+	out := next.(model)
+
+	if out.ta.Value() != "" {
+		t.Errorf("buffer not cleared on queued Enter: %q", out.ta.Value())
+	}
+	if len(out.st.queuedPrompts) != 1 || out.st.queuedPrompts[0].text != "plain prompt text" {
+		t.Errorf("expected the plain text queued, got %#v", out.st.queuedPrompts)
+	}
+}
+
+// TestBusyEnter_KnobOffKeepsHint: "queue_while_busy": false restores the
+// pre-queue behavior — Enter raises the hint and touches nothing.
+func TestBusyEnter_KnobOffKeepsHint(t *testing.T) {
+	m := newTestModelForPanels(t)
+	off := false
+	m.st.cfg.QueueWhileBusy = &off
 	m.busy = true
 	m.ta.SetValue("plain prompt text")
 
@@ -141,6 +161,9 @@ func TestBusyEnter_PlainTextStillTrapped(t *testing.T) {
 	}
 	if got := out.ta.Value(); got != "plain prompt text" {
 		t.Errorf("buffer changed on trapped Enter: %q", got)
+	}
+	if len(out.st.queuedPrompts) != 0 {
+		t.Errorf("expected nothing queued with the knob off, got %d", len(out.st.queuedPrompts))
 	}
 }
 

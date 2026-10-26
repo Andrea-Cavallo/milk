@@ -1332,6 +1332,78 @@ func isCtrlEnterCSI(s string) bool {
 	return false
 }
 
+// queuePromptCap bounds the in-memory Enter-while-busy queue (refused with
+// a hint at the cap, the typed text kept in the input box).
+const queuePromptCap = 20
+
+// queuePrompt captures typed input for the live agent's next turn — the
+// Enter disposition of the busy-input feature (Ctrl+Enter forks instead).
+// The entry takes the staged attachments and paste provenance with it (they
+// were staged for this typed input); the receipt line is the proof the input
+// was not dropped and names the /queue review surface.
+func (m *model) queuePrompt(input string) {
+	if len(m.st.queuedPrompts) >= queuePromptCap {
+		m.busyHint = fmt.Sprintf("queue is full (%d) — /queue drop some, or Ctrl+Enter to fork", queuePromptCap)
+		return
+	}
+	q := queuedPrompt{
+		text:          input,
+		leadingPasted: m.leadingPasted,
+		attachments:   m.pendingAttachments,
+		queuedAt:      time.Now(),
+	}
+	m.pendingAttachments = nil
+	m.leadingPasted = false
+	m.st.queuedPrompts = append(m.st.queuedPrompts, q)
+
+	m.ta.Reset()
+	m.tabMatches = nil
+	m.tabIdx = -1
+	m.tabHints = nil
+	m.tabHintsBase = nil
+	m.busyHint = ""
+	m.syncLayout()
+
+	extra := ""
+	if n := strings.Count(input, "\n") + 1; n > 1 {
+		extra += fmt.Sprintf(" ⋯ %d lines", n)
+	}
+	if n := len(q.attachments); n > 0 {
+		extra += fmt.Sprintf(" + %d attachments", n)
+	}
+	m.appendTranscript(milkTag() + fmt.Sprintf("⋯ queued for next turn — %q%s · /queue to review\n", queuePreview(input), extra))
+}
+
+// queuePreview returns the first input line clipped to 60 display columns.
+func queuePreview(input string) string {
+	r := []rune(strings.SplitN(input, "\n", 2)[0])
+	if len(r) > 60 {
+		return string(r[:59]) + "…"
+	}
+	return string(r)
+}
+
+// drainQueuedPrompt hands the oldest queued prompt to submitInput as the
+// next turn (FIFO, one per turn). The flushed turn is the next turn —
+// drainBackgroundJobs rides along inside it — so both follow-up flags are
+// cleared here (re-armed by any job that finishes later). The entry replays
+// its own paste provenance and attachments; whatever is staged at flush time
+// joins the flushed turn (the staging field's own contract: staged files are
+// context for the next turn).
+func (m model) drainQueuedPrompt() (tea.Model, tea.Cmd, bool) {
+	if len(m.st.queuedPrompts) == 0 {
+		return m, nil, false
+	}
+	q := m.st.queuedPrompts[0]
+	m.st.queuedPrompts = m.st.queuedPrompts[1:]
+	m.pendingBackgroundFollowup = false
+	m.pendingUserBackgroundFollowup = false
+	m.leadingPasted = q.leadingPasted
+	m.pendingAttachments = append(q.attachments, m.pendingAttachments...)
+	next, cmd := m.submitInput(q.text, dim("[queued]")+" ")
+	return next, cmd, true
+}
+
 // handleBusyKey handles key events while an agent turn is running.
 // It intercepts the three busy-specific cases, then delegates to handleKey
 // for all navigation, editing, history, undo/redo, and viewport scroll.
@@ -1403,6 +1475,15 @@ func (m model) handleBusyKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if input == "" {
 			m.busyHint = "agent is responding — Ctrl+C to interrupt"
 			return m, busyHintClearCmd()
+		}
+		// Enter = queue it for this agent's next turn (the queue half of the
+		// busy-input disposition; Ctrl+Enter below forks to a background
+		// agent). Slash commands never reach here as queue candidates —
+		// non-busy-safe ones were rejected above with their own hint.
+		// "queue_while_busy": false restores the hint-only behavior.
+		if m.st.cfg.QueueWhileBusyEnabled() {
+			m.queuePrompt(input)
+			return m, nil
 		}
 		m.busyHint = "agent is working — Ctrl+Enter to spawn a background agent with this"
 		return m, busyHintClearCmd()
@@ -1782,6 +1863,11 @@ func (m model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.refreshPrompt()
 	m.syncLayout()
 
+	// Busy-input queue first (design: one queued prompt per turn, before the
+	// background-followup and remote-input chain).
+	if next, cmd, ok := m.drainQueuedPrompt(); ok {
+		return next, cmd
+	}
 	if m.pendingUserBackgroundFollowup {
 		return m.maybeAutoFollowupBackgroundJobs(false)
 	}

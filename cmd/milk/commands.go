@@ -61,9 +61,16 @@ func (m model) handleSlashInput(cmd, rest string) (tea.Model, tea.Cmd) {
 			m.appendTranscript(milkTag() + fmt.Sprintf(" dropped %d staged attachment(s) — staged files do not survive %s\n", len(m.pendingAttachments), cmd))
 			m.pendingAttachments = nil
 		}
+		if len(m.st.queuedPrompts) > 0 {
+			m.appendTranscript(milkTag() + fmt.Sprintf(" dropped %d queued prompt(s) — queued input does not survive %s\n", len(m.st.queuedPrompts), cmd))
+			m.st.queuedPrompts = nil
+		}
 	}
 	if cmd == cmdHistory {
 		return m.handleHistoryCmd(strings.TrimSpace(rest)), nil
+	}
+	if cmd == cmdQueue {
+		return m.handleQueueCmd(strings.TrimSpace(rest)), nil
 	}
 	if cmd == cmdPanel {
 		return m.handlePanelCmd(strings.TrimSpace(rest))
@@ -1910,4 +1917,86 @@ func (m model) handleServerCmd(arg string) (tea.Model, tea.Cmd) {
 		m.appendTranscript(milkTag() + " usage: /server status [<agent>] | /server start for <agent> | /server stop [<agent>]\n")
 		return m, nil
 	}
+}
+
+// handleQueueCmd runs the /queue review surface for the Enter-while-busy
+// prompt queue: list|show <n>|drop <n|last|all>|clear. Busy-safe — it only
+// ever inspects or drops entries.
+func (m model) handleQueueCmd(rest string) model {
+	q := m.st.queuedPrompts
+	args := strings.Fields(rest)
+	sub := "list"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	usage := func() {
+		m.appendTranscript(dim("  usage: /queue [list|show <n>|drop <n|last|all>|clear]\n"))
+	}
+	notice := func(n int, what string) {
+		m.appendTranscript(milkTag() + fmt.Sprintf(" %s %d queued prompt(s)\n", what, n))
+	}
+	switch sub {
+	case "", "list":
+		if len(q) == 0 {
+			m.appendTranscript(milkTag() + " no queued prompts — Enter while busy queues one for the next turn\n")
+			return m
+		}
+		m.appendTranscript(milkTag() + fmt.Sprintf(" %d queued prompt(s):\n", len(q)))
+		for i, e := range q {
+			m.appendTranscript(fmt.Sprintf("  %d. %s %q\n", i+1, e.queuedAt.Format("15:04:05"), queuePreview(e.text)))
+		}
+		m.appendTranscript(dim("  /queue show <n> · /queue drop <n|last|all>\n"))
+	case "show":
+		if len(args) < 2 {
+			usage()
+			return m
+		}
+		i, err := strconv.Atoi(args[1])
+		if err != nil || i < 1 || i > len(q) {
+			usage()
+			return m
+		}
+		e := q[i-1]
+		m.appendTranscript(milkTag() + fmt.Sprintf(" [%d] queued %s\n", i, e.queuedAt.Format("15:04:05")))
+		m.appendTranscript(e.text + "\n")
+		if n := len(e.attachments); n > 0 {
+			m.appendTranscript(dim(fmt.Sprintf("  + %d attachment(s)\n", n)))
+		}
+	case "drop":
+		target := "last"
+		if len(args) > 1 {
+			target = args[1]
+		}
+		switch target {
+		case "all":
+			if len(q) == 0 {
+				notice(0, "dropped")
+				return m
+			}
+			m.st.queuedPrompts = nil
+			notice(len(q), "dropped")
+		case "last":
+			if len(q) == 0 {
+				notice(0, "dropped")
+				return m
+			}
+			m.st.queuedPrompts = q[:len(q)-1]
+			notice(1, "dropped")
+		default:
+			i, err := strconv.Atoi(target)
+			if err != nil || i < 1 || i > len(q) {
+				usage()
+				return m
+			}
+			m.st.queuedPrompts = append(q[:i-1], q[i:]...)
+			notice(1, "dropped")
+		}
+	case "clear":
+		n := len(q)
+		m.st.queuedPrompts = nil
+		notice(n, "dropped")
+	default:
+		usage()
+	}
+	return m
 }

@@ -214,6 +214,10 @@ var commandRegistry = []cmdSpec{
   /think collapse        fold every thinking block
   /think view            swap the main area to a thinking-only stream
   /think on|off          ACP only: relay or withhold thought chunks`},
+	{name: cmdQueue, hosts: hostTUI, desc: "review or edit the prompts queued for the next turn", hint: "[list|show <n>|drop <n|last|all>|clear]", help: `  /queue               list the prompts queued for the next turn
+  /queue show <n>      print queued prompt <n> in full
+  /queue drop <n>      drop queued prompt <n> (also: last, all)
+  /queue clear         drop every queued prompt`},
 	{name: cmdTips, hosts: hostTUI, desc: "show, hide or browse the idle tips under the input", hint: "[on|off|next|prev|pick [<n>|<text>]|search <query>]", help: `  /tips                  show tip line state and the current tip's position
   /tips on               show the idle tip line under the input
   /tips off              hide the idle tip line
@@ -343,7 +347,7 @@ var helpBlocks = []helpBlock{
 	{header: "── Agents ───────────────────────────────────────────────────────────────", names: []string{cmdAgent, cmdSkipPerms}},
 	{header: "── Permissions ──────────────────────────────────────────────────────────", names: []string{cmdPermissions}},
 	{header: "── Memory ───────────────────────────────────────────────────────────────", names: []string{cmdLearn, cmdMemory, cmdForget, cmdPanel, cmdTasks, cmdTask}},
-	{header: "── Background agents ───────────────────────────────────────────────────", names: []string{cmdBg}},
+	{header: "── Background agents ───────────────────────────────────────────────────", names: []string{cmdBg, cmdQueue}},
 	{header: "── Display ──────────────────────────────────────────────────────────────", names: []string{cmdColorize, cmdTheme, cmdThink, cmdTips, cmdHistory, cmdNotifications, cmdKeys}},
 	{header: "── Observability ────────────────────────────────────────────────────────", names: []string{cmdUsage, cmdMetrics, cmdOtel}},
 	{header: "── MCP Servers ───────────────────────────────────────────────────────────", names: []string{cmdMCP}},
