@@ -877,7 +877,7 @@ type model struct {
 	// theme has no tabs (panels are laid out side by side there).
 	panelTabMRU []panelRegion
 
-	// memory panel
+	// memory panel (in-place expansion mirrors into the tasks panel)
 	panelMemory        bool
 	memoryExpanded     string
 	panelOffset        int
@@ -886,9 +886,10 @@ type model struct {
 	lastPanelClickTime time.Time
 
 	// tasks panel
-	panelTasks  bool
-	tasksOffset int
-	taskStore   *tasks.Store
+	panelTasks   bool
+	tasksOffset  int
+	taskStore    *tasks.Store
+	taskExpanded string
 
 	// background-agents panel (ADR-0043)
 	panelBackground  bool
