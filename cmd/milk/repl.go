@@ -989,8 +989,8 @@ type model struct {
 	attachSelDragging   bool
 	attachSelText       string
 
-	copyFeedback   string // transient "[copied N chars]" shown in status bar
-	busyHint       string // transient "agent is responding" shown in status bar
+	copyFeedback string // transient "[copied N chars]" shown in status bar
+	busyHint     string // transient "agent is responding" shown in status bar
 	// busyEnterArmed is set by the first Enter while busy (the busy-input
 	// disposition's confirm step): the first press announces both choices
 	// (queue / fork), the second press on the same gesture queues. Any
